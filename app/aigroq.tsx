@@ -71,6 +71,7 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
   const speakingRef = useRef(false);
   const recognitionRef = useRef<any>(null);
   const wakeRecRef = useRef<any>(null);
+  const restartWakeRef = useRef<(() => void) | null>(null);
   const chatRef = useRef<HTMLDivElement>(null);
   const lastContextRef = useRef("");
   const contextIvRef = useRef<any>(null);
@@ -109,9 +110,25 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
     utter.lang = "id-ID";
     utter.rate = 1.0;
     utter.pitch = 1.0;
-    utter.onstart = () => { speakingRef.current = true; setSpeaking(true); if (aiBusyRef) aiBusyRef.current = true; };
-    utter.onend = () => { speakingRef.current = false; setSpeaking(false); if (aiBusyRef) aiBusyRef.current = false; };
-    utter.onerror = () => { speakingRef.current = false; setSpeaking(false); if (aiBusyRef) aiBusyRef.current = false; };
+    utter.onstart = () => {
+      speakingRef.current = true;
+      setSpeaking(true);
+      if (aiBusyRef) aiBusyRef.current = true;
+      wakeRecRef.current?.stop();
+    };
+    utter.onend = () => {
+      speakingRef.current = false;
+      setSpeaking(false);
+      if (aiBusyRef) aiBusyRef.current = false;
+      // restart mic from the stored restart function
+      setTimeout(() => restartWakeRef.current?.(), 200);
+    };
+    utter.onerror = () => {
+      speakingRef.current = false;
+      setSpeaking(false);
+      if (aiBusyRef) aiBusyRef.current = false;
+      setTimeout(() => restartWakeRef.current?.(), 200);
+    };
     window.speechSynthesis.speak(utter);
   }, [aiBusyRef]);
 
@@ -218,66 +235,83 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
     setListening(true);
   }, [listening, sendMessage]);
 
-  // Single continuous listener: wake word → conversation mode
+  // Wake word: loop of single-shot recognitions (more reliable on mobile than continuous)
   const startWakeWord = useCallback(() => {
     if (!speechRecogCtor || wakeRef.current) return;
-    const rec = new speechRecogCtor();
-    rec.lang = "id-ID";
-    rec.continuous = true;
-    rec.interimResults = false;
-    rec.onresult = (e: any) => {
-      const t = e.results[e.results.length - 1][0].transcript.trim();
-      if (convRef.current) {
-        if (speakingRef.current) return;
-        if (/^(bye|dadah|stop|selesai|udah|gausah)$/i.test(t)) {
-          convRef.current = false;
-          setConvMode(false);
-          setListening(false);
+
+    const createWakeRec = () => {
+      if (!wakeRef.current) return;
+      restartWakeRef.current = createWakeRec;
+      const rec = new speechRecogCtor();
+      rec.lang = "id-ID";
+      rec.continuous = false;
+      rec.interimResults = false;
+      let lastResult = "";
+      rec.onresult = (e: any) => {
+        const t = e.results[0][0].transcript.trim();
+        if (!t || t === lastResult) return;
+        lastResult = t;
+
+        if (convRef.current) {
+          if (speakingRef.current) return;
+          if (/^(bye|dadah|stop|selesai|udah|gausah)$/i.test(t)) {
+            convRef.current = false;
+            setConvMode(false);
+            setListening(false);
+            return;
+          }
+          if (convTimerRef.current) clearTimeout(convTimerRef.current);
+          convTimerRef.current = setTimeout(() => { convRef.current = false; setConvMode(false); setListening(false); }, 30000);
+          if (t.length > 0) sendMessage(t);
           return;
         }
+
+        if (speakingRef.current) return;
+
+        const lower = t.toLowerCase();
+        if (!lower.includes('kei') && !lower.includes('kay') && !/^k[eyi]/i.test(t)) return;
+
+        convRef.current = true;
+        setConvMode(true);
+        setListening(true);
+        try {
+          const ac = new AudioContext();
+          const osc = ac.createOscillator();
+          const gain = ac.createGain();
+          osc.connect(gain); gain.connect(ac.destination);
+          osc.frequency.value = 880;
+          gain.gain.setValueAtTime(0.15, ac.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.15);
+          osc.start(); osc.stop(ac.currentTime + 0.15);
+        } catch {}
+
+        const idx = lower.indexOf('kei');
+        if (idx >= 0) {
+          const after = t.slice(idx + 3).trim();
+          if (after.length > 0) sendMessage(after);
+        }
+
         if (convTimerRef.current) clearTimeout(convTimerRef.current);
         convTimerRef.current = setTimeout(() => { convRef.current = false; setConvMode(false); setListening(false); }, 30000);
-        if (t.length > 0) sendMessage(t);
-        return;
-      }
-
-      const lower = t.toLowerCase();
-      if (!lower.includes('kei') && !lower.includes('kay') && !/^k[eyi]/i.test(t)) return;
-
-      convRef.current = true;
-      setConvMode(true);
-      setListening(true);
-      try {
-        const ac = new AudioContext();
-        const osc = ac.createOscillator();
-        const gain = ac.createGain();
-        osc.connect(gain); gain.connect(ac.destination);
-        osc.frequency.value = 880;
-        gain.gain.setValueAtTime(0.15, ac.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.15);
-        osc.start(); osc.stop(ac.currentTime + 0.15);
-      } catch {}
-
-      const idx = lower.indexOf('kei');
-      if (idx >= 0) {
-        const after = t.slice(idx + 3).trim();
-        if (after.length > 0) sendMessage(after);
-      }
-
-      if (convTimerRef.current) clearTimeout(convTimerRef.current);
-      convTimerRef.current = setTimeout(() => { convRef.current = false; setConvMode(false); setListening(false); }, 30000);
+      };
+      rec.onerror = () => {};
+      rec.onend = () => {
+        // don't restart while TTS is playing; speak().onend will restart
+        if (wakeRef.current && !speakingRef.current) setTimeout(createWakeRec, 300);
+      };
+      wakeRecRef.current = rec;
+      rec.start();
     };
-    rec.onerror = () => {};
-    rec.onend = () => { if (wakeRef.current) { try { rec.start(); } catch {} } };
-    wakeRecRef.current = rec;
+
     wakeRef.current = true;
     setWakeWord(true);
-    rec.start();
+    createWakeRec();
   }, [sendMessage]);
 
   const stopWakeWord = useCallback(() => {
     wakeRef.current = false;
     convRef.current = false;
+    restartWakeRef.current = null;
     setWakeWord(false);
     setConvMode(false);
     setListening(false);
