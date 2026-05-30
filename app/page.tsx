@@ -1,8 +1,9 @@
 "use client";
 
 import { useRef, useEffect, useState, useCallback } from "react";
-import { ObjectDetector, FilesetResolver, type Detection } from "@mediapipe/tasks-vision";
+import { ObjectDetector, FaceDetector, FilesetResolver, type Detection } from "@mediapipe/tasks-vision";
 import Simulasi from "./simulasi";
+import { loadDB, saveDB, registerFace, recognize, type FaceRecord } from "./facerecog";
 
 interface Telemetry {
   battery?: number;
@@ -35,6 +36,13 @@ export default function VisionPage() {
   const [detectionCount, setDetectionCount] = useState(0);
   const detectorRef = useRef<ObjectDetector | null>(null);
   const detectionsRef = useRef<Detection[]>([]);
+  const faceDetectorRef = useRef<FaceDetector | null>(null);
+  const faceTickRef = useRef(0);
+  const faceDBRef = useRef<FaceRecord[]>([]);
+  const faceLandmarksRef = useRef<number[]>([]);
+  const recognizedFaceRef = useRef<FaceRecord | null>(null);
+  const [registering, setRegistering] = useState(false);
+  const [regName, setRegName] = useState("");
 
   interface SmoothBox {
     key: string;
@@ -239,7 +247,7 @@ export default function VisionPage() {
     return () => { cancelled = true; streamRef.current?.getTracks().forEach((t) => t.stop()); streamRef.current = null; };
   }, [active, facingMode, source]);
 
-  // MediaPipe EfficientDet
+  // MediaPipe models
   useEffect(() => {
     if (!active) return;
     let cancelled = false;
@@ -248,16 +256,21 @@ export default function VisionPage() {
       try {
         const vision = await FilesetResolver.forVisionTasks("/wasm");
         if (cancelled) return;
-        const det = await ObjectDetector.createFromOptions(vision, {
-          baseOptions: {
-            modelAssetPath: "/efficientdet_lite0.tflite",
-          },
-          scoreThreshold: 0.3,
-          maxResults: 5,
-          runningMode: "VIDEO",
-        });
-        if (cancelled) { det.close(); return; }
+        const [det, faceDet] = await Promise.all([
+          ObjectDetector.createFromOptions(vision, {
+            baseOptions: { modelAssetPath: "/efficientdet_lite0.tflite" },
+            scoreThreshold: 0.3,
+            maxResults: 5,
+            runningMode: "VIDEO",
+          }),
+          FaceDetector.createFromOptions(vision, {
+            baseOptions: { modelAssetPath: "/blaze_face_short_range.tflite" },
+            runningMode: "VIDEO",
+          }),
+        ]);
+        if (cancelled) { det.close(); faceDet.close(); return; }
         detectorRef.current = det;
+        faceDetectorRef.current = faceDet;
         setModelReady(true);
         setModelLoading(false);
       } catch {
@@ -265,7 +278,7 @@ export default function VisionPage() {
         setModelLoading(false);
       }
     })();
-    return () => { cancelled = true; detectorRef.current?.close(); detectorRef.current = null; setModelReady(false); setModelLoading(false); };
+    return () => { cancelled = true; detectorRef.current?.close(); detectorRef.current = null; faceDetectorRef.current?.close(); faceDetectorRef.current = null; setModelReady(false); setModelLoading(false); };
   }, [active]);
 
   // Detection + render loop
@@ -289,9 +302,37 @@ export default function VisionPage() {
         try {
           const results = det.detectForVideo(video, performance.now());
           detectTimeRef.current = Math.round(performance.now() - t0);
-          detectionsRef.current = results.detections;
+          let all: Detection[] = results.detections;
           setDetectionCount(results.detections.length);
-          updateSmooth(results.detections);
+
+          // Run face detection every other tick
+          faceTickRef.current++;
+          if (faceTickRef.current % 2 === 0) {
+            const faceDet = faceDetectorRef.current;
+            if (faceDet) {
+              const faceResults = faceDet.detectForVideo(video, performance.now());
+              for (const d of faceResults.detections) {
+                if (d.categories[0]) d.categories[0].categoryName = 'face';
+                all.push(d);
+              }
+              // Recognize face from keypoints
+              if (faceResults.detections.length > 0) {
+                const fd = faceResults.detections[0];
+                if (fd.keypoints && fd.keypoints.length >= 4) {
+                  const kp: number[] = [];
+                  for (const k of fd.keypoints) { kp.push(k.x * (video?.videoWidth || 640), k.y * (video?.videoHeight || 480)); }
+                  faceLandmarksRef.current = kp;
+                  const rec = recognize(kp, faceDBRef.current);
+                  recognizedFaceRef.current = rec;
+                }
+              } else {
+                recognizedFaceRef.current = null;
+              }
+            }
+          }
+
+          detectionsRef.current = all;
+          updateSmooth(all);
         } catch (err) {
           console.error("detect error:", err);
         }
@@ -382,7 +423,8 @@ export default function VisionPage() {
       const h = s.h * scale;
       const len = Math.max(10, Math.min(24, Math.min(w, h) * 0.2));
       const isLocked = tracking && s.key === trackLabelRef.current;
-      const color = isLocked ? "#ef4444" : "#3b82f6";
+      const isFace = s.key === 'face';
+      const color = isLocked ? "#ef4444" : isFace ? "#d946ef" : "#3b82f6";
 
       ctx.save();
 
@@ -398,21 +440,28 @@ export default function VisionPage() {
       ctx.stroke();
       ctx.shadowBlur = 0;
 
-      ctx.font = "10px monospace";
-      const tw = ctx.measureText(s.label).width;
-      const labelAbove = y > 22;
-      const lx = x;
-      const ly = labelAbove ? y - 20 : y + h + 2;
+      // For face detections, only show label if recognized
+      const displayLabel = isFace
+        ? (recognizedFaceRef.current ? recognizedFaceRef.current.name : null)
+        : s.label;
 
-      ctx.beginPath();
-      ctx.roundRect(lx, ly, tw + 10, 18, 3);
-      ctx.fillStyle = color;
-      ctx.globalAlpha = 0.9;
-      ctx.fill();
-      ctx.globalAlpha = 1;
+      if (displayLabel) {
+        ctx.font = "10px monospace";
+        const tw = ctx.measureText(displayLabel).width;
+        const labelAbove = y > 22;
+        const lx = x;
+        const ly = labelAbove ? y - 20 : y + h + 2;
 
-      ctx.fillStyle = "#fff";
-      ctx.fillText(s.label, lx + 5, ly + 13);
+        ctx.beginPath();
+        ctx.roundRect(lx, ly, tw + 10, 18, 3);
+        ctx.fillStyle = color;
+        ctx.globalAlpha = 0.9;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+
+        ctx.fillStyle = "#fff";
+        ctx.fillText(displayLabel, lx + 5, ly + 13);
+      }
 
       ctx.restore();
     }
@@ -781,6 +830,8 @@ export default function VisionPage() {
     sendMotor(l, r);
   }
 
+  useEffect(() => { faceDBRef.current = loadDB(); }, []);
+
   useEffect(() => () => wsRef.current?.close(), []);
 
   return (
@@ -891,6 +942,33 @@ export default function VisionPage() {
                 {label}
               </button>
             ))}
+          </div>
+        )}
+
+        {/* FACE REGISTER */}
+        {!registering && recognizedFaceRef.current === null && faceLandmarksRef.current.length > 0 && (
+          <button onClick={() => { setRegistering(true); setRegName(""); }}
+            className="absolute bottom-8 right-2 z-40 size-7 rounded-full bg-fuchsia-600/80 text-white text-[8px] font-mono font-bold border border-fuchsia-400/40 backdrop-blur-md flex items-center justify-center active:scale-90">
+            +
+          </button>
+        )}
+        {registering && (
+          <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-50 flex gap-1 bg-black/80 backdrop-blur-md border border-white/10 rounded-xl px-2.5 py-2 items-center">
+            <input value={regName} onChange={e => setRegName(e.target.value)} placeholder="nama"
+              className="w-24 px-1.5 py-0.5 rounded bg-zinc-800 text-white text-[9px] font-mono placeholder-zinc-500 focus:outline-none" />
+            <button onClick={() => {
+              if (!regName) return;
+              faceDBRef.current = registerFace(faceDBRef.current, regName, faceLandmarksRef.current);
+              recognizedFaceRef.current = faceDBRef.current[faceDBRef.current.length - 1];
+              setRegistering(false);
+            }}
+              className="px-2 py-0.5 rounded-full bg-fuchsia-600 text-white text-[7px] font-mono font-bold active:scale-90">
+              SIMPAN
+            </button>
+            <button onClick={() => setRegistering(false)}
+              className="px-2 py-0.5 rounded-full bg-zinc-700 text-zinc-300 text-[7px] font-mono active:scale-90">
+              X
+            </button>
           </div>
         )}
       </div>
