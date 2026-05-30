@@ -3,6 +3,7 @@
 import { useRef, useEffect, useState, useCallback } from "react";
 import { ObjectDetector, FaceDetector, FilesetResolver, type Detection } from "@mediapipe/tasks-vision";
 import Simulasi from "./simulasi";
+import AIGroq from "./aigroq";
 import { loadDB, saveDB, registerFace, recognize, type FaceRecord } from "./facerecog";
 
 interface Telemetry {
@@ -59,6 +60,8 @@ export default function VisionPage() {
   const [showTelemetry, setShowTelemetry] = useState(true);
   const trackingRef = useRef(false);
   const [trackInfo, setTrackInfo] = useState("");
+  const trackInfoRef = useRef("");
+  useEffect(() => { trackInfoRef.current = trackInfo; }, [trackInfo]);
   const trackTargetRef = useRef<{ label: string; lastSeen: number } | null>(null);
   const trackLabelRef = useRef<string | null>(null);
   const trackLostRef = useRef(0);
@@ -89,6 +92,7 @@ export default function VisionPage() {
   const [debug, setDebug] = useState(false);
   const debugRef = useRef(false);
   const detectTimeRef = useRef(0);
+  const aiBusyRef = useRef(false);
 
   const sendMotor = useCallback((l: number, r: number) => {
     const h = headingRef.current;
@@ -296,8 +300,8 @@ export default function VisionPage() {
       const det = detectorRef.current;
       if (!det || !video || video.readyState < 2 || !video.videoWidth) return;
 
-      // Skip heavy inference while user is manually driving via joystick
-      if (!joyActiveRef.current) {
+      // Skip heavy inference while user is manually driving via joystick or AI is busy
+      if (!joyActiveRef.current && !aiBusyRef.current) {
         const t0 = performance.now();
         try {
           const results = det.detectForVideo(video, performance.now());
@@ -338,9 +342,16 @@ export default function VisionPage() {
         }
       }
 
+      // Throttle overlay/tracking to every other tick to save CPU during AI chat
+      if (aiBusyRef.current) {
+        tickSkipRef.current++;
+        if (tickSkipRef.current % 2 !== 0) return;
+      }
       drawOverlay();
-      processTracking(detectionsRef.current);
+      if (!aiBusyRef.current) processTracking(detectionsRef.current);
     };
+
+    const tickSkipRef = { current: 0 };
 
     const detectIv = setInterval(detectAndDraw, 250);
     return () => { detectingRef.current = false; clearInterval(detectIv); };
@@ -1094,6 +1105,15 @@ export default function VisionPage() {
           </div>
         </div>
       </div>
+
+      {/* AI GROQ */}
+      <AIGroq
+        recognizedFaceRef={recognizedFaceRef}
+        detectionsRef={detectionsRef}
+        trackInfoRef={trackInfoRef}
+        scanStateRef={scanStateRef}
+        aiBusyRef={aiBusyRef}
+      />
     </main>
   );
 }
