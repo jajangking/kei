@@ -5,6 +5,7 @@ import { ObjectDetector, FaceDetector, FilesetResolver, type Detection } from "@
 import Simulasi from "./simulasi";
 import AIGroq from "./aigroq";
 import { loadDB, saveDB, registerFace, recognize, type FaceRecord } from "./facerecog";
+import mqtt from "mqtt";
 
 interface Telemetry {
   speed?: number;
@@ -37,10 +38,16 @@ export default function VisionPage() {
 
   const [espIp, setEspIp] = useState(() => typeof window !== "undefined" ? localStorage.getItem("espIp") || "" : "");
   const [wsConnected, setWsConnected] = useState(false);
+  const [mqttConnected, setMqttConnected] = useState(false);
   const [showEspInput, setShowEspInput] = useState(false);
   const [wifiSsid, setWifiSsid] = useState("");
   const [wifiPass, setWifiPass] = useState("");
   const [showWifiConfig, setShowWifiConfig] = useState(false);
+  const [mqttBroker, setMqttBroker] = useState(() => typeof window !== "undefined" ? localStorage.getItem("mqttBroker") || "" : "");
+  const [mqttPort, setMqttPort] = useState(() => typeof window !== "undefined" ? Number(localStorage.getItem("mqttPort")) || 8883 : 8883);
+  const [mqttUser, setMqttUser] = useState("");
+  const [mqttPass, setMqttPass] = useState("");
+  const [showMqttInput, setShowMqttInput] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [scanStatus, setScanStatus] = useState("");
   const [leftMotor, setLeftMotor] = useState(0);
@@ -135,8 +142,14 @@ export default function VisionPage() {
       p.x += Math.sin(h) * avg * 1.5;
       p.y -= Math.cos(h) * avg * 1.5;
     }
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ leftMotor: l, rightMotor: r }));
+    const ws = wsRef.current;
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ leftMotor: l, rightMotor: r }));
+    }
+    const mqtt = mqttClientRef.current;
+    if (mqtt?.connected) {
+      const prefix = mqttTeleTopicRef.current;
+      mqtt.publish(`${prefix}/+/cmd`, JSON.stringify({ leftMotor: l, rightMotor: r }));
     }
   }, []);
 
@@ -269,9 +282,69 @@ export default function VisionPage() {
     wsRef.current = ws;
   }, [espIp]);
 
+  // MQTT
+  const mqttClientRef = useRef<any>(null);
+  const mqttTeleTopicRef = useRef("");
+
+  const connectMQTT = useCallback(() => {
+    if (!mqttBroker) return;
+    try {
+      mqttClientRef.current?.end(true);
+      const clientId = "kei-web-" + Math.random().toString(36).slice(2, 8);
+      const opts: any = {
+        clientId,
+        clean: true,
+        reconnectPeriod: 5000,
+        connectTimeout: 10000,
+      };
+      if (mqttUser) { opts.username = mqttUser; opts.password = mqttPass; }
+      const url = `wss://${mqttBroker}:${mqttPort}/mqtt`;
+      const client = mqtt.connect(url, opts);
+      client.on("connect", () => {
+        setMqttConnected(true);
+        // subscribe to telemetry
+        const teleTopic = `kei/robot/+/telemetry`;
+        mqttTeleTopicRef.current = "kei/robot";
+        client.subscribe(teleTopic);
+      });
+      client.on("message", (topic: string, payload: Buffer) => {
+        try {
+          const data = JSON.parse(payload.toString());
+          // Extract device identifier from topic (kei/robot/{id}/telemetry)
+          const parts = topic.split("/");
+          if (parts.length >= 3) {
+            const deviceId = parts[2];
+            if (deviceId) setEspIp(deviceId);
+          }
+          setTelemetry(data);
+        } catch {}
+      });
+      client.on("close", () => { setMqttConnected(false); });
+      client.on("error", () => { client.end(true); });
+      mqttClientRef.current = client;
+      localStorage.setItem("mqttBroker", mqttBroker);
+      localStorage.setItem("mqttPort", String(mqttPort));
+    } catch {
+      setMqttConnected(false);
+    }
+  }, [mqttBroker, mqttPort, mqttUser, mqttPass]);
+
+  const disconnectMQTT = useCallback(() => {
+    mqttClientRef.current?.end(true);
+    mqttClientRef.current = null;
+    setMqttConnected(false);
+  }, []);
+
   const sendESP = useCallback((data: object) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify(data));
+    const ws = wsRef.current;
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(data));
+    }
+    const mqtt = mqttClientRef.current;
+    if (mqtt?.connected) {
+      const prefix = mqttTeleTopicRef.current;
+      const cmdTopic = `${prefix}/+/cmd`;
+      mqtt.publish(cmdTopic, JSON.stringify(data));
     }
   }, []);
 
@@ -1081,7 +1154,7 @@ export default function VisionPage() {
         {/* Top HUD */}
         <button onClick={() => setShowEspInput((p) => !p)}
           className="absolute top-1.5 left-1.5 z-30 h-7 rounded-full bg-black/50 backdrop-blur-md border border-white/10 flex items-center gap-1.5 px-2 hover:bg-black/70">
-          <div className={`size-2 rounded-full ${wsConnected ? "bg-green-400 shadow-[0_0_6px_rgba(74,222,128,0.5)]" : "bg-zinc-500"}`} />
+          <div className={`size-2 rounded-full ${wsConnected || mqttConnected ? "bg-green-400 shadow-[0_0_6px_rgba(74,222,128,0.5)]" : "bg-zinc-500"}`} />
           <span className="text-[7px] font-mono tracking-wider text-zinc-400">ESP</span>
         </button>
         {modelLoading && !modelReady && (
@@ -1237,6 +1310,62 @@ export default function VisionPage() {
               PING
             </button>
           </div>
+          {/* MQTT toggle */}
+          <div className="flex gap-1.5 mt-1">
+            <button onClick={() => setShowMqttInput(p => !p)}
+              className={`px-2.5 py-1.5 rounded-full text-[9px] font-mono font-bold border flex-shrink-0 active:scale-90 ${
+                mqttConnected
+                  ? "bg-emerald-600 border-emerald-600 text-white"
+                  : "bg-transparent border-zinc-700 text-zinc-400"
+              }`}>
+              MQTT {mqttConnected ? "ON" : "OFF"}
+            </button>
+            {mqttConnected ? (
+              <button onClick={disconnectMQTT}
+                className="px-2 py-1.5 rounded-full bg-zinc-800 text-zinc-300 text-[9px] font-mono border border-zinc-700 flex-shrink-0 active:scale-90">
+                PUTUS MQTT
+              </button>
+            ) : mqttBroker ? (
+              <button onClick={connectMQTT}
+                className="px-2 py-1.5 rounded-full bg-emerald-700 text-white text-[9px] font-mono font-bold flex-shrink-0 active:scale-90">
+                HUBUNG MQTT
+              </button>
+            ) : null}
+          </div>
+          {/* MQTT config */}
+          {showMqttInput && (
+            <div className="flex flex-col gap-1.5 mt-1 p-2 rounded-xl bg-zinc-900/80 ring-1 ring-white/10">
+              <div className="flex gap-1.5">
+                <input value={mqttBroker} onChange={e => setMqttBroker(e.target.value)}
+                  placeholder="broker.hivemq.cloud"
+                  className="flex-1 min-w-0 px-2 py-1 rounded-full bg-zinc-800 border border-zinc-700 text-white text-[9px] font-mono placeholder-zinc-500 focus:outline-none focus:border-zinc-500" />
+                <input value={mqttPort} onChange={e => setMqttPort(Number(e.target.value))}
+                  placeholder="8883"
+                  className="w-16 px-2 py-1 rounded-full bg-zinc-800 border border-zinc-700 text-white text-[9px] font-mono placeholder-zinc-500 focus:outline-none focus:border-zinc-500 text-center" />
+              </div>
+              <div className="flex gap-1.5">
+                <input value={mqttUser} onChange={e => setMqttUser(e.target.value)}
+                  placeholder="username (opsional)"
+                  className="flex-1 min-w-0 px-2 py-1 rounded-full bg-zinc-800 border border-zinc-700 text-white text-[9px] font-mono placeholder-zinc-500 focus:outline-none focus:border-zinc-500" />
+                <input value={mqttPass} onChange={e => setMqttPass(e.target.value)}
+                  placeholder="password"
+                  type="password"
+                  className="flex-1 min-w-0 px-2 py-1 rounded-full bg-zinc-800 border border-zinc-700 text-white text-[9px] font-mono placeholder-zinc-500 focus:outline-none focus:border-zinc-500" />
+              </div>
+              <div className="flex gap-1">
+                <button onClick={connectMQTT}
+                  className="flex-1 px-2 py-1 rounded-full bg-emerald-600 text-white text-[9px] font-mono font-bold active:scale-90">
+                  HUBUNGKAN
+                </button>
+                <button onClick={() => {
+                  sendESP({ mqttBroker, mqttPort: Number(mqttPort), mqttUser, mqttPass, mqttEnabled: true });
+                }}
+                  className="px-2 py-1 rounded-full bg-zinc-800 text-zinc-300 text-[9px] font-mono border border-zinc-700 active:scale-90">
+                  KIRIM KE ESP
+                </button>
+              </div>
+            </div>
+          )}
           {wsConnected && (
             <div className="flex flex-wrap gap-1">
               <button onClick={sendEmergency}

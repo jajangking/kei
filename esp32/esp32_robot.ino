@@ -5,6 +5,8 @@
 #include <ESPmDNS.h>
 #include <ArduinoOTA.h>
 #include <Preferences.h>
+#include <PubSubClient.h>
+#include <WiFiClientSecure.h>
 
 // =======================
 // WIFI
@@ -49,6 +51,25 @@ int maxSpeed = 255;
 int rampRate = 8;
 int motorTimeout = 5000;
 bool powerSave = false;
+
+// =======================
+// MQTT
+// =======================
+
+WiFiClientSecure mqttWifiClient;
+PubSubClient mqttClient(mqttWifiClient);
+
+String mqttBroker = "";
+int mqttPort = 8883;
+String mqttUser = "";
+String mqttPass = "";
+String mqttTopicPrefix = "kei/robot";
+bool mqttEnabled = false;
+unsigned long lastMqttAttempt = 0;
+unsigned long lastMqttTelemetry = 0;
+String deviceName = "";
+
+void mqttCallback(char* topic, byte* payload, unsigned int length);
 
 // =======================
 // STATE
@@ -142,6 +163,112 @@ wifiSsid = ssid;
 wifiPass = pass;
 
 Serial.println("WiFi Config Saved");
+}
+
+// =======================
+// MQTT CONFIG
+// =======================
+
+void loadMqttConfig() {
+  Preferences prefs;
+  prefs.begin("mqtt", true);
+  mqttBroker = prefs.getString("broker", "");
+  mqttPort = prefs.getInt("port", 8883);
+  mqttUser = prefs.getString("user", "");
+  mqttPass = prefs.getString("pass", "");
+  mqttTopicPrefix = prefs.getString("prefix", "kei/robot");
+  mqttEnabled = prefs.getBool("enabled", false);
+  prefs.end();
+}
+
+void saveMqttConfig(String broker, int port, String user, String pass, String prefix, bool enabled) {
+  Preferences prefs;
+  prefs.begin("mqtt", false);
+  prefs.putString("broker", broker);
+  prefs.putInt("port", port);
+  prefs.putString("user", user);
+  prefs.putString("pass", pass);
+  prefs.putString("prefix", prefix);
+  prefs.putBool("enabled", enabled);
+  prefs.end();
+  mqttBroker = broker;
+  mqttPort = port;
+  mqttUser = user;
+  mqttPass = pass;
+  mqttTopicPrefix = prefix;
+  mqttEnabled = enabled;
+  Serial.println("MQTT Config Saved");
+}
+
+String getDeviceId() {
+  if (deviceName.length() > 0) return deviceName;
+  return WiFi.macAddress();
+  deviceName = WiFi.macAddress();
+  deviceName.replace(":", "");
+  return deviceName;
+}
+
+String getCmdTopic() {
+  return mqttTopicPrefix + "/" + getDeviceId() + "/cmd";
+}
+
+String getTeleTopic() {
+  return mqttTopicPrefix + "/" + getDeviceId() + "/telemetry";
+}
+
+// =======================
+// MQTT CONNECT
+// =======================
+
+void connectMQTT() {
+  if (!mqttEnabled || mqttBroker.length() == 0) return;
+  if (mqttClient.connected()) return;
+
+  mqttWifiClient.setInsecure();
+  mqttClient.setServer(mqttBroker.c_str(), mqttPort);
+  mqttClient.setCallback(mqttCallback);
+  mqttClient.setBufferSize(512);
+
+  String clientId = "kei-" + getDeviceId();
+  Serial.print("MQTT connecting to ");
+  Serial.print(mqttBroker);
+  Serial.print(":");
+  Serial.println(mqttPort);
+
+  boolean ok;
+  if (mqttUser.length() > 0) {
+    ok = mqttClient.connect(clientId.c_str(), mqttUser.c_str(), mqttPass.c_str());
+  } else {
+    ok = mqttClient.connect(clientId.c_str());
+  }
+
+  if (ok) {
+    Serial.println("MQTT connected");
+    String cmdTopic = getCmdTopic();
+    mqttClient.subscribe(cmdTopic.c_str());
+    Serial.print("MQTT subscribed: ");
+    Serial.println(cmdTopic);
+  } else {
+    Serial.print("MQTT failed: ");
+    Serial.println(mqttClient.state());
+  }
+}
+
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  String msg = "";
+  for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
+  Serial.print("MQTT msg [");
+  Serial.print(topic);
+  Serial.print("]: ");
+  Serial.println(msg);
+  handleMessage(msg);
+}
+
+void mqttPublishTelemetry() {
+  if (!mqttEnabled || !mqttClient.connected()) return;
+  String json = buildTelemetryJson();
+  String topic = getTeleTopic();
+  mqttClient.publish(topic.c_str(), json.c_str(), true);
 }
 
 // =======================
@@ -256,6 +383,10 @@ stopMotors();
 
 connectWiFi();
 
+// MQTT
+
+loadMqttConfig();
+
 // WEBSOCKET
 
 webSocket.begin();
@@ -309,6 +440,17 @@ ArduinoOTA.handle();
 httpServer.handleClient();
 
 webSocket.loop();
+
+// MQTT
+if (mqttEnabled) {
+  if (!mqttClient.connected() && millis() - lastMqttAttempt > 5000) {
+    lastMqttAttempt = millis();
+    connectMQTT();
+  }
+  if (mqttClient.connected()) {
+    mqttClient.loop();
+  }
+}
 
 updateLED();
 
@@ -579,6 +721,48 @@ if (configChanged) {
 }
 
 // =======================
+// MQTT CONFIG
+// =======================
+
+if (doc["mqttBroker"].is<String>()) {
+    String broker = doc["mqttBroker"];
+    int port = doc["mqttPort"] | 8883;
+    String user = doc["mqttUser"] | "";
+    String pass = doc["mqttPass"] | "";
+    String prefix = doc["mqttPrefix"] | "kei/robot";
+    bool enabled = doc["mqttEnabled"] | true;
+
+    saveMqttConfig(broker, port, user, pass, prefix, enabled);
+    if (enabled) {
+      lastMqttAttempt = 0;
+      mqttClient.disconnect();
+      connectMQTT();
+    }
+
+    JsonDocument ack;
+    ack["mqttConfig"] = true;
+    ack["mqttBroker"] = broker;
+    ack["mqttPort"] = port;
+    ack["mqttEnabled"] = enabled;
+    String reply;
+    serializeJson(ack, reply);
+    webSocket.broadcastTXT(reply);
+    return;
+}
+
+if (doc["mqttDisable"].is<bool>() && doc["mqttDisable"]) {
+    saveMqttConfig("", 8883, "", "", "kei/robot", false);
+    mqttClient.disconnect();
+    mqttEnabled = false;
+    JsonDocument ack;
+    ack["mqttConfig"] = false;
+    String reply;
+    serializeJson(ack, reply);
+    webSocket.broadcastTXT(reply);
+    return;
+}
+
+// =======================
 // WIFI CONFIG
 // =======================
 
@@ -768,40 +952,29 @@ writeMotorB(0);
 // TELEMETRY
 // =======================
 
+String buildTelemetryJson() {
+  String mode = emergencyStop ? "emergency" : "manual";
+  int avgSpeed = (abs(currentLeftSpeed) + abs(currentRightSpeed)) / 2;
+  JsonDocument doc;
+  doc["rssi"] = WiFi.RSSI();
+  doc["heap"] = ESP.getFreeHeap();
+  doc["uptime"] = (millis() - startTime) / 1000;
+  doc["speed"] = avgSpeed;
+  doc["mode"] = mode;
+  doc["left"] = currentLeftSpeed;
+  doc["right"] = currentRightSpeed;
+  doc["powerSave"] = powerSave;
+  doc["emergency"] = emergencyStop;
+  doc["ip"] = WiFi.localIP().toString();
+  doc["ssid"] = wifiSsid;
+  doc["mqtt"] = mqttEnabled && mqttClient.connected();
+  String json;
+  serializeJson(doc, json);
+  return json;
+}
+
 void sendTelemetry() {
-
-String mode = emergencyStop ? "emergency" : "manual";
-
-int avgSpeed = (abs(currentLeftSpeed) + abs(currentRightSpeed)) / 2;
-
-JsonDocument doc;
-
-doc["rssi"] = WiFi.RSSI();
-
-doc["heap"] = ESP.getFreeHeap();
-
-doc["uptime"] =
-    (millis() - startTime) / 1000;
-
-doc["speed"] = avgSpeed;
-
-doc["mode"] = mode;
-
-doc["left"] = currentLeftSpeed;
-
-doc["right"] = currentRightSpeed;
-
-doc["powerSave"] = powerSave;
-
-doc["emergency"] = emergencyStop;
-
-doc["ip"] = WiFi.localIP().toString();
-
-doc["ssid"] = wifiSsid;
-
-String json;
-
-serializeJson(doc, json);
-
-webSocket.broadcastTXT(json);
+  String json = buildTelemetryJson();
+  webSocket.broadcastTXT(json);
+  mqttPublishTelemetry();
 }
