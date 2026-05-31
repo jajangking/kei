@@ -1560,11 +1560,6 @@ export default function VisionPage() {
                   }}>
                   LIMIT {(telemetry.speedLimitEnabled) ? telemetry.speedLimit ?? 150 : 'OFF'}
                 </button>
-                <button onClick={() => sendESP({ buzzer: true })}
-                  className="px-2 py-1 rounded-full text-[9px] font-mono font-bold border active:scale-90 flex-shrink-0"
-                  style={{ borderColor: 'rgba(255,255,255,0.15)', color: 'rgba(255,255,255,0.4)' }}>
-                  BUZZ
-                </button>
                 <input type="range" min="50" max="255" step="5"
                   value={telemetry.speedLimit ?? 150}
                   onChange={(e) => sendConfig({ speedLimit: parseInt(e.target.value) })}

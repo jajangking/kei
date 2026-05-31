@@ -43,11 +43,8 @@ WebServer httpServer(80);
 // STBY
 #define STBY 33
 
-// BUZZER
-#define BUZZER_PIN 4
-
 // =======================
-// STATE (declared early for buzzer)
+// STATE
 // =======================
 
 unsigned long startTime = 0;
@@ -65,97 +62,6 @@ int currentRightSpeed = 0;
 bool ledState = false;
 bool emergencyStop = false;
 bool wsConnected = false;
-bool reversing = false;
-
-// =======================
-// BUZZER
-// =======================
-
-unsigned long buzzerOnUntil = 0;
-int buzzerBeepCount = 0;
-int buzzerBeepDone = 0;
-unsigned long buzzerLastToggle = 0;
-bool buzzerState = false;
-
-void buzzerOn() {
-  digitalWrite(BUZZER_PIN, HIGH);
-  buzzerState = true;
-}
-
-void buzzerOff() {
-  digitalWrite(BUZZER_PIN, LOW);
-  buzzerState = false;
-}
-
-void buzzerBeep(int ms) {
-  buzzerOn();
-  buzzerOnUntil = millis() + ms;
-}
-
-void buzzerBeepPattern(int count, int onMs, int offMs) {
-  buzzerBeepCount = count;
-  buzzerBeepDone = 0;
-  buzzerOnUntil = onMs;
-  buzzerLastToggle = millis();
-  buzzerState = false;
-  // first beep starts immediately
-  buzzerOn();
-  buzzerState = true;
-  buzzerLastToggle = millis();
-  buzzerOnUntil = millis() + onMs;
-}
-
-void updateBuzzer() {
-  unsigned long now = millis();
-
-  // emergency rapid beep handled in updateLED
-
-  if (emergencyStop) return;
-
-  // reverse beep (truck reversing sound)
-  if (reversing && buzzerBeepCount == 0) {
-    if (buzzerState && now >= buzzerOnUntil) {
-      buzzerOff();
-      buzzerOnUntil = now + 500;
-    } else if (!buzzerState && now >= buzzerOnUntil) {
-      buzzerOn();
-      buzzerOnUntil = now + 100;
-    }
-    return;
-  }
-
-  if (buzzerBeepCount > 0) {
-    if (buzzerState && now >= buzzerOnUntil) {
-      // turn off
-      buzzerOff();
-      buzzerState = false;
-      buzzerBeepDone++;
-      buzzerLastToggle = now;
-      if (buzzerBeepDone >= buzzerBeepCount) {
-        buzzerBeepCount = 0;
-      }
-    } else if (!buzzerState && buzzerBeepCount > 0 && now - buzzerLastToggle > 100) {
-      // next beep
-      buzzerOn();
-      buzzerState = true;
-      buzzerOnUntil = now + 100; // on for 100ms
-      buzzerLastToggle = now;
-    }
-    return;
-  }
-
-  // turn off after timeout for simple beep
-  if (buzzerState && now >= buzzerOnUntil) {
-    buzzerOff();
-  }
-
-  // auto-clear reversing when stopped
-  if (reversing && targetLeftSpeed >= 0 && targetRightSpeed >= 0) {
-    reversing = false;
-    buzzerOff();
-  }
-}
-
 // =======================
 // CONFIG
 // =======================
@@ -253,12 +159,6 @@ if (powerSave) {
 
 void applyPowerSaveSafe() {
   savePowerSaveConfig();
-  for (int i = 0; i < 3; i++) {
-    digitalWrite(BUZZER_PIN, HIGH);
-    delay(100);
-    digitalWrite(BUZZER_PIN, LOW);
-    delay(100);
-  }
   ESP.restart();
 }
 
@@ -453,8 +353,6 @@ if (WiFi.status() == WL_CONNECTED) {
     Serial.println();
     Serial.println("WiFi Connected");
 
-    buzzerBeep(100);
-
     Serial.print("IP: ");
     Serial.println(WiFi.localIP());
 
@@ -517,9 +415,6 @@ pinMode(BIN2, OUTPUT);
 pinMode(STBY, OUTPUT);
 
 digitalWrite(STBY, HIGH);
-
-pinMode(BUZZER_PIN, OUTPUT);
-buzzerOff();
 
 // PWM (ESP32 CORE 3.x)
 
@@ -622,8 +517,6 @@ if (mqttEnabled) {
 
 updateLED();
 
-updateBuzzer();
-
 // =======================
 // WIFI RECONNECT
 // =======================
@@ -696,8 +589,6 @@ if (emergencyStop) {
         ledState = !ledState;
 
         digitalWrite(LED_PIN, ledState);
-
-        digitalWrite(BUZZER_PIN, ledState);
     }
 
     return;
@@ -753,8 +644,6 @@ case WStype_CONNECTED:
 
     Serial.printf("Client %u Connected\n", num);
 
-    buzzerBeepPattern(2, 100, 100);
-
     break;
 
 case WStype_DISCONNECTED:
@@ -764,8 +653,6 @@ case WStype_DISCONNECTED:
     Serial.printf("Client %u Disconnected\n", num);
 
     stopMotors();
-
-    buzzerBeep(500);
 
     break;
 
@@ -839,16 +726,6 @@ if (doc["ping"] == true) {
 
     webSocket.broadcastTXT(reply);
 
-    return;
-}
-
-// =======================
-// BUZZER TEST
-// =======================
-
-if (doc["buzzer"] == true) {
-    Serial.println("Buzzer test");
-    buzzerBeepPattern(3, 100, 100);
     return;
 }
 
@@ -1015,9 +892,6 @@ if (doc["leftMotor"].is<int>() ||
         constrain(rightMotor, -cap, cap);
 
     lastCommandTime = millis();
-
-    reversing = (leftMotor < 0 && rightMotor < 0 &&
-                 abs(leftMotor) > 30 && abs(rightMotor) > 30);
 }
 }
 
