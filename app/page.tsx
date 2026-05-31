@@ -148,8 +148,10 @@ export default function VisionPage() {
     }
     const mqtt = mqttClientRef.current;
     if (mqtt?.connected) {
-      const prefix = mqttTeleTopicRef.current;
-      mqtt.publish(`${prefix}/+/cmd`, JSON.stringify({ leftMotor: l, rightMotor: r }));
+      const deviceId = mqttDeviceIdRef.current;
+      if (deviceId) {
+        mqtt.publish(`kei/robot/${deviceId}/cmd`, JSON.stringify({ leftMotor: l, rightMotor: r }));
+      }
     }
   }, []);
 
@@ -285,11 +287,14 @@ export default function VisionPage() {
   // MQTT
   const mqttClientRef = useRef<any>(null);
   const mqttTeleTopicRef = useRef("");
+  const mqttDeviceIdRef = useRef("");
+  const [mqttStatus, setMqttStatus] = useState("");
 
   const connectMQTT = useCallback(() => {
     if (!mqttBroker) return;
     try {
       mqttClientRef.current?.end(true);
+      setMqttStatus("menghubungkan...");
       const clientId = "kei-web-" + Math.random().toString(36).slice(2, 8);
       const opts: any = {
         clientId,
@@ -298,11 +303,14 @@ export default function VisionPage() {
         connectTimeout: 10000,
       };
       if (mqttUser) { opts.username = mqttUser; opts.password = mqttPass; }
-      const url = `wss://${mqttBroker}:${mqttPort}/mqtt`;
+      // Browser always uses port 443 (WSS), ignore user's mqttPort for browser
+      const url = `wss://${mqttBroker}:443/mqtt`;
+      console.log("[MQTT] connecting to", url);
       const client = mqtt.connect(url, opts);
       client.on("connect", () => {
+        console.log("[MQTT] connected");
         setMqttConnected(true);
-        // subscribe to telemetry
+        setMqttStatus("terhubung");
         const teleTopic = `kei/robot/+/telemetry`;
         mqttTeleTopicRef.current = "kei/robot";
         client.subscribe(teleTopic);
@@ -310,24 +318,36 @@ export default function VisionPage() {
       client.on("message", (topic: string, payload: Buffer) => {
         try {
           const data = JSON.parse(payload.toString());
-          // Extract device identifier from topic (kei/robot/{id}/telemetry)
           const parts = topic.split("/");
           if (parts.length >= 3) {
             const deviceId = parts[2];
-            if (deviceId) setEspIp(deviceId);
+            if (deviceId) {
+              setEspIp(deviceId);
+              mqttDeviceIdRef.current = deviceId;
+            }
           }
           setTelemetry(data);
         } catch {}
       });
-      client.on("close", () => { setMqttConnected(false); });
-      client.on("error", () => { client.end(true); });
+      client.on("close", () => {
+        console.log("[MQTT] disconnected");
+        setMqttConnected(false);
+        setMqttStatus("putus");
+      });
+      client.on("error", (err: any) => {
+        console.error("[MQTT] error:", err?.message || err);
+        setMqttStatus("gagal: " + (err?.message || "unknown"));
+        client.end(true);
+      });
       mqttClientRef.current = client;
       localStorage.setItem("mqttBroker", mqttBroker);
       localStorage.setItem("mqttPort", String(mqttPort));
-    } catch {
+    } catch (e: any) {
+      console.error("[MQTT] exception:", e);
       setMqttConnected(false);
+      setMqttStatus("gagal: " + (e?.message || "unknown"));
     }
-  }, [mqttBroker, mqttPort, mqttUser, mqttPass]);
+  }, [mqttBroker, mqttUser, mqttPass]);
 
   const disconnectMQTT = useCallback(() => {
     mqttClientRef.current?.end(true);
@@ -342,9 +362,11 @@ export default function VisionPage() {
     }
     const mqtt = mqttClientRef.current;
     if (mqtt?.connected) {
-      const prefix = mqttTeleTopicRef.current;
-      const cmdTopic = `${prefix}/+/cmd`;
-      mqtt.publish(cmdTopic, JSON.stringify(data));
+      const deviceId = mqttDeviceIdRef.current;
+      if (deviceId) {
+        const cmdTopic = `kei/robot/${deviceId}/cmd`;
+        mqtt.publish(cmdTopic, JSON.stringify(data));
+      }
     }
   }, []);
 
@@ -1331,6 +1353,12 @@ export default function VisionPage() {
                 HUBUNG MQTT
               </button>
             ) : null}
+            {mqttStatus && (
+              <span className="text-[7px] font-mono self-center truncate max-w-24"
+                style={{ color: mqttConnected ? "#34d399" : mqttStatus.includes("gagal") ? "#ef4444" : "#a1a1aa" }}>
+                {mqttStatus}
+              </span>
+            )}
           </div>
           {/* MQTT config */}
           {showMqttInput && (
@@ -1341,11 +1369,12 @@ export default function VisionPage() {
                   className="flex-1 min-w-0 px-2 py-1 rounded-full bg-zinc-800 border border-zinc-700 text-white text-[9px] font-mono placeholder-zinc-500 focus:outline-none focus:border-zinc-500" />
                 <input value={mqttPort} onChange={e => setMqttPort(Number(e.target.value))}
                   placeholder="8883"
+                  title="Port untuk ESP32 (TLS: 8883). Browser otomatis pakai 443 (WSS)"
                   className="w-16 px-2 py-1 rounded-full bg-zinc-800 border border-zinc-700 text-white text-[9px] font-mono placeholder-zinc-500 focus:outline-none focus:border-zinc-500 text-center" />
               </div>
               <div className="flex gap-1.5">
                 <input value={mqttUser} onChange={e => setMqttUser(e.target.value)}
-                  placeholder="username (opsional)"
+                  placeholder="username"
                   className="flex-1 min-w-0 px-2 py-1 rounded-full bg-zinc-800 border border-zinc-700 text-white text-[9px] font-mono placeholder-zinc-500 focus:outline-none focus:border-zinc-500" />
                 <input value={mqttPass} onChange={e => setMqttPass(e.target.value)}
                   placeholder="password"
@@ -1364,6 +1393,7 @@ export default function VisionPage() {
                   KIRIM KE ESP
                 </button>
               </div>
+              <span className="text-[6px] font-mono text-zinc-600 text-center">Browser: WSS :443 | ESP: TLS :8883</span>
             </div>
           )}
           {wsConnected && (
