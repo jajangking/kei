@@ -540,7 +540,8 @@ export default function VisionPage() {
         faceDetectorRef.current = faceDet;
         setModelReady(true);
         setModelLoading(false);
-      } catch {
+      } catch (e) {
+        console.error("[MODEL LOAD]", e);
         setModelReady(false);
         setModelLoading(false);
       }
@@ -579,7 +580,7 @@ export default function VisionPage() {
         sourceH = img.naturalHeight;
         detCanvas.width = sourceW;
         detCanvas.height = sourceH;
-        detCanvas.getContext('2d')!.drawImage(img, 0, 0);
+        try { detCanvas.getContext('2d')!.drawImage(img, 0, 0); } catch { return; }
         detectSource = detCanvas;
       } else return;
 
@@ -1609,7 +1610,7 @@ export default function VisionPage() {
         </div>
       )}
 
-      {source === "stream" && !showEspInput && (
+      {source === "stream" && (
         <div className="flex gap-1.5 w-full max-w-sm">
           <input value={inputUrl} onChange={(e) => setInputUrl(e.target.value)}
             placeholder="URL stream"
