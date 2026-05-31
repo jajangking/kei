@@ -102,7 +102,7 @@ void applyPowerSave() {
 
 if (powerSave) {
 
-    WiFi.setSleep(true);
+    WiFi.setSleep(WIFI_PS_MIN_MODEM);
 
     setCpuFrequencyMhz(80);
 
@@ -110,7 +110,7 @@ if (powerSave) {
 
 } else {
 
-    WiFi.setSleep(false);
+    WiFi.setSleep(WIFI_PS_NONE);
 
     setCpuFrequencyMhz(240);
 
@@ -460,18 +460,19 @@ updateLED();
 
 if (WiFi.status() != WL_CONNECTED) {
 
-    if (millis() - lastWifiAttempt > 2000) {
+    unsigned long retryDelay = 2000;
+    if (lastCommandTime > 0) retryDelay = 5000;
+
+    if (millis() - lastWifiAttempt > retryDelay) {
 
         lastWifiAttempt = millis();
 
         Serial.println("Reconnecting WiFi...");
 
-        WiFi.disconnect();
-
-        WiFi.begin(wifiSsid.c_str(), wifiPass.c_str());
+        WiFi.reconnect();
     }
 
-    stopMotors();
+    if (millis() - lastCommandTime > 1000) stopMotors();
 
     return;
 }
