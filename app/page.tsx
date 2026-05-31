@@ -29,12 +29,15 @@ export default function VisionPage() {
   const streamRef = useRef<MediaStream | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
+  const streamImgRef = useRef<HTMLImageElement>(null);
+  const streamDetCanvasRef = useRef<HTMLCanvasElement>(null);
 
   const [active, setActive] = useState(false);
   const [facingMode, setFacingMode] = useState<"user" | "environment">("environment");
   const [source, setSource] = useState<"local" | "stream">("local");
   const [streamUrl, setStreamUrl] = useState("");
   const [inputUrl, setInputUrl] = useState("");
+  const proxiedStreamUrl = streamUrl ? `/api/proxy?url=${encodeURIComponent(streamUrl)}` : "";
 
   const [espIp, setEspIp] = useState(() => typeof window !== "undefined" ? localStorage.getItem("espIp") || "" : "");
   const [wsConnected, setWsConnected] = useState(false);
@@ -462,11 +465,11 @@ export default function VisionPage() {
             baseOptions: { modelAssetPath: "/efficientdet_lite0.tflite" },
             scoreThreshold: 0.3,
             maxResults: 5,
-            runningMode: "VIDEO",
+            runningMode: "IMAGE",
           }),
           FaceDetector.createFromOptions(vision, {
             baseOptions: { modelAssetPath: "/blaze_face_short_range.tflite" },
-            runningMode: "VIDEO",
+            runningMode: "IMAGE",
           }),
         ]);
         if (cancelled) { det.close(); faceDet.close(); return; }
@@ -495,13 +498,33 @@ export default function VisionPage() {
     const detectAndDraw = () => {
       if (!detectingRef.current) return;
       const det = detectorRef.current;
-      if (!det || !video || video.readyState < 2 || !video.videoWidth) return;
+      if (!det) return;
+
+      // Determine detection source
+      let detectSource: HTMLVideoElement | HTMLCanvasElement | null = null;
+      let sourceW = 640, sourceH = 480;
+      if (source === "local") {
+        if (!video || video.readyState < 2 || !video.videoWidth) return;
+        detectSource = video;
+        sourceW = video.videoWidth;
+        sourceH = video.videoHeight;
+      } else if (streamUrl) {
+        const img = streamImgRef.current;
+        const detCanvas = streamDetCanvasRef.current;
+        if (!img || !detCanvas || !img.complete || !img.naturalWidth) return;
+        sourceW = img.naturalWidth;
+        sourceH = img.naturalHeight;
+        detCanvas.width = sourceW;
+        detCanvas.height = sourceH;
+        detCanvas.getContext('2d')!.drawImage(img, 0, 0);
+        detectSource = detCanvas;
+      } else return;
 
       // Skip heavy inference while user is manually driving via joystick or AI is busy
       if (!joyActiveRef.current && !aiBusyRef.current) {
         const t0 = performance.now();
         try {
-          const results = det.detectForVideo(video, performance.now());
+          const results = det.detect(detectSource);
           detectTimeRef.current = Math.round(performance.now() - t0);
           let all: Detection[] = results.detections;
           setDetectionCount(results.detections.length);
@@ -511,7 +534,7 @@ export default function VisionPage() {
           if (faceTickRef.current % 2 === 0) {
             const faceDet = faceDetectorRef.current;
             if (faceDet) {
-              const faceResults = faceDet.detectForVideo(video, performance.now());
+              const faceResults = faceDet.detect(detectSource);
               for (const d of faceResults.detections) {
                 if (d.categories[0]) d.categories[0].categoryName = 'face';
                 all.push(d);
@@ -609,12 +632,19 @@ export default function VisionPage() {
   function drawOverlay() {
     const canvas = overlayRef.current;
     const video = videoRef.current;
-    if (!canvas || !video) return;
+    const img = streamImgRef.current;
+    if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const vw = video.videoWidth || 640;
-    const vh = video.videoHeight || 480;
+    let vw = 640, vh = 480;
+    if (source === "local" && video) {
+      vw = video.videoWidth || 640;
+      vh = video.videoHeight || 480;
+    } else if (img && img.complete) {
+      vw = img.naturalWidth || 640;
+      vh = img.naturalHeight || 480;
+    }
     const rect = canvas.parentElement!.getBoundingClientRect();
     const scale = Math.min(rect.width / vw, rect.height / vh);
     const ox = (rect.width - vw * scale) / 2;
@@ -681,14 +711,28 @@ export default function VisionPage() {
       canvas = document.createElement('canvas');
       brightnessCanvasRef.current = canvas;
     }
-    const video = videoRef.current;
-    if (!video || !video.videoWidth || !video.videoHeight) return 255;
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    let w = 640, h = 480;
+    if (source === "local") {
+      const video = videoRef.current;
+      if (video && video.videoWidth) { w = video.videoWidth; h = video.videoHeight; }
+    } else {
+      const img = streamImgRef.current;
+      if (img && img.complete && img.naturalWidth) { w = img.naturalWidth; h = img.naturalHeight; }
+    }
+    canvas.width = w;
+    canvas.height = h;
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return 255;
-    ctx.drawImage(video, 0, 0);
-    const data = ctx.getImageData(0, 0, video.videoWidth, video.videoHeight).data;
+    if (source === "local") {
+      const video = videoRef.current;
+      if (video) ctx.drawImage(video, 0, 0);
+      else return 255;
+    } else {
+      const img = streamImgRef.current;
+      if (img && img.complete) ctx.drawImage(img, 0, 0);
+      else return 255;
+    }
+    const data = ctx.getImageData(0, 0, w, h).data;
     let sum = 0;
     let count = 0;
     for (let i = 0; i < data.length; i += 32) {
@@ -699,28 +743,36 @@ export default function VisionPage() {
   }
 
   function sampleStuck(): boolean {
-    const video = videoRef.current;
-    if (!video || !video.videoWidth || !video.videoHeight) return false;
     const GRID_W = 8, GRID_H = 6;
     let canvas = brightnessCanvasRef.current;
     if (!canvas) {
       canvas = document.createElement('canvas');
       brightnessCanvasRef.current = canvas;
     }
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    let w = 640, h = 480;
+    const video = videoRef.current;
+    const img = streamImgRef.current;
+    if (source === "local" && video && video.videoWidth) {
+      w = video.videoWidth; h = video.videoHeight;
+    } else if (img && img.complete && img.naturalWidth) {
+      w = img.naturalWidth; h = img.naturalHeight;
+    }
+    canvas.width = w;
+    canvas.height = h;
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return false;
-    ctx.drawImage(video, 0, 0);
-    const data = ctx.getImageData(0, 0, video.videoWidth, video.videoHeight).data;
+    if (source === "local" && video) ctx.drawImage(video, 0, 0);
+    else if (img && img.complete) ctx.drawImage(img, 0, 0);
+    else return false;
+    const data = ctx.getImageData(0, 0, w, h).data;
     const sig: number[] = [];
-    const stepX = Math.floor(video.videoWidth / GRID_W);
-    const stepY = Math.floor(video.videoHeight / GRID_H);
+    const stepX = Math.floor(w / GRID_W);
+    const stepY = Math.floor(h / GRID_H);
     for (let gy = 0; gy < GRID_H; gy++) {
       for (let gx = 0; gx < GRID_W; gx++) {
         const px = gx * stepX + stepX / 2;
         const py = gy * stepY + stepY / 2;
-        const idx = (py * video.videoWidth + px) * 4;
+        const idx = (py * w + px) * 4;
         sig.push((data[idx] + data[idx + 1] + data[idx + 2]) / 3);
       }
     }
@@ -1142,14 +1194,14 @@ export default function VisionPage() {
     <main className="flex flex-col items-center bg-black min-h-dvh px-3 pt-3 pb-3 gap-2 overflow-y-auto">
       {/* CAMERA + OVERLAY + HUD */}
       <div className="relative w-full max-w-sm aspect-square rounded-xl overflow-hidden bg-zinc-900 ring-1 ring-white/10 flex-shrink-0">
-        {source === "local" ? (
-          <>
-            <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 h-full w-full object-contain" />
-            <canvas ref={overlayRef} className="absolute inset-0 w-full h-full pointer-events-none z-20" />
-          </>
-        ) : streamUrl ? (
-          <img src={streamUrl} alt="stream" className="absolute inset-0 h-full w-full object-contain" />
+        <video ref={videoRef} autoPlay playsInline muted
+          className={`absolute inset-0 h-full w-full object-contain ${source !== "local" ? "hidden" : ""}`} />
+        {source === "stream" && proxiedStreamUrl ? (
+          <img ref={streamImgRef} src={proxiedStreamUrl} crossOrigin="anonymous" alt="stream"
+            className="absolute inset-0 h-full w-full object-contain" />
         ) : null}
+        <canvas ref={overlayRef} className="absolute inset-0 w-full h-full pointer-events-none z-20" />
+        <canvas ref={streamDetCanvasRef} className="hidden" />
 
         {!active && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-zinc-500">
