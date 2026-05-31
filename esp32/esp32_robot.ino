@@ -43,6 +43,119 @@ WebServer httpServer(80);
 // STBY
 #define STBY 33
 
+// BUZZER
+#define BUZZER_PIN 4
+
+// =======================
+// STATE (declared early for buzzer)
+// =======================
+
+unsigned long startTime = 0;
+unsigned long lastTelemetry = 0;
+unsigned long lastCommandTime = 0;
+unsigned long lastWifiAttempt = 0;
+unsigned long lastLedToggle = 0;
+
+int targetLeftSpeed = 0;
+int targetRightSpeed = 0;
+
+int currentLeftSpeed = 0;
+int currentRightSpeed = 0;
+
+bool ledState = false;
+bool emergencyStop = false;
+bool wsConnected = false;
+bool reversing = false;
+
+// =======================
+// BUZZER
+// =======================
+
+unsigned long buzzerOnUntil = 0;
+int buzzerBeepCount = 0;
+int buzzerBeepDone = 0;
+unsigned long buzzerLastToggle = 0;
+bool buzzerState = false;
+
+void buzzerOn() {
+  digitalWrite(BUZZER_PIN, HIGH);
+  buzzerState = true;
+}
+
+void buzzerOff() {
+  digitalWrite(BUZZER_PIN, LOW);
+  buzzerState = false;
+}
+
+void buzzerBeep(int ms) {
+  buzzerOn();
+  buzzerOnUntil = millis() + ms;
+}
+
+void buzzerBeepPattern(int count, int onMs, int offMs) {
+  buzzerBeepCount = count;
+  buzzerBeepDone = 0;
+  buzzerOnUntil = onMs;
+  buzzerLastToggle = millis();
+  buzzerState = false;
+  // first beep starts immediately
+  buzzerOn();
+  buzzerState = true;
+  buzzerLastToggle = millis();
+  buzzerOnUntil = millis() + onMs;
+}
+
+void updateBuzzer() {
+  unsigned long now = millis();
+
+  // emergency rapid beep handled in updateLED
+
+  if (emergencyStop) return;
+
+  // reverse beep (truck reversing sound)
+  if (reversing && buzzerBeepCount == 0) {
+    if (buzzerState && now >= buzzerOnUntil) {
+      buzzerOff();
+      buzzerOnUntil = now + 500;
+    } else if (!buzzerState && now >= buzzerOnUntil) {
+      buzzerOn();
+      buzzerOnUntil = now + 100;
+    }
+    return;
+  }
+
+  if (buzzerBeepCount > 0) {
+    if (buzzerState && now >= buzzerOnUntil) {
+      // turn off
+      buzzerOff();
+      buzzerState = false;
+      buzzerBeepDone++;
+      buzzerLastToggle = now;
+      if (buzzerBeepDone >= buzzerBeepCount) {
+        buzzerBeepCount = 0;
+      }
+    } else if (!buzzerState && buzzerBeepCount > 0 && now - buzzerLastToggle > 100) {
+      // next beep
+      buzzerOn();
+      buzzerState = true;
+      buzzerOnUntil = now + 100; // on for 100ms
+      buzzerLastToggle = now;
+    }
+    return;
+  }
+
+  // turn off after timeout for simple beep
+  if (buzzerState && now >= buzzerOnUntil) {
+    buzzerOff();
+  }
+
+  // auto-clear reversing when stopped
+  if (reversing && targetLeftSpeed >= 0 && targetRightSpeed >= 0) {
+    reversing = false;
+    buzzerOff();
+  }
+}
+
 // =======================
 // CONFIG
 // =======================
@@ -51,6 +164,8 @@ int maxSpeed = 255;
 int rampRate = 8;
 int motorTimeout = 5000;
 bool powerSave = false;
+bool speedLimitEnabled = false;
+int speedLimit = 150;
 
 // =======================
 // MQTT
@@ -71,32 +186,50 @@ String deviceName = "";
 
 void mqttCallback(char* topic, byte* payload, unsigned int length);
 
-// =======================
-// STATE
-// =======================
-
-unsigned long startTime = 0;
-unsigned long lastTelemetry = 0;
-unsigned long lastCommandTime = 0;
-unsigned long lastWifiAttempt = 0;
-unsigned long lastLedToggle = 0;
-
-int targetLeftSpeed = 0;
-int targetRightSpeed = 0;
-
-int currentLeftSpeed = 0;
-int currentRightSpeed = 0;
-
-bool ledState = false;
-bool emergencyStop = false;
-bool wsConnected = false;
-
 #define LED_PIN 2
 #define TELEMETRY_INTERVAL 1000
 
 // =======================
 // POWER SAVE
 // =======================
+
+void savePowerSaveConfig() {
+  Preferences prefs;
+  prefs.begin("pwr", false);
+  prefs.putBool("save", powerSave);
+  prefs.end();
+  Serial.print("PowerSave saved: ");
+  Serial.println(powerSave);
+}
+
+void loadPowerSaveConfig() {
+  Preferences prefs;
+  prefs.begin("pwr", true);
+  powerSave = prefs.getBool("save", false);
+  prefs.end();
+  Serial.print("PowerSave loaded: ");
+  Serial.println(powerSave);
+}
+
+// =======================
+// SPEED LIMIT
+// =======================
+
+void saveSpeedLimitConfig() {
+  Preferences prefs;
+  prefs.begin("sl", false);
+  prefs.putBool("enabled", speedLimitEnabled);
+  prefs.putInt("limit", speedLimit);
+  prefs.end();
+}
+
+void loadSpeedLimitConfig() {
+  Preferences prefs;
+  prefs.begin("sl", true);
+  speedLimitEnabled = prefs.getBool("enabled", false);
+  speedLimit = prefs.getInt("limit", 150);
+  prefs.end();
+}
 
 void applyPowerSave() {
 
@@ -116,6 +249,17 @@ if (powerSave) {
 
     Serial.println("Power Save OFF");
 }
+}
+
+void applyPowerSaveSafe() {
+  savePowerSaveConfig();
+  for (int i = 0; i < 3; i++) {
+    digitalWrite(BUZZER_PIN, HIGH);
+    delay(100);
+    digitalWrite(BUZZER_PIN, LOW);
+    delay(100);
+  }
+  ESP.restart();
 }
 
 // =======================
@@ -202,7 +346,6 @@ void saveMqttConfig(String broker, int port, String user, String pass, String pr
 
 String getDeviceId() {
   if (deviceName.length() > 0) return deviceName;
-  return WiFi.macAddress();
   deviceName = WiFi.macAddress();
   deviceName.replace(":", "");
   return deviceName;
@@ -224,6 +367,7 @@ void connectMQTT() {
   if (!mqttEnabled || mqttBroker.length() == 0) return;
   if (mqttClient.connected()) return;
 
+  mqttPort = 8883; // ESP selalu pake TLS/TCP, bukan WSS
   mqttWifiClient.setInsecure();
   mqttClient.setServer(mqttBroker.c_str(), mqttPort);
   mqttClient.setCallback(mqttCallback);
@@ -309,6 +453,8 @@ if (WiFi.status() == WL_CONNECTED) {
     Serial.println();
     Serial.println("WiFi Connected");
 
+    buzzerBeep(100);
+
     Serial.print("IP: ");
     Serial.println(WiFi.localIP());
 
@@ -372,6 +518,9 @@ pinMode(STBY, OUTPUT);
 
 digitalWrite(STBY, HIGH);
 
+pinMode(BUZZER_PIN, OUTPUT);
+buzzerOff();
+
 // PWM (ESP32 CORE 3.x)
 
 ledcAttach(PWMA, 1000, 8);
@@ -383,6 +532,14 @@ stopMotors();
 
 connectWiFi();
 
+// POWERSAVE
+
+loadPowerSaveConfig();
+
+// SPEED LIMIT
+
+loadSpeedLimitConfig();
+
 // MQTT
 
 loadMqttConfig();
@@ -391,6 +548,8 @@ loadMqttConfig();
 
 webSocket.begin();
 
+webSocket.enableHeartbeat(3000, 3000, 3);
+
 webSocket.onEvent(webSocketEvent);
 
 Serial.println("WebSocket Started");
@@ -398,6 +557,15 @@ Serial.println("WebSocket Started");
 // HTTP
 
 httpServer.on("/", handleRoot);
+
+httpServer.on("/cmd", HTTP_POST, []() {
+    if (httpServer.hasArg("plain")) {
+        handleMessage(httpServer.arg("plain"));
+        httpServer.send(200, "text/plain", "ok");
+    } else {
+        httpServer.send(400, "text/plain", "no body");
+    }
+});
 
 httpServer.begin();
 
@@ -453,6 +621,8 @@ if (mqttEnabled) {
 }
 
 updateLED();
+
+updateBuzzer();
 
 // =======================
 // WIFI RECONNECT
@@ -526,6 +696,8 @@ if (emergencyStop) {
         ledState = !ledState;
 
         digitalWrite(LED_PIN, ledState);
+
+        digitalWrite(BUZZER_PIN, ledState);
     }
 
     return;
@@ -581,6 +753,8 @@ case WStype_CONNECTED:
 
     Serial.printf("Client %u Connected\n", num);
 
+    buzzerBeepPattern(2, 100, 100);
+
     break;
 
 case WStype_DISCONNECTED:
@@ -590,6 +764,8 @@ case WStype_DISCONNECTED:
     Serial.printf("Client %u Disconnected\n", num);
 
     stopMotors();
+
+    buzzerBeep(500);
 
     break;
 
@@ -667,6 +843,16 @@ if (doc["ping"] == true) {
 }
 
 // =======================
+// BUZZER TEST
+// =======================
+
+if (doc["buzzer"] == true) {
+    Serial.println("Buzzer test");
+    buzzerBeepPattern(3, 100, 100);
+    return;
+}
+
+// =======================
 // CONFIG
 // =======================
 
@@ -697,7 +883,21 @@ if (doc["powerSave"].is<bool>()) {
 
     powerSave = doc["powerSave"];
 
-    applyPowerSave();
+    applyPowerSaveSafe();
+
+    configChanged = true;
+}
+
+if (doc["speedLimitEnabled"].is<bool>()) {
+
+    speedLimitEnabled = doc["speedLimitEnabled"];
+
+    configChanged = true;
+}
+
+if (doc["speedLimit"].is<int>()) {
+
+    speedLimit = constrain(doc["speedLimit"], 0, 255);
 
     configChanged = true;
 }
@@ -711,6 +911,8 @@ if (configChanged) {
     conf["rampRate"] = rampRate;
     conf["motorTimeout"] = motorTimeout;
     conf["powerSave"] = powerSave;
+    conf["speedLimitEnabled"] = speedLimitEnabled;
+    conf["speedLimit"] = speedLimit;
 
     String reply;
 
@@ -727,7 +929,7 @@ if (configChanged) {
 
 if (doc["mqttBroker"].is<String>()) {
     String broker = doc["mqttBroker"];
-    int port = doc["mqttPort"] | 8883;
+    int port = 8883; // ESP selalu pakai TLS/TCP (MQTTS), bukan WSS
     String user = doc["mqttUser"] | "";
     String pass = doc["mqttPass"] | "";
     String prefix = doc["mqttPrefix"] | "kei/robot";
@@ -804,13 +1006,18 @@ if (doc["leftMotor"].is<int>() ||
     int leftMotor = doc["leftMotor"] | 0;
     int rightMotor = doc["rightMotor"] | 0;
 
+    int cap = speedLimitEnabled ? speedLimit : maxSpeed;
+
     targetLeftSpeed =
-        constrain(leftMotor, -maxSpeed, maxSpeed);
+        constrain(leftMotor, -cap, cap);
 
     targetRightSpeed =
-        constrain(rightMotor, -maxSpeed, maxSpeed);
+        constrain(rightMotor, -cap, cap);
 
     lastCommandTime = millis();
+
+    reversing = (leftMotor < 0 && rightMotor < 0 &&
+                 abs(leftMotor) > 30 && abs(rightMotor) > 30);
 }
 }
 
@@ -966,6 +1173,9 @@ String buildTelemetryJson() {
   doc["right"] = currentRightSpeed;
   doc["powerSave"] = powerSave;
   doc["emergency"] = emergencyStop;
+  doc["rampRate"] = rampRate;
+  doc["speedLimitEnabled"] = speedLimitEnabled;
+  doc["speedLimit"] = speedLimit;
   doc["ip"] = WiFi.localIP().toString();
   doc["ssid"] = wifiSsid;
   doc["mqtt"] = mqttEnabled && mqttClient.connected();

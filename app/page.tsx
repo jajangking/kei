@@ -5,7 +5,7 @@ import { ObjectDetector, FaceDetector, FilesetResolver, type Detection } from "@
 import Simulasi from "./simulasi";
 import AIGroq from "./aigroq";
 import { loadDB, saveDB, registerFace, recognize, type FaceRecord } from "./facerecog";
-import mqtt from "mqtt";
+import mqtt from "mqtt/dist/mqtt.esm";
 
 interface Telemetry {
   speed?: number;
@@ -22,6 +22,9 @@ interface Telemetry {
   pong?: boolean;
   config?: boolean;
   wifiConfig?: boolean;
+  rampRate?: number;
+  speedLimitEnabled?: boolean;
+  speedLimit?: number;
 }
 
 export default function VisionPage() {
@@ -40,6 +43,8 @@ export default function VisionPage() {
   const proxiedStreamUrl = streamUrl ? `/api/proxy?url=${encodeURIComponent(streamUrl)}` : "";
 
   const [espIp, setEspIp] = useState(() => typeof window !== "undefined" ? localStorage.getItem("espIp") || "" : "");
+  const espIpRef = useRef(espIp);
+  useEffect(() => { espIpRef.current = espIp; }, [espIp]);
   const [wsConnected, setWsConnected] = useState(false);
   const [mqttConnected, setMqttConnected] = useState(false);
   const [showEspInput, setShowEspInput] = useState(false);
@@ -47,9 +52,9 @@ export default function VisionPage() {
   const [wifiPass, setWifiPass] = useState("");
   const [showWifiConfig, setShowWifiConfig] = useState(false);
   const [mqttBroker, setMqttBroker] = useState(() => typeof window !== "undefined" ? localStorage.getItem("mqttBroker") || "" : "");
-  const [mqttPort, setMqttPort] = useState(() => typeof window !== "undefined" ? Number(localStorage.getItem("mqttPort")) || 8883 : 8883);
-  const [mqttUser, setMqttUser] = useState("");
-  const [mqttPass, setMqttPass] = useState("");
+  const [mqttPort, setMqttPort] = useState(() => typeof window !== "undefined" ? Number(localStorage.getItem("mqttPort")) || 8884 : 8884);
+  const [mqttUser, setMqttUser] = useState(() => typeof window !== "undefined" ? localStorage.getItem("mqttUser") || "" : "");
+  const [mqttPass, setMqttPass] = useState(() => typeof window !== "undefined" ? localStorage.getItem("mqttPass") || "" : "");
   const [showMqttInput, setShowMqttInput] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [scanStatus, setScanStatus] = useState("");
@@ -148,6 +153,7 @@ export default function VisionPage() {
     const ws = wsRef.current;
     if (ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ leftMotor: l, rightMotor: r }));
+      return;
     }
     const mqtt = mqttClientRef.current;
     if (mqtt?.connected) {
@@ -155,6 +161,11 @@ export default function VisionPage() {
       if (deviceId) {
         mqtt.publish(`kei/robot/${deviceId}/cmd`, JSON.stringify({ leftMotor: l, rightMotor: r }));
       }
+      return;
+    }
+    const ip = espIpRef.current;
+    if (ip) {
+      fetch(`http://${ip}/cmd`, { method: 'POST', body: JSON.stringify({ leftMotor: l, rightMotor: r }) }).catch(() => {});
     }
   }, []);
 
@@ -265,52 +276,76 @@ export default function VisionPage() {
 
   // ESP
   const pingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const espGenRef = useRef(0);
   const connectESP = useCallback(() => {
     if (!espIp) return;
+    if (reconnectTimerRef.current) { clearTimeout(reconnectTimerRef.current); reconnectTimerRef.current = null; }
+    if (pingIntervalRef.current) { clearInterval(pingIntervalRef.current); pingIntervalRef.current = null; }
     wsRef.current?.close();
-    if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
+    wsRef.current = null;
+    const gen = ++espGenRef.current;
     const ws = new WebSocket(`ws://${espIp}:81`);
     ws.onopen = () => {
+      if (espGenRef.current !== gen) { ws.close(); return; }
       setWsConnected(true);
       pingIntervalRef.current = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ ping: true }));
       }, 10000);
     };
     ws.onmessage = (e) => {
-      try { setTelemetry(JSON.parse(e.data)); } catch {}
+      if (espGenRef.current !== gen) return;
+      try { const d = JSON.parse(e.data); setTelemetry(p => ({ ...p, ...d })); } catch {}
     };
     ws.onclose = () => {
+      if (espGenRef.current !== gen) return;
       setWsConnected(false); setTelemetry({}); wsRef.current = null;
       if (pingIntervalRef.current) { clearInterval(pingIntervalRef.current); pingIntervalRef.current = null; }
+      reconnectTimerRef.current = setTimeout(() => connectESP(), 3000);
     };
     ws.onerror = () => ws.close();
     wsRef.current = ws;
   }, [espIp]);
 
+  const disconnectESP = useCallback(() => {
+    ++espGenRef.current;
+    if (reconnectTimerRef.current) { clearTimeout(reconnectTimerRef.current); reconnectTimerRef.current = null; }
+    if (pingIntervalRef.current) { clearInterval(pingIntervalRef.current); pingIntervalRef.current = null; }
+    wsRef.current?.close();
+    wsRef.current = null;
+    setWsConnected(false);
+    setTelemetry({});
+  }, []);
+
   // MQTT
   const mqttClientRef = useRef<any>(null);
   const mqttTeleTopicRef = useRef("");
   const mqttDeviceIdRef = useRef("");
+  const mqttGenRef = useRef(0);
   const [mqttStatus, setMqttStatus] = useState("");
 
   const connectMQTT = useCallback(() => {
     if (!mqttBroker) return;
     try {
-      mqttClientRef.current?.end(true);
+      if (mqttClientRef.current) { mqttClientRef.current.end(true); mqttClientRef.current = null; }
       setMqttStatus("menghubungkan...");
+      const gen = ++mqttGenRef.current;
       const clientId = "kei-web-" + Math.random().toString(36).slice(2, 8);
       const opts: any = {
         clientId,
         clean: true,
         reconnectPeriod: 5000,
-        connectTimeout: 10000,
+        connectTimeout: 15000,
+        protocolVersion: 4,
       };
       if (mqttUser) { opts.username = mqttUser; opts.password = mqttPass; }
-      // Browser always uses port 443 (WSS), ignore user's mqttPort for browser
-      const url = `wss://${mqttBroker}:443/mqtt`;
+      localStorage.setItem("mqttUser", mqttUser);
+      localStorage.setItem("mqttPass", mqttPass);
+      const url = `wss://${mqttBroker}:8884/mqtt`;
       console.log("[MQTT] connecting to", url);
       const client = mqtt.connect(url, opts);
       client.on("connect", () => {
+        if (mqttGenRef.current !== gen) { client.end(true); return; }
         console.log("[MQTT] connected");
         setMqttConnected(true);
         setMqttStatus("terhubung");
@@ -319,25 +354,27 @@ export default function VisionPage() {
         client.subscribe(teleTopic);
       });
       client.on("message", (topic: string, payload: Buffer) => {
+        if (mqttGenRef.current !== gen) return;
         try {
           const data = JSON.parse(payload.toString());
           const parts = topic.split("/");
           if (parts.length >= 3) {
-            const deviceId = parts[2];
-            if (deviceId) {
-              setEspIp(deviceId);
-              mqttDeviceIdRef.current = deviceId;
-            }
+            mqttDeviceIdRef.current = parts[2];
           }
-          setTelemetry(data);
+          if (data.ip && data.ip !== espIpRef.current) {
+            setEspIp(data.ip);
+          }
+          setTelemetry(p => ({ ...p, ...data }));
         } catch {}
       });
       client.on("close", () => {
+        if (mqttGenRef.current !== gen) return;
         console.log("[MQTT] disconnected");
         setMqttConnected(false);
         setMqttStatus("putus");
       });
       client.on("error", (err: any) => {
+        if (mqttGenRef.current !== gen) return;
         console.error("[MQTT] error:", err?.message || err);
         setMqttStatus("gagal: " + (err?.message || "unknown"));
         client.end(true);
@@ -353,15 +390,18 @@ export default function VisionPage() {
   }, [mqttBroker, mqttUser, mqttPass]);
 
   const disconnectMQTT = useCallback(() => {
+    ++mqttGenRef.current;
     mqttClientRef.current?.end(true);
     mqttClientRef.current = null;
     setMqttConnected(false);
+    setMqttStatus("putus");
   }, []);
 
   const sendESP = useCallback((data: object) => {
     const ws = wsRef.current;
     if (ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(data));
+      return;
     }
     const mqtt = mqttClientRef.current;
     if (mqtt?.connected) {
@@ -370,6 +410,11 @@ export default function VisionPage() {
         const cmdTopic = `kei/robot/${deviceId}/cmd`;
         mqtt.publish(cmdTopic, JSON.stringify(data));
       }
+      return;
+    }
+    const ip = espIpRef.current;
+    if (ip) {
+      fetch(`http://${ip}/cmd`, { method: 'POST', body: JSON.stringify(data) }).catch(() => {});
     }
   }, []);
 
@@ -1188,6 +1233,7 @@ export default function VisionPage() {
   useEffect(() => () => {
     wsRef.current?.close();
     if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
+    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
   }, []);
 
   return (
@@ -1363,12 +1409,13 @@ export default function VisionPage() {
       {/* ESP / STREAM INPUT */}
       {showEspInput && (
         <div className="w-full max-w-sm flex flex-col gap-1.5">
+          {/* baris 1: IP + HUBUNG + CARI + PING */}
           <div className="flex gap-1.5">
             <input value={espIp} onChange={(e) => setEspIp(e.target.value)}
               placeholder="IP atau kei.local"
               className="flex-1 min-w-0 px-3 py-1.5 rounded-full bg-zinc-900 border border-zinc-700 text-white text-xs placeholder-zinc-500 focus:outline-none focus:border-zinc-500" />
-            <button onClick={connectESP}
-              className="px-3 py-1.5 rounded-full bg-white text-black text-xs font-semibold hover:bg-zinc-200 flex-shrink-0">
+            <button onClick={wsConnected ? disconnectESP : connectESP}
+              className="px-3 py-1.5 rounded-full bg-white text-black text-xs font-semibold flex-shrink-0">
               {wsConnected ? "PUTUS" : "HUBUNG"}
             </button>
             <button onClick={discoverESP}
@@ -1376,16 +1423,16 @@ export default function VisionPage() {
               disabled={scanning}>
               {scanning ? "..." : "CARI"}
             </button>
-            {scanStatus && !wsConnected && (
-              <span className="text-[7px] font-mono text-zinc-600 self-center">{scanStatus}</span>
-            )}
             <button onClick={sendPing}
               className="px-2.5 py-1.5 rounded-full bg-zinc-800 text-zinc-300 text-[9px] font-mono font-bold border border-zinc-700 flex-shrink-0 active:scale-90">
               PING
             </button>
           </div>
-          {/* MQTT toggle */}
-          <div className="flex gap-1.5 mt-1">
+          {scanStatus && !wsConnected && (
+            <span className="text-[7px] font-mono text-zinc-600">{scanStatus}</span>
+          )}
+          {/* baris 2: MQTT toggle + status */}
+          <div className="flex gap-1.5 items-center">
             <button onClick={() => setShowMqttInput(p => !p)}
               className={`px-2.5 py-1.5 rounded-full text-[9px] font-mono font-bold border flex-shrink-0 active:scale-90 ${
                 mqttConnected
@@ -1406,7 +1453,7 @@ export default function VisionPage() {
               </button>
             ) : null}
             {mqttStatus && (
-              <span className="text-[7px] font-mono self-center truncate max-w-24"
+              <span className="text-[7px] font-mono truncate max-w-28"
                 style={{ color: mqttConnected ? "#34d399" : mqttStatus.includes("gagal") ? "#ef4444" : "#a1a1aa" }}>
                 {mqttStatus}
               </span>
@@ -1414,15 +1461,15 @@ export default function VisionPage() {
           </div>
           {/* MQTT config */}
           {showMqttInput && (
-            <div className="flex flex-col gap-1.5 mt-1 p-2 rounded-xl bg-zinc-900/80 ring-1 ring-white/10">
+            <div className="flex flex-col gap-1.5 p-2 rounded-xl bg-zinc-900/80 ring-1 ring-white/10">
               <div className="flex gap-1.5">
                 <input value={mqttBroker} onChange={e => setMqttBroker(e.target.value)}
                   placeholder="broker.hivemq.cloud"
                   className="flex-1 min-w-0 px-2 py-1 rounded-full bg-zinc-800 border border-zinc-700 text-white text-[9px] font-mono placeholder-zinc-500 focus:outline-none focus:border-zinc-500" />
                 <input value={mqttPort} onChange={e => setMqttPort(Number(e.target.value))}
-                  placeholder="8883"
-                  title="Port untuk ESP32 (TLS: 8883). Browser otomatis pakai 443 (WSS)"
-                  className="w-16 px-2 py-1 rounded-full bg-zinc-800 border border-zinc-700 text-white text-[9px] font-mono placeholder-zinc-500 focus:outline-none focus:border-zinc-500 text-center" />
+                  placeholder="8884"
+                  title="Browser: WSS :8884 | ESP: TLS :8883"
+                  className="w-14 px-1.5 py-1 rounded-full bg-zinc-800 border border-zinc-700 text-white text-[9px] font-mono placeholder-zinc-500 focus:outline-none focus:border-zinc-500 text-center" />
               </div>
               <div className="flex gap-1.5">
                 <input value={mqttUser} onChange={e => setMqttUser(e.target.value)}
@@ -1438,80 +1485,108 @@ export default function VisionPage() {
                   className="flex-1 px-2 py-1 rounded-full bg-emerald-600 text-white text-[9px] font-mono font-bold active:scale-90">
                   HUBUNGKAN
                 </button>
-                <button onClick={() => {
-                  sendESP({ mqttBroker, mqttPort: Number(mqttPort), mqttUser, mqttPass, mqttEnabled: true });
-                }}
+                <button onClick={() => sendESP({ mqttBroker, mqttPort: 8883, mqttUser, mqttPass, mqttEnabled: true })}
                   className="px-2 py-1 rounded-full bg-zinc-800 text-zinc-300 text-[9px] font-mono border border-zinc-700 active:scale-90">
                   KIRIM KE ESP
                 </button>
               </div>
-              <span className="text-[6px] font-mono text-zinc-600 text-center">Browser: WSS :443 | ESP: TLS :8883</span>
             </div>
           )}
+          {/* baris 3: kontrol + telemetry */}
           {wsConnected && (
-            <div className="flex flex-wrap gap-1">
-              <button onClick={sendEmergency}
-                className="px-2 py-1 rounded-full bg-red-600 text-white text-[9px] font-mono font-bold active:scale-90">
-                EMERGENCY
-              </button>
-              <button onClick={() => sendConfig({ powerSave: !(telemetry.powerSave ?? true) })}
-                className="px-2 py-1 rounded-full text-[9px] font-mono font-bold border active:scale-90"
-                style={{
-                  backgroundColor: (telemetry.powerSave ?? true) ? '#3b82f6' : 'transparent',
-                  borderColor: (telemetry.powerSave ?? true) ? '#3b82f6' : 'rgba(255,255,255,0.15)',
-                  color: (telemetry.powerSave ?? true) ? '#000' : 'rgba(255,255,255,0.4)',
-                }}>
-                {(telemetry.powerSave ?? true) ? 'BATERAI' : 'KENCANG'}
-              </button>
-              <button onClick={() => sendConfig({ rampRate: 3 })}
-                className="px-2 py-1 rounded-full bg-zinc-800 text-zinc-300 text-[9px] font-mono border border-zinc-700 active:scale-90">
-                RAMP 3
-              </button>
-              <button onClick={() => sendConfig({ rampRate: 15 })}
-                className="px-2 py-1 rounded-full bg-zinc-800 text-zinc-300 text-[9px] font-mono border border-zinc-700 active:scale-90">
-                RAMP 15
-              </button>
-              <button onClick={() => sendConfig({ rampRate: 8 })}
-                className="px-2 py-1 rounded-full bg-zinc-800 text-zinc-300 text-[9px] font-mono border border-zinc-700 active:scale-90">
-                RAMP 8
-              </button>
-            </div>
-          )}
-          {wsConnected && telemetry && (telemetry.rssi !== undefined) && (
-            <div className="grid grid-cols-3 gap-x-3 gap-y-0.5 px-3 py-1.5 rounded-xl bg-zinc-900/80 ring-1 ring-white/10 text-[8px] font-mono">
-              <span className="text-zinc-500">speed <span className="text-blue-400">{telemetry.speed ?? '-'}</span></span>
-              <span className="text-zinc-500">mode <span className={telemetry.mode === 'emergency' ? 'text-red-400' : 'text-green-400'}>{telemetry.mode ?? '-'}</span></span>
-              <span className="text-zinc-500">rssi <span className="text-yellow-400">{telemetry.rssi ?? '-'} dBm</span></span>
-              <span className="text-zinc-500">heap <span className="text-fuchsia-400">{telemetry.heap ? `${(telemetry.heap / 1024).toFixed(0)}KB` : '-'}</span></span>
-              <span className="text-zinc-500">uptime <span className="text-white">{telemetry.uptime ? `${Math.floor(telemetry.uptime / 60)}m${telemetry.uptime % 60}s` : '-'}</span></span>
-              <span className="text-zinc-500">{telemetry.ip ?? '-'}</span>
-              {telemetry.ssid && (
-                <span className="text-zinc-500 col-span-2">ssid <span className="text-cyan-400">{telemetry.ssid}</span></span>
-              )}
-              {telemetry.ssid && (
-                <button onClick={() => setShowWifiConfig((p) => !p)}
-                  className="text-right text-[7px] font-mono text-zinc-600 hover:text-zinc-300 active:scale-90">
-                  {showWifiConfig ? "tutup" : "ganti wifi"}
+            <>
+              <div className="flex flex-wrap gap-1.5 items-center">
+                <button onClick={() => sendESP({ emergency: !(telemetry.emergency ?? false) })}
+                  className="px-2 py-1 rounded-full text-[9px] font-mono font-bold active:scale-90 flex-shrink-0"
+                  style={{
+                    backgroundColor: (telemetry.emergency) ? '#ef4444' : 'transparent',
+                    borderColor: (telemetry.emergency) ? '#ef4444' : 'rgba(255,255,255,0.15)',
+                    color: (telemetry.emergency) ? '#fff' : 'rgba(255,255,255,0.4)',
+                  }}>
+                  {(telemetry.emergency) ? 'DARURAT' : 'EMERGENCY'}
                 </button>
-              )}
-            </div>
-          )}
-          {showWifiConfig && wsConnected && (
-            <div className="flex flex-col gap-1">
-              <div className="flex gap-1">
-                <input value={wifiSsid} onChange={(e) => setWifiSsid(e.target.value)}
-                  placeholder="SSID baru"
-                  className="flex-1 min-w-0 px-3 py-1.5 rounded-full bg-zinc-900 border border-zinc-700 text-white text-xs placeholder-zinc-500 focus:outline-none focus:border-zinc-500" />
-                <input value={wifiPass} onChange={(e) => setWifiPass(e.target.value)}
-                  placeholder="Password"
-                  type="password"
-                  className="flex-1 min-w-0 px-3 py-1.5 rounded-full bg-zinc-900 border border-zinc-700 text-white text-xs placeholder-zinc-500 focus:outline-none focus:border-zinc-500" />
-                <button onClick={() => { sendESP({ ssid: wifiSsid, password: wifiPass }); setWifiSsid(""); setWifiPass(""); setShowWifiConfig(false); }}
-                  className="px-3 py-1.5 rounded-full bg-amber-600 text-white text-[9px] font-mono font-bold active:scale-90 flex-shrink-0">
-                  GANTI
+                <button onClick={() => {
+                  const next = !(telemetry.powerSave ?? false);
+                  const label = next ? 'BATERAI (hemat)' : 'KENCANG (cepat)';
+                  if (window.confirm(`Ubah ke mode ${label}?\n\nESP akan restart.`)) {
+                    sendConfig({ powerSave: next });
+                  }
+                }}
+                  className="px-2 py-1 rounded-full text-[9px] font-mono font-bold border active:scale-90 flex-shrink-0"
+                  style={{
+                    backgroundColor: (telemetry.powerSave ?? false) ? '#3b82f6' : 'transparent',
+                    borderColor: (telemetry.powerSave ?? false) ? '#3b82f6' : 'rgba(255,255,255,0.15)',
+                    color: (telemetry.powerSave ?? false) ? '#000' : 'rgba(255,255,255,0.4)',
+                  }}>
+                  {(telemetry.powerSave ?? false) ? 'BATERAI' : 'KENCANG'}
                 </button>
+                {[3, 8, 15].map(r => (
+                  <button key={r} onClick={() => sendConfig({ rampRate: r })}
+                    className="px-2 py-1 rounded-full text-[9px] font-mono font-bold border active:scale-90 flex-shrink-0"
+                    style={{
+                      backgroundColor: (telemetry.rampRate ?? 8) === r ? '#3b82f6' : 'transparent',
+                      borderColor: (telemetry.rampRate ?? 8) === r ? '#3b82f6' : 'rgba(255,255,255,0.15)',
+                      color: (telemetry.rampRate ?? 8) === r ? '#000' : 'rgba(255,255,255,0.4)',
+                    }}>
+                    RAMP {r}
+                  </button>
+                ))}
+                <button onClick={() => sendConfig({ speedLimitEnabled: !(telemetry.speedLimitEnabled ?? false) })}
+                  className="px-2 py-1 rounded-full text-[9px] font-mono font-bold border active:scale-90 flex-shrink-0"
+                  style={{
+                    minWidth: '74px',
+                    backgroundColor: (telemetry.speedLimitEnabled) ? '#f59e0b' : 'transparent',
+                    borderColor: (telemetry.speedLimitEnabled) ? '#f59e0b' : 'rgba(255,255,255,0.15)',
+                    color: (telemetry.speedLimitEnabled) ? '#000' : 'rgba(255,255,255,0.4)',
+                  }}>
+                  LIMIT {(telemetry.speedLimitEnabled) ? telemetry.speedLimit ?? 150 : 'OFF'}
+                </button>
+                <button onClick={() => sendESP({ buzzer: true })}
+                  className="px-2 py-1 rounded-full text-[9px] font-mono font-bold border active:scale-90 flex-shrink-0"
+                  style={{ borderColor: 'rgba(255,255,255,0.15)', color: 'rgba(255,255,255,0.4)' }}>
+                  BUZZ
+                </button>
+                <input type="range" min="50" max="255" step="5"
+                  value={telemetry.speedLimit ?? 150}
+                  onChange={(e) => sendConfig({ speedLimit: parseInt(e.target.value) })}
+                  className="w-20 h-1 accent-amber-500"
+                  style={{ opacity: telemetry.speedLimitEnabled ? 1 : 0.25 }} />
               </div>
-            </div>
+              {/* telemetry grid */}
+              <div className="grid grid-cols-3 gap-x-3 gap-y-0.5 px-3 py-1.5 rounded-xl bg-zinc-900/80 ring-1 ring-white/10 text-[8px] font-mono">
+                <span className="text-zinc-500">speed <span className="text-blue-400">{telemetry.speed ?? '-'}</span></span>
+                <span className="text-zinc-500">mode <span className={telemetry.mode === 'emergency' ? 'text-red-400' : 'text-green-400'}>{telemetry.mode ?? '-'}</span></span>
+                <span className="text-zinc-500">rssi <span className="text-yellow-400">{telemetry.rssi ?? '-'} dBm</span></span>
+                <span className="text-zinc-500">heap <span className="text-fuchsia-400">{telemetry.heap ? `${(telemetry.heap / 1024).toFixed(0)}KB` : '-'}</span></span>
+                <span className="text-zinc-500">uptime <span className="text-white">{telemetry.uptime ? `${Math.floor(telemetry.uptime / 60)}m${telemetry.uptime % 60}s` : '-'}</span></span>
+                <span className="text-zinc-500">{telemetry.ip ?? '-'}</span>
+                {telemetry.ssid && (
+                  <span className="text-zinc-500 col-span-2">ssid <span className="text-cyan-400">{telemetry.ssid}</span></span>
+                )}
+                {telemetry.ssid && (
+                  <button onClick={() => setShowWifiConfig((p) => !p)}
+                    className="text-right text-[7px] font-mono text-zinc-600 hover:text-zinc-300 active:scale-90">
+                    {showWifiConfig ? "tutup" : "ganti wifi"}
+                  </button>
+                )}
+              </div>
+              {/* wifi config */}
+              {showWifiConfig && (
+                <div className="flex gap-1.5">
+                  <input value={wifiSsid} onChange={(e) => setWifiSsid(e.target.value)}
+                    placeholder="SSID baru"
+                    className="flex-1 min-w-0 px-3 py-1.5 rounded-full bg-zinc-900 border border-zinc-700 text-white text-xs placeholder-zinc-500 focus:outline-none focus:border-zinc-500" />
+                  <input value={wifiPass} onChange={(e) => setWifiPass(e.target.value)}
+                    placeholder="Password"
+                    type="password"
+                    className="flex-1 min-w-0 px-3 py-1.5 rounded-full bg-zinc-900 border border-zinc-700 text-white text-xs placeholder-zinc-500 focus:outline-none focus:border-zinc-500" />
+                  <button onClick={() => { sendESP({ ssid: wifiSsid, password: wifiPass }); setWifiSsid(""); setWifiPass(""); setShowWifiConfig(false); }}
+                    className="px-3 py-1.5 rounded-full bg-amber-600 text-white text-[9px] font-mono font-bold active:scale-90 flex-shrink-0">
+                    GANTI
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
