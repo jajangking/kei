@@ -7,10 +7,20 @@ import AIGroq from "./aigroq";
 import { loadDB, saveDB, registerFace, recognize, type FaceRecord } from "./facerecog";
 
 interface Telemetry {
-  battery?: number;
   speed?: number;
   mode?: string;
-  temp?: number;
+  rssi?: number;
+  heap?: number;
+  uptime?: number;
+  left?: number;
+  right?: number;
+  powerSave?: boolean;
+  emergency?: boolean;
+  ip?: string;
+  ssid?: string;
+  pong?: boolean;
+  config?: boolean;
+  wifiConfig?: boolean;
 }
 
 export default function VisionPage() {
@@ -25,9 +35,14 @@ export default function VisionPage() {
   const [streamUrl, setStreamUrl] = useState("");
   const [inputUrl, setInputUrl] = useState("");
 
-  const [espIp, setEspIp] = useState("");
+  const [espIp, setEspIp] = useState(() => typeof window !== "undefined" ? localStorage.getItem("espIp") || "" : "");
   const [wsConnected, setWsConnected] = useState(false);
   const [showEspInput, setShowEspInput] = useState(false);
+  const [wifiSsid, setWifiSsid] = useState("");
+  const [wifiPass, setWifiPass] = useState("");
+  const [showWifiConfig, setShowWifiConfig] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [scanStatus, setScanStatus] = useState("");
   const [leftMotor, setLeftMotor] = useState(0);
   const [rightMotor, setRightMotor] = useState(0);
   const [telemetry, setTelemetry] = useState<Telemetry>({});
@@ -62,12 +77,14 @@ export default function VisionPage() {
   const [trackInfo, setTrackInfo] = useState("");
   const trackInfoRef = useRef("");
   useEffect(() => { trackInfoRef.current = trackInfo; }, [trackInfo]);
+
+  useEffect(() => { if (espIp) localStorage.setItem("espIp", espIp); }, [espIp]);
   const trackTargetRef = useRef<{ label: string; lastSeen: number } | null>(null);
   const trackLabelRef = useRef<string | null>(null);
   const trackLostRef = useRef(0);
   const persistenceRef = useRef<Map<string, number[]>>(new Map());
-  const HYST_ACQUIRE = 0.35;
-  const HYST_RELEASE = 0.25;
+  const HYST_ACQUIRE = 0.30;
+  const HYST_RELEASE = 0.15;
   const PERSIST_FRAMES = 5;
   const PERSIST_MIN = 2;
   const searchPhaseRef = useRef(0);
@@ -88,6 +105,13 @@ export default function VisionPage() {
   const darkAvoidRef = useRef(false);
   const darkPhaseRef = useRef(0);
   const darkTimerRef = useRef(0);
+
+  const prevFrameRef = useRef<number[]>([]);
+  const stuckFramesRef = useRef(0);
+  const stuckCooldownRef = useRef(0);
+  const scanLevelRef = useRef(0);
+  const SPIRAL_MOVES = [0, 50, 80, 120, 180];
+  const SPIRAL_MAX = 4;
 
   const [debug, setDebug] = useState(false);
   const debugRef = useRef(false);
@@ -222,18 +246,96 @@ export default function VisionPage() {
   }, [leftMotor, rightMotor]);
 
   // ESP
+  const pingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const connectESP = useCallback(() => {
     if (!espIp) return;
     wsRef.current?.close();
+    if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
     const ws = new WebSocket(`ws://${espIp}:81`);
-    ws.onopen = () => setWsConnected(true);
+    ws.onopen = () => {
+      setWsConnected(true);
+      pingIntervalRef.current = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ ping: true }));
+      }, 10000);
+    };
     ws.onmessage = (e) => {
       try { setTelemetry(JSON.parse(e.data)); } catch {}
     };
-    ws.onclose = () => { setWsConnected(false); setTelemetry({}); wsRef.current = null; };
+    ws.onclose = () => {
+      setWsConnected(false); setTelemetry({}); wsRef.current = null;
+      if (pingIntervalRef.current) { clearInterval(pingIntervalRef.current); pingIntervalRef.current = null; }
+    };
     ws.onerror = () => ws.close();
     wsRef.current = ws;
   }, [espIp]);
+
+  const sendESP = useCallback((data: object) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify(data));
+    }
+  }, []);
+
+  const sendPing = useCallback(() => sendESP({ ping: true }), [sendESP]);
+  const sendEmergency = useCallback(() => sendESP({ emergency: true }), [sendESP]);
+  const sendConfig = useCallback((cfg: object) => sendESP(cfg), [sendESP]);
+
+  const discoverESP = useCallback(async () => {
+    if (scanning) return;
+    setScanning(true);
+    setScanStatus("mencari...");
+    const subnets = ["192.168.42", "192.168.43", "192.168.44", "192.168.137", "192.168.1", "192.168.0", "10.0.2", "10.223", "172.20.10"];
+    const ips: string[] = [];
+    for (const s of subnets) {
+      ips.push(`${s}.129`, `${s}.1`, `${s}.100`, `${s}.101`, `${s}.254`);
+    }
+    for (const s of subnets) {
+      for (let i = 1; i <= 254; i++) {
+        const ip = `${s}.${i}`;
+        if (!ips.includes(ip)) ips.push(ip);
+      }
+    }
+    let found = "";
+    for (const ip of ips) {
+      if (found) break;
+      setScanStatus(ip);
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 300);
+        const res = await fetch(`http://${ip}/`, { signal: ctrl.signal });
+        clearTimeout(t);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.name && data.ip) { found = ip; break; }
+        }
+      } catch {}
+    }
+    if (!found) {
+      for (const ip of ips) {
+        if (found) break;
+        setScanStatus(ip);
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const ws = new WebSocket(`ws://${ip}:81`);
+            const t = setTimeout(() => { try { ws.close(); } catch {} reject(); }, 200);
+            ws.onopen = () => {
+              clearTimeout(t);
+              ws.send(JSON.stringify({ ping: true }));
+              const t2 = setTimeout(() => { try { ws.close(); } catch {} reject(); }, 300);
+              ws.onmessage = (e) => {
+                try {
+                  if (JSON.parse(e.data).pong) { clearTimeout(t2); ws.close(); found = ip; resolve(); }
+                } catch {}
+              };
+            };
+            ws.onerror = () => { clearTimeout(t); reject(); };
+          });
+        } catch {}
+      }
+    }
+    setScanning(false);
+    setScanStatus(found ? `ditemukan: ${found}` : "tidak ditemukan. cek IP di serial monitor ArduinoDroid");
+    if (found) { setEspIp(found); setTimeout(() => connectESP(), 50); }
+  }, [scanning, connectESP]);
 
   // Camera
   useEffect(() => {
@@ -433,7 +535,7 @@ export default function VisionPage() {
       const w = s.w * scale;
       const h = s.h * scale;
       const len = Math.max(10, Math.min(24, Math.min(w, h) * 0.2));
-      const isLocked = tracking && s.key === trackLabelRef.current;
+      const isLocked = trackingRef.current && s.key === trackLabelRef.current;
       const isFace = s.key === 'face';
       const color = isLocked ? "#ef4444" : isFace ? "#d946ef" : "#3b82f6";
 
@@ -499,6 +601,40 @@ export default function VisionPage() {
       count++;
     }
     return sum / count;
+  }
+
+  function sampleStuck(): boolean {
+    const video = videoRef.current;
+    if (!video || !video.videoWidth || !video.videoHeight) return false;
+    const GRID_W = 8, GRID_H = 6;
+    let canvas = brightnessCanvasRef.current;
+    if (!canvas) {
+      canvas = document.createElement('canvas');
+      brightnessCanvasRef.current = canvas;
+    }
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return false;
+    ctx.drawImage(video, 0, 0);
+    const data = ctx.getImageData(0, 0, video.videoWidth, video.videoHeight).data;
+    const sig: number[] = [];
+    const stepX = Math.floor(video.videoWidth / GRID_W);
+    const stepY = Math.floor(video.videoHeight / GRID_H);
+    for (let gy = 0; gy < GRID_H; gy++) {
+      for (let gx = 0; gx < GRID_W; gx++) {
+        const px = gx * stepX + stepX / 2;
+        const py = gy * stepY + stepY / 2;
+        const idx = (py * video.videoWidth + px) * 4;
+        sig.push((data[idx] + data[idx + 1] + data[idx + 2]) / 3);
+      }
+    }
+    const prev = prevFrameRef.current;
+    prevFrameRef.current = sig;
+    if (prev.length !== sig.length) return false;
+    let diff = 0;
+    for (let i = 0; i < sig.length; i++) diff += Math.abs(sig[i] - prev[i]);
+    return diff < 15;
   }
 
   function filterDetections(raw: Detection[]): Detection[] {
@@ -601,6 +737,43 @@ export default function VisionPage() {
       return;
     }
 
+    // Stuck detection — only when motors are running
+    if (stuckCooldownRef.current > 0) stuckCooldownRef.current--;
+    const motorRunning = leftMotor !== 0 || rightMotor !== 0;
+    if (motorRunning && stuckCooldownRef.current === 0) {
+      if (sampleStuck()) {
+        stuckFramesRef.current++;
+        if (stuckFramesRef.current > 10) {
+          stuckFramesRef.current = 0;
+          stuckCooldownRef.current = 60;
+          scanStateRef.current = 'idle';
+          scanLevelRef.current = 0;
+          trackTargetRef.current = null;
+          setLeftMotor(-200); setRightMotor(200);
+          sendMotor(-200, 200);
+          setTrackInfo('stuck! puter...');
+          setTimeout(() => {
+            setLeftMotor(0); setRightMotor(0);
+            sendMotor(0, 0);
+          }, 800);
+          return;
+        }
+      } else {
+        stuckFramesRef.current = 0;
+      }
+    } else {
+      stuckFramesRef.current = 0;
+    }
+
+    // Visual obstacle avoidance
+    const obstacle = stableDetections.find(d => {
+      if (trackLabelRef.current && d.categories[0].categoryName === trackLabelRef.current) return false;
+      const box = d.boundingBox!;
+      const area = (box.width / vw) * (box.height / vh);
+      const cx = (box.originX + box.width / 2) / vw;
+      return area > 0.25 && cx > 0.2 && cx < 0.8;
+    });
+
     // Update telemetry map with persistent object positions
     {
       const h = headingRef.current;
@@ -668,10 +841,21 @@ export default function VisionPage() {
         scanStateRef.current = 'idle';
         trackTargetRef.current = { ...target, lastSeen: Date.now() };
         setTrackInfo(`${target.label}`);
-        trackObject(found);
+
+        // Obstacle avoidance — if something big is in the way, swerve
+        if (obstacle) {
+          const obox = obstacle.boundingBox!;
+          const ocx = (obox.originX + obox.width / 2) / vw;
+          const steer = ocx < 0.5 ? 120 : -120;
+          setLeftMotor(steer); setRightMotor(-steer);
+          sendMotor(steer, -steer);
+          setTrackInfo(`hindar ${obstacle.categories[0].categoryName}`);
+        } else {
+          trackObject(found);
+        }
       } else {
         trackLostRef.current++;
-        if (trackLostRef.current > 10) {
+        if (trackLostRef.current > 30) {
           trackTargetRef.current = null;
           setTrackInfo(`cari ${trackLabelRef.current}...`);
         }
@@ -697,7 +881,7 @@ export default function VisionPage() {
         return;
       }
 
-      const SCAN_FRAMES = 240;
+      const SCAN_FRAMES = 60;
       const SECTORS = 16;
       const scan = scanStateRef.current;
 
@@ -711,7 +895,7 @@ export default function VisionPage() {
 
       if (scan === 'scanning') {
         scanFrameRef.current++;
-        const speed = 150;
+        const speed = 80;
         setLeftMotor(-speed); setRightMotor(speed);
         sendMotor(-speed, speed);
 
@@ -808,20 +992,31 @@ export default function VisionPage() {
 
       if (scan === 'moving') {
         scanFrameRef.current++;
-        setLeftMotor(200); setRightMotor(200);
-        sendMotor(200, 200);
-        if (scanFrameRef.current >= 90) {
+        const moveFrames = SPIRAL_MOVES[scanLevelRef.current] || 180;
+        setLeftMotor(120); setRightMotor(120);
+        sendMotor(120, 120);
+        if (scanFrameRef.current >= moveFrames) {
           setLeftMotor(0); setRightMotor(0);
           sendMotor(0, 0);
-          scanStateRef.current = 'idle';
-          setTrackInfo('cari lagi...');
+          if (scanLevelRef.current >= SPIRAL_MAX) {
+            scanLevelRef.current = 0;
+            scanStateRef.current = 'idle';
+            setTrackInfo('cari lagi...');
+          } else {
+            scanLevelRef.current++;
+            scanStateRef.current = 'scanning';
+            scanFrameRef.current = 0;
+            scanMapRef.current = Array.from({length: SECTORS}, () => []);
+            scanTargetSeeRef.current = false;
+            setTrackInfo(`spiral ${scanLevelRef.current}/${SPIRAL_MAX}`);
+          }
         }
       }
     }
   }
 
   function trackObject(found: { cx: number; cy: number; area: number }) {
-    const stopZone = 0.18;
+    const stopZone = 0.22;
     if (found.area > stopZone) {
       setLeftMotor(0); setRightMotor(0);
       sendMotor(0, 0);
@@ -829,10 +1024,10 @@ export default function VisionPage() {
       return;
     }
     const errorX = found.cx - 0.5;
-    const kp = 350;
+    const kp = 200;
     const turn = errorX * kp;
     const speedT = found.area / stopZone;
-    const baseSpeed = Math.round((1 - speedT) * 255);
+    const baseSpeed = Math.round((1 - speedT) * 200);
     let l = baseSpeed - Math.round(turn);
     let r = baseSpeed + Math.round(turn);
     l = Math.max(-255, Math.min(255, l));
@@ -843,7 +1038,10 @@ export default function VisionPage() {
 
   useEffect(() => { faceDBRef.current = loadDB(); }, []);
 
-  useEffect(() => () => wsRef.current?.close(), []);
+  useEffect(() => () => {
+    wsRef.current?.close();
+    if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
+  }, []);
 
   return (
     <main className="flex flex-col items-center bg-black min-h-dvh px-3 pt-3 pb-3 gap-2 overflow-y-auto">
@@ -882,8 +1080,9 @@ export default function VisionPage() {
 
         {/* Top HUD */}
         <button onClick={() => setShowEspInput((p) => !p)}
-          className="absolute top-1.5 left-1.5 z-30 size-7 rounded-full bg-black/50 backdrop-blur-md border border-white/10 flex items-center justify-center hover:bg-black/70">
-          <div className={`size-2.5 rounded-full ${wsConnected ? "bg-green-400 shadow-[0_0_6px_rgba(74,222,128,0.5)]" : "bg-zinc-500"}`} />
+          className="absolute top-1.5 left-1.5 z-30 h-7 rounded-full bg-black/50 backdrop-blur-md border border-white/10 flex items-center gap-1.5 px-2 hover:bg-black/70">
+          <div className={`size-2 rounded-full ${wsConnected ? "bg-green-400 shadow-[0_0_6px_rgba(74,222,128,0.5)]" : "bg-zinc-500"}`} />
+          <span className="text-[7px] font-mono tracking-wider text-zinc-400">ESP</span>
         </button>
         {modelLoading && !modelReady && (
           <div className="absolute top-1.5 left-9 z-30 flex items-center gap-1">
@@ -1016,14 +1215,93 @@ export default function VisionPage() {
 
       {/* ESP / STREAM INPUT */}
       {showEspInput && (
-        <div className="flex gap-1.5 w-full max-w-sm">
-          <input value={espIp} onChange={(e) => setEspIp(e.target.value)}
-            placeholder="IP ESP32"
-            className="flex-1 min-w-0 px-3 py-1.5 rounded-full bg-zinc-900 border border-zinc-700 text-white text-xs placeholder-zinc-500 focus:outline-none focus:border-zinc-500" />
-          <button onClick={connectESP}
-            className="px-3 py-1.5 rounded-full bg-white text-black text-xs font-semibold hover:bg-zinc-200 flex-shrink-0">
-            {wsConnected ? "PUTUS" : "HUBUNG"}
-          </button>
+        <div className="w-full max-w-sm flex flex-col gap-1.5">
+          <div className="flex gap-1.5">
+            <input value={espIp} onChange={(e) => setEspIp(e.target.value)}
+              placeholder="IP atau kei.local"
+              className="flex-1 min-w-0 px-3 py-1.5 rounded-full bg-zinc-900 border border-zinc-700 text-white text-xs placeholder-zinc-500 focus:outline-none focus:border-zinc-500" />
+            <button onClick={connectESP}
+              className="px-3 py-1.5 rounded-full bg-white text-black text-xs font-semibold hover:bg-zinc-200 flex-shrink-0">
+              {wsConnected ? "PUTUS" : "HUBUNG"}
+            </button>
+            <button onClick={discoverESP}
+              className="px-2.5 py-1.5 rounded-full bg-zinc-800 text-zinc-300 text-[9px] font-mono font-bold border border-zinc-700 flex-shrink-0 active:scale-90 disabled:opacity-40"
+              disabled={scanning}>
+              {scanning ? "..." : "CARI"}
+            </button>
+            {scanStatus && !wsConnected && (
+              <span className="text-[7px] font-mono text-zinc-600 self-center">{scanStatus}</span>
+            )}
+            <button onClick={sendPing}
+              className="px-2.5 py-1.5 rounded-full bg-zinc-800 text-zinc-300 text-[9px] font-mono font-bold border border-zinc-700 flex-shrink-0 active:scale-90">
+              PING
+            </button>
+          </div>
+          {wsConnected && (
+            <div className="flex flex-wrap gap-1">
+              <button onClick={sendEmergency}
+                className="px-2 py-1 rounded-full bg-red-600 text-white text-[9px] font-mono font-bold active:scale-90">
+                EMERGENCY
+              </button>
+              <button onClick={() => sendConfig({ powerSave: !(telemetry.powerSave ?? true) })}
+                className="px-2 py-1 rounded-full text-[9px] font-mono font-bold border active:scale-90"
+                style={{
+                  backgroundColor: (telemetry.powerSave ?? true) ? '#3b82f6' : 'transparent',
+                  borderColor: (telemetry.powerSave ?? true) ? '#3b82f6' : 'rgba(255,255,255,0.15)',
+                  color: (telemetry.powerSave ?? true) ? '#000' : 'rgba(255,255,255,0.4)',
+                }}>
+                {(telemetry.powerSave ?? true) ? 'BATERAI' : 'KENCANG'}
+              </button>
+              <button onClick={() => sendConfig({ rampRate: 3 })}
+                className="px-2 py-1 rounded-full bg-zinc-800 text-zinc-300 text-[9px] font-mono border border-zinc-700 active:scale-90">
+                RAMP 3
+              </button>
+              <button onClick={() => sendConfig({ rampRate: 15 })}
+                className="px-2 py-1 rounded-full bg-zinc-800 text-zinc-300 text-[9px] font-mono border border-zinc-700 active:scale-90">
+                RAMP 15
+              </button>
+              <button onClick={() => sendConfig({ rampRate: 8 })}
+                className="px-2 py-1 rounded-full bg-zinc-800 text-zinc-300 text-[9px] font-mono border border-zinc-700 active:scale-90">
+                RAMP 8
+              </button>
+            </div>
+          )}
+          {wsConnected && telemetry && (telemetry.rssi !== undefined) && (
+            <div className="grid grid-cols-3 gap-x-3 gap-y-0.5 px-3 py-1.5 rounded-xl bg-zinc-900/80 ring-1 ring-white/10 text-[8px] font-mono">
+              <span className="text-zinc-500">speed <span className="text-blue-400">{telemetry.speed ?? '-'}</span></span>
+              <span className="text-zinc-500">mode <span className={telemetry.mode === 'emergency' ? 'text-red-400' : 'text-green-400'}>{telemetry.mode ?? '-'}</span></span>
+              <span className="text-zinc-500">rssi <span className="text-yellow-400">{telemetry.rssi ?? '-'} dBm</span></span>
+              <span className="text-zinc-500">heap <span className="text-fuchsia-400">{telemetry.heap ? `${(telemetry.heap / 1024).toFixed(0)}KB` : '-'}</span></span>
+              <span className="text-zinc-500">uptime <span className="text-white">{telemetry.uptime ? `${Math.floor(telemetry.uptime / 60)}m${telemetry.uptime % 60}s` : '-'}</span></span>
+              <span className="text-zinc-500">{telemetry.ip ?? '-'}</span>
+              {telemetry.ssid && (
+                <span className="text-zinc-500 col-span-2">ssid <span className="text-cyan-400">{telemetry.ssid}</span></span>
+              )}
+              {telemetry.ssid && (
+                <button onClick={() => setShowWifiConfig((p) => !p)}
+                  className="text-right text-[7px] font-mono text-zinc-600 hover:text-zinc-300 active:scale-90">
+                  {showWifiConfig ? "tutup" : "ganti wifi"}
+                </button>
+              )}
+            </div>
+          )}
+          {showWifiConfig && wsConnected && (
+            <div className="flex flex-col gap-1">
+              <div className="flex gap-1">
+                <input value={wifiSsid} onChange={(e) => setWifiSsid(e.target.value)}
+                  placeholder="SSID baru"
+                  className="flex-1 min-w-0 px-3 py-1.5 rounded-full bg-zinc-900 border border-zinc-700 text-white text-xs placeholder-zinc-500 focus:outline-none focus:border-zinc-500" />
+                <input value={wifiPass} onChange={(e) => setWifiPass(e.target.value)}
+                  placeholder="Password"
+                  type="password"
+                  className="flex-1 min-w-0 px-3 py-1.5 rounded-full bg-zinc-900 border border-zinc-700 text-white text-xs placeholder-zinc-500 focus:outline-none focus:border-zinc-500" />
+                <button onClick={() => { sendESP({ ssid: wifiSsid, password: wifiPass }); setWifiSsid(""); setWifiPass(""); setShowWifiConfig(false); }}
+                  className="px-3 py-1.5 rounded-full bg-amber-600 text-white text-[9px] font-mono font-bold active:scale-90 flex-shrink-0">
+                  GANTI
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
