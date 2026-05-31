@@ -278,14 +278,24 @@ export default function VisionPage() {
   const pingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const espGenRef = useRef(0);
-  const connectESP = useCallback(() => {
+  const connectESP = useCallback(async () => {
     if (!espIp) return;
     if (reconnectTimerRef.current) { clearTimeout(reconnectTimerRef.current); reconnectTimerRef.current = null; }
     if (pingIntervalRef.current) { clearInterval(pingIntervalRef.current); pingIntervalRef.current = null; }
     wsRef.current?.close();
     wsRef.current = null;
+    let targetIp = espIp;
+    if (/[a-zA-Z]/.test(espIp)) {
+      try {
+        const c = new AbortController();
+        const t = setTimeout(() => c.abort(), 2000);
+        const r = await fetch(`http://${espIp}/`, { signal: c.signal });
+        clearTimeout(t);
+        if (r.ok) { const d = await r.json(); if (d.ip) { targetIp = d.ip; setEspIp(d.ip); } }
+      } catch {}
+    }
     const gen = ++espGenRef.current;
-    const ws = new WebSocket(`ws://${espIp}:81`);
+    const ws = new WebSocket(`ws://${targetIp}:81`);
     ws.onopen = () => {
       if (espGenRef.current !== gen) { ws.close(); return; }
       setWsConnected(true);
@@ -438,7 +448,15 @@ export default function VisionPage() {
       }
     }
     let found = "";
-    for (const ip of ips) {
+    // coba kei.local dulu via HTTP
+    try {
+      const c = new AbortController();
+      const t = setTimeout(() => c.abort(), 1000);
+      const r = await fetch("http://kei.local/", { signal: c.signal });
+      clearTimeout(t);
+      if (r.ok) { const d = await r.json(); if (d.ip) found = d.ip; }
+    } catch {}
+    if (!found) for (const ip of ips) {
       if (found) break;
       setScanStatus(ip);
       try {
