@@ -1118,7 +1118,7 @@ const mqttDeviceIdRef = useRef("");
         if (obstacle && !trackTargetRef.current) {
           const obox = obstacle.boundingBox!;
           const ocx = (obox.originX + obox.width / 2) / vw;
-          const steer = ocx < 0.5 ? 130 : -130;
+          const steer = ocx < 0.5 ? 150 : -150;
           setLeftMotor(steer); setRightMotor(-steer);
           sendMotor(steer, -steer);
           setTrackInfo(`hindar ${obstacle.categories[0].categoryName}`);
@@ -1126,7 +1126,7 @@ const mqttDeviceIdRef = useRef("");
           trackTargetRef.current = null;
           setTrackInfo(`cari ${trackLabelRef.current}...`);
         } else if (trackLostRef.current > 15) {
-          const reacquireSpeed = 130;
+          const reacquireSpeed = 150;
           // Turn toward last known position
           const dir = lastSeenPosRef.current.cx < 0.5 ? 1 : -1;
           setLeftMotor(-reacquireSpeed * dir); setRightMotor(reacquireSpeed * dir);
@@ -1178,7 +1178,7 @@ const mqttDeviceIdRef = useRef("");
           setLeftMotor(0); setRightMotor(0);
           sendMotor(0, 0);
         } else {
-          const speed = 130;
+          const speed = 150;
           setLeftMotor(-speed); setRightMotor(speed);
           sendMotor(-speed, speed);
         }
@@ -1314,7 +1314,7 @@ const mqttDeviceIdRef = useRef("");
     const kp = 200;
     const turn = errorX * kp;
     const speedT = found.area / stopZone;
-    const baseSpeed = Math.max(100, Math.round((1 - speedT) * 200));
+    const baseSpeed = Math.max(150, Math.round((1 - speedT) * 200));
     let l = baseSpeed + Math.round(turn) + bias;
     let r = baseSpeed - Math.round(turn) - bias;
     l = Math.max(-255, Math.min(255, l));

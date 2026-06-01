@@ -26,7 +26,7 @@ interface ChatMsg {
 function clampMotor(v: number): number {
   if (v === 0) return 0;
   const abs = Math.abs(v);
-  if (abs < 100) return v > 0 ? 100 : -100;
+  if (abs < 150) return v > 0 ? 150 : -150;
   return v;
 }
 
@@ -421,8 +421,36 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
       sendToGroq("Ada yang menarik? Kasi saran target.", true, false);
     };
     autoIvRef.current = setInterval(drive, 10000);
+
+    // Fast safety loop — obstacle avoidance tiap 500ms
+    const safety = () => {
+      if (!autoRef.current || !apiKeyRef.current) return;
+      const dets = detectionsRef.current;
+      const close = dets.find(d => {
+        const b = d.boundingBox!;
+        const vw = 640, vh = 480;
+        const cx = (b.originX + b.width / 2) / vw;
+        const area = (b.width / vw) * (b.height / vh);
+        return area > 0.1 && cx > 0.1 && cx < 0.9;
+      });
+      if (close) {
+        const b = close.boundingBox!;
+        const cx = (b.originX + b.width / 2) / 640;
+        // Mundur sambil belok menjauh
+        if (cx < 0.5) {
+          motorRef?.current?.sendMotor(-150, -180);
+        } else {
+          motorRef?.current?.sendMotor(-180, -150);
+        }
+        if (!trackInfoRef.current.includes("🤖")) trackInfoRef.current = "🤖 hindar cepat!";
+        return;
+      }
+    };
+    autoSafeIvRef.current = setInterval(safety, 500);
+
     return () => {
       clearInterval(autoIvRef.current);
+      clearInterval(autoSafeIvRef.current);
       motorRef?.current?.sendMotor(0, 0);
       autoRef.current = false;
       if (!trackInfoRef.current?.startsWith("🤖")) trackInfoRef.current = "";
