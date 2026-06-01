@@ -974,7 +974,8 @@ const mqttDeviceIdRef = useRef("");
     }
 
     // Face detected → stop tracking motor, biarkan AI ngobrol
-    if (recognizedFaceRef.current) {
+    // Skip jika user sedang manual kontrol (joystick/keyboard)
+    if (recognizedFaceRef.current && !joyActiveRef.current && keysRef.current.size === 0) {
       if (motorRunning) {
         setLeftMotor(0); setRightMotor(0);
         sendMotor(0, 0);

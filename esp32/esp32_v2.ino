@@ -39,9 +39,11 @@ WebServer httpServer(80);
 
 #define PWMB 13
 #define BIN1 14
-#define BIN2 12
+#define BIN2 33
 
-#define STBY 33
+#define STBY 32
+
+#define BUZZER 4
 
 // =======================
 // PWM
@@ -127,6 +129,7 @@ void rampMotors();
 void sendTelemetry();
 String buildTelemetryJson();
 void updateLED();
+void updateBuzzer();
 void mqttCallback(char* topic, byte* payload, unsigned int length);
 void connectWiFi();
 void handleWiFi();
@@ -547,16 +550,6 @@ void setup() {
 
   startTime = millis();
 
-  // WATCHDOG
-
-  esp_task_wdt_config_t wdt_config = {
-    .timeout_ms = 10000,
-    .trigger_panic = true
-  };
-  esp_task_wdt_init(&wdt_config);
-
-  esp_task_wdt_add(NULL);
-
   // LED
 
   pinMode(LED_PIN, OUTPUT);
@@ -573,23 +566,22 @@ void setup() {
 
   pinMode(STBY, OUTPUT);
 
+  pinMode(BUZZER, OUTPUT);
+
   digitalWrite(STBY, HIGH);
+
+  // Buzzer startup
+  digitalWrite(BUZZER, HIGH);
+  delay(100);
+  digitalWrite(BUZZER, LOW);
 
   // PWM
 
-  ledcAttachChannel(
-    PWMA,
-    1000,
-    8,
-    CH_LEFT
-  );
+  ledcSetup(CH_LEFT, 1000, 8);
+  ledcAttachPin(PWMA, CH_LEFT);
 
-  ledcAttachChannel(
-    PWMB,
-    1000,
-    8,
-    CH_RIGHT
-  );
+  ledcSetup(CH_RIGHT, 1000, 8);
+  ledcAttachPin(PWMB, CH_RIGHT);
 
   stopMotors();
 
@@ -631,6 +623,7 @@ void setup() {
         case WStype_CONNECTED:
 
           wsConnected = true;
+          emergencyStop = false;
 
           break;
 
@@ -712,8 +705,6 @@ void setup() {
 
 void loop() {
 
-  esp_task_wdt_reset();
-
   ArduinoOTA.handle();
 
   httpServer.handleClient();
@@ -740,6 +731,7 @@ void loop() {
   }
 
   updateLED();
+  updateBuzzer();
 
   // WIFI LOST
 
@@ -1198,6 +1190,30 @@ void stopMotors() {
 // =======================
 // LED
 // =======================
+
+void updateBuzzer() {
+  static unsigned long lastToggle = 0;
+  static bool state = false;
+
+  bool mundur = currentLeftSpeed < -30 && currentRightSpeed < -30;
+
+  if (!mundur) {
+    if (state) {
+      digitalWrite(BUZZER, LOW);
+      state = false;
+    }
+    return;
+  }
+
+  unsigned long now = millis();
+  unsigned long interval = state ? 100 : 400;
+
+  if (now - lastToggle >= interval) {
+    lastToggle = now;
+    state = !state;
+    digitalWrite(BUZZER, state ? HIGH : LOW);
+  }
+}
 
 void updateLED() {
 

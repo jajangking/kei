@@ -23,6 +23,11 @@ interface ChatMsg {
   content: string;
 }
 
+function clampMotor(v: number): number {
+  if (v === 0) return 0;
+  return v > 0 ? 90 : -90;
+}
+
 let speechRecogCtor: any = null;
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
@@ -261,7 +266,7 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
               if (parts.length === 2) {
                 const l = parseInt(parts[0]), r = parseInt(parts[1]);
                 if (!isNaN(l) && !isNaN(r) && motorRef?.current) {
-                  motorRef.current.sendMotor(l, r);
+                  motorRef.current.sendMotor(clampMotor(l), clampMotor(r));
                   autoLastCmdRef.current = Date.now();
                 }
               }
@@ -383,7 +388,7 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
 
       // Safety 1: dark → mundur (bypass AI)
       if (info.includes("gelap")) {
-        motorRef?.current?.sendMotor(-60, -60);
+        motorRef?.current?.sendMotor(clampMotor(-60), clampMotor(-60));
         return;
       }
       // Safety 2: obstacle besar di tengah → hindar (bypass AI)
@@ -399,7 +404,7 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
         const vw = 640;
         const cx = (b.originX + b.width / 2) / vw;
         const dir = cx < 0.5 ? 80 : -80;
-        motorRef?.current?.sendMotor(dir, -dir);
+        motorRef?.current?.sendMotor(clampMotor(dir), clampMotor(-dir));
         if (!info.includes("🤖")) trackInfoRef.current = "🤖 hindar...";
         return;
       }

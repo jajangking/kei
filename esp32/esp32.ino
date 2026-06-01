@@ -605,6 +605,7 @@ void setup() {
         case WStype_CONNECTED:
 
           wsConnected = true;
+          emergencyStop = false;
 
           break;
 
