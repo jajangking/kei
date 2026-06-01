@@ -20,11 +20,12 @@ interface Telemetry {
   ip?: string;
   ssid?: string;
   pong?: boolean;
-  config?: boolean;
   wifiConfig?: boolean;
   rampRate?: number;
   speedLimitEnabled?: boolean;
   speedLimit?: number;
+  maxSpeed?: number;
+  motorTimeout?: number;
 }
 
 export default function VisionPage() {
@@ -306,7 +307,7 @@ export default function VisionPage() {
     };
     ws.onmessage = (e) => {
       if (espGenRef.current !== gen) return;
-      try { const d = JSON.parse(e.data); setTelemetry(p => ({ ...p, ...d })); } catch {}
+      try { const d = JSON.parse(e.data); const { config: _cfg, ...rest } = d; setTelemetry(p => ({ ...p, ...rest })); } catch {}
     };
     ws.onclose = () => {
       if (espGenRef.current !== gen) return;
@@ -377,7 +378,8 @@ const mqttDeviceIdRef = useRef("");
           if (data.ip && data.ip !== espIpRef.current) {
             setEspIp(data.ip);
           }
-          setTelemetry(p => ({ ...p, ...data }));
+          const { config: _cfg, ...rest } = data;
+          setTelemetry(p => ({ ...p, ...rest }));
         } catch {}
       });
       client.on("close", () => {
@@ -1406,7 +1408,7 @@ const mqttDeviceIdRef = useRef("");
             <span>detect: <span className="text-white">{detectTimeRef.current}ms</span></span>
             <span>fps: <span className="text-white">{detectTimeRef.current > 0 ? (1000 / detectTimeRef.current).toFixed(1) : "-"}</span></span>
             <span>model: <span className="text-white">EfficientDet Lite0</span></span>
-            <span>motor: <span className="text-blue-400">L:{leftMotor}</span> <span className="text-orange-400">R:{rightMotor}</span></span>
+            <span>motor: <span className="text-blue-400">L:{leftMotor}</span><span className="text-zinc-600">/{telemetry.left ?? '?'}</span> <span className="text-orange-400">R:{rightMotor}</span><span className="text-zinc-600">/{telemetry.right ?? '?'}</span></span>
             <span>track: <span className="text-white">{trackInfo || "-"}</span></span>
             <span>scan: <span className="text-purple-400">{scanStateRef.current}</span></span>
             <span>gelap: <span className={darkAvoidRef.current ? "text-red-400" : "text-zinc-600"}>{darkAvoidRef.current ? "YA" : "tidak"}</span> <span className="text-zinc-600">({brightnessRef.current.toFixed(0)})</span></span>
@@ -1574,10 +1576,22 @@ const mqttDeviceIdRef = useRef("");
                   onChange={(e) => sendConfig({ speedLimit: parseInt(e.target.value) })}
                   className="w-20 h-1 accent-amber-500"
                   style={{ opacity: telemetry.speedLimitEnabled ? 1 : 0.25 }} />
+                <span className="text-zinc-500 text-[8px] font-mono">max</span>
+                <input type="range" min="128" max="255" step="1"
+                  value={telemetry.maxSpeed ?? 255}
+                  onChange={(e) => sendConfig({ maxSpeed: parseInt(e.target.value) })}
+                  className="w-16 h-1 accent-blue-500" />
+                <span className="text-zinc-500 text-[7px] font-mono w-6 text-right">{telemetry.maxSpeed ?? 255}</span>
+                <span className="text-zinc-500 text-[8px] font-mono">tm</span>
+                <input type="number" min="1000" max="30000" step="1000"
+                  value={telemetry.motorTimeout ?? 5000}
+                  onChange={(e) => sendConfig({ motorTimeout: parseInt(e.target.value) || 5000 })}
+                  className="w-12 px-1 py-0.5 rounded-full bg-zinc-800 border border-zinc-700 text-white text-[7px] font-mono text-center" />
               </div>
               {/* telemetry grid */}
               <div className="grid grid-cols-3 gap-x-3 gap-y-0.5 px-3 py-1.5 rounded-xl bg-zinc-900/80 ring-1 ring-white/10 text-[8px] font-mono">
-                <span className="text-zinc-500">speed <span className="text-blue-400">{telemetry.speed ?? '-'}</span></span>
+                <span className="text-zinc-500">L <span className="text-blue-400">{telemetry.left ?? telemetry.speed ?? '-'}</span></span>
+                <span className="text-zinc-500">R <span className="text-orange-400">{telemetry.right ?? telemetry.speed ?? '-'}</span></span>
                 <span className="text-zinc-500">mode <span className={telemetry.mode === 'emergency' ? 'text-red-400' : 'text-green-400'}>{telemetry.mode ?? '-'}</span></span>
                 <span className="text-zinc-500">rssi <span className="text-yellow-400">{telemetry.rssi ?? '-'} dBm</span></span>
                 <span className="text-zinc-500">heap <span className="text-fuchsia-400">{telemetry.heap ? `${(telemetry.heap / 1024).toFixed(0)}KB` : '-'}</span></span>
@@ -1687,8 +1701,8 @@ const mqttDeviceIdRef = useRef("");
             </button>
           </div>
           <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 z-10 flex gap-2 text-[7px] font-mono">
-            <span className="text-blue-400">L:{leftMotor}</span>
-            <span className="text-orange-400">R:{rightMotor}</span>
+            <span className="text-blue-400">L:{leftMotor}</span><span className="text-zinc-600">/{telemetry.left ?? '?'}</span>
+            <span className="text-orange-400">R:{rightMotor}</span><span className="text-zinc-600">/{telemetry.right ?? '?'}</span>
           </div>
         </div>
       </div>
