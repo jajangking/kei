@@ -630,7 +630,7 @@ default:
 
 void handleMessage(String msg) {
 
-JsonDocument doc;
+DynamicJsonDocument doc(512);
 
 DeserializationError err = deserializeJson(doc, msg);
 
@@ -673,7 +673,7 @@ if (doc["emergency"].is<bool>()) {
 
 if (doc["ping"] == true) {
 
-    JsonDocument pong;
+    DynamicJsonDocument pong(128);
 
     pong["pong"] = true;
 
@@ -738,7 +738,7 @@ if (doc["speedLimit"].is<int>()) {
 
 if (configChanged) {
 
-    JsonDocument conf;
+    DynamicJsonDocument conf(256);
 
     conf["config"] = true;
     conf["maxSpeed"] = maxSpeed;
@@ -776,7 +776,7 @@ if (doc["mqttBroker"].is<String>()) {
       connectMQTT();
     }
 
-    JsonDocument ack;
+    DynamicJsonDocument ack(128);
     ack["mqttConfig"] = true;
     ack["mqttBroker"] = broker;
     ack["mqttPort"] = port;
@@ -791,7 +791,7 @@ if (doc["mqttDisable"].is<bool>() && doc["mqttDisable"]) {
     saveMqttConfig("", 8883, "", "", "kei/robot", false);
     mqttClient.disconnect();
     mqttEnabled = false;
-    JsonDocument ack;
+    DynamicJsonDocument ack(128);
     ack["mqttConfig"] = false;
     String reply;
     serializeJson(ack, reply);
@@ -810,7 +810,7 @@ if (doc["ssid"].is<String>() && doc["password"].is<String>()) {
 
     saveWiFiConfig(newSsid, newPass);
 
-    JsonDocument ack;
+    DynamicJsonDocument ack(128);
 
     ack["wifiConfig"] = true;
     ack["ssid"] = newSsid;
@@ -992,7 +992,7 @@ writeMotorB(0);
 String buildTelemetryJson() {
   String mode = emergencyStop ? "emergency" : "manual";
   int avgSpeed = (abs(currentLeftSpeed) + abs(currentRightSpeed)) / 2;
-  JsonDocument doc;
+  DynamicJsonDocument doc(256);
   doc["rssi"] = WiFi.RSSI();
   doc["heap"] = ESP.getFreeHeap();
   doc["uptime"] = (millis() - startTime) / 1000;
