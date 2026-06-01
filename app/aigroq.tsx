@@ -30,25 +30,21 @@ const MODEL = "llama-3.3-70b-versatile";
 const STORAGE_KEY = "kei_groq_key";
 
 const SYSTEM_PROMPT = `Lo adalah Kei, suara robot. Aturan:
-- Ngomong alami kayak orang, JANGAN mulai dengan kata "Liat" atau "Lihat".
-- Kalo ditanya situasi, ceritain apa yang ada — dengan bahasa sendiri, bukan ngulang data mentah.
+- Ngomong alami, JANGAN mulai dengan "Liat" atau "Lihat".
 - Kalo cuma greeting, jawab salam aja.
 - HANYA omongin apa yang ADA di konteks — jangan ngarang.
-- Jawab 1-2 kalimat pendek.
-- Gak usah pake emoticon.
+- Jawab 1 kalimat pendek aja.
 
 Lo BISA gerakin robot pake perintah di dalem kurung siku:
 [motor:L,R] — gerak motor kiri=L kanan=R (-255 sd 255)
 [track:label] — tracking objek
 [stop] — berhenti
-[scan] — cari objek dari awal
 Contoh: "Ada mobil di kanan, gua follow. [track:mobil]"
-Contoh: "Maju dikit. [motor:50,50]"
 
 Kalo lagi mode autonomous, lo yang mutusin. Tapi aturan SAFETY:
-- Kalo gelap / gak liat apa-apa — JANGAN maju. MUNDUR atau muter.
+- Kalo gelap — JANGAN maju. MUNDUR atau muter.
 - Kalo ada objek gede di depan — minggir, jangan nayok.
-- Jangan monoton — kadang maju, kadang mundur, kadang puter, kadang tracking, kadang scan.
+- Jangan monoton — kadang maju, kadang mundur, kadang puter.
 - Kalo liat objek menarik, tracking aja.
 Sesuain gaya bicara sama situasi.`;
 
@@ -118,6 +114,9 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
   const autoIvRef = useRef<any>(null);
   const autoLastCmdRef = useRef(0);
   const autoSafeIvRef = useRef<any>(null);
+  const lastFaceRef = useRef<string | null>(null);
+  const tokenBudgetRef = useRef(80000); // sisa token hari ini (max 100K)
+  const tokenResetRef = useRef(Date.now());
 
   // Load API key
   useEffect(() => {
@@ -204,9 +203,18 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
     window.speechSynthesis.speak(utter);
   }, [aiBusyRef]);
 
-  const sendToGroq = useCallback(async (userText: string, isAuto?: boolean) => {
+  const sendToGroq = useCallback(async (userText: string, isAuto?: boolean, chatOnly?: boolean) => {
     const key = apiKeyRef.current;
     if (!key) return;
+
+    // Token budget check: kalo sisa < 2000, skip auto calls
+    if (isAuto && tokenBudgetRef.current < 2000) return;
+
+    // Reset budget setiap 24 jam
+    if (Date.now() - tokenResetRef.current > 86400000) {
+      tokenBudgetRef.current = 80000;
+      tokenResetRef.current = Date.now();
+    }
 
     const ctx = buildContext(detectionsRef.current, recognizedFaceRef.current, trackInfoRef.current, scanStateRef.current);
     const systemMsg: ChatMsg = { role: "system", content: `${SYSTEM_PROMPT}\n\nKonteks saat ini: ${ctx}` };
@@ -217,7 +225,7 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
       model: MODEL,
       messages: [systemMsg, ...recent, { role: "user", content: userText }],
       temperature: 0.5,
-      max_tokens: 60,
+      max_tokens: 30,
     };
 
     if (!isAuto) { setThinking(true); if (aiBusyRef) aiBusyRef.current = true; }
@@ -232,34 +240,43 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
         throw new Error(`${res.status} ${res.statusText} — ${errText}`);
       }
       const data = await res.json();
+      // Token tracking
+      if (data.usage) {
+        tokenBudgetRef.current -= data.usage.total_tokens || 0;
+      } else {
+        tokenBudgetRef.current -= Math.round(JSON.stringify(body).length / 3) + 30;
+      }
+      if (tokenBudgetRef.current < 0) tokenBudgetRef.current = 0;
       let reply = (data.choices?.[0]?.message?.content || "").trim();
       // Strip thinking tags (closed or unclosed)
       reply = reply.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/<think>[\s\S]*$/g, '').trim();
       if (reply) {
         // Parse commands from reply: [motor:l,r] [track:label] [stop] [scan]
-        const cmds = reply.match(/\[([^\]]+)\]/g) || [];
-        for (const raw of cmds) {
-          const cmd = raw.slice(1, -1);
-          if (cmd.startsWith("motor:")) {
-            const parts = cmd.slice(6).split(",");
-            if (parts.length === 2) {
-              const l = parseInt(parts[0]), r = parseInt(parts[1]);
-              if (!isNaN(l) && !isNaN(r) && motorRef?.current) {
-                motorRef.current.sendMotor(l, r);
+        if (!chatOnly) {
+          const cmds = reply.match(/\[([^\]]+)\]/g) || [];
+          for (const raw of cmds) {
+            const cmd = raw.slice(1, -1);
+            if (cmd.startsWith("motor:")) {
+              const parts = cmd.slice(6).split(",");
+              if (parts.length === 2) {
+                const l = parseInt(parts[0]), r = parseInt(parts[1]);
+                if (!isNaN(l) && !isNaN(r) && motorRef?.current) {
+                  motorRef.current.sendMotor(l, r);
+                  autoLastCmdRef.current = Date.now();
+                }
+              }
+            } else if (cmd.startsWith("track:")) {
+              const label = cmd.slice(6).trim();
+              if (label && motorRef?.current) {
+                motorRef.current.setTrackTarget({ label, lastSeen: Date.now() });
                 autoLastCmdRef.current = Date.now();
               }
-            }
-          } else if (cmd.startsWith("track:")) {
-            const label = cmd.slice(6).trim();
-            if (label && motorRef?.current) {
-              motorRef.current.setTrackTarget({ label, lastSeen: Date.now() });
+            } else if (cmd === "stop") {
+              motorRef?.current?.sendMotor(0, 0);
               autoLastCmdRef.current = Date.now();
+            } else if (cmd === "auto") {
+              setAuto(true); autoRef.current = true;
             }
-          } else if (cmd === "stop") {
-            motorRef?.current?.sendMotor(0, 0);
-            autoLastCmdRef.current = Date.now();
-          } else if (cmd === "auto") {
-            setAuto(true); autoRef.current = true;
           }
         }
         // Strip commands from displayed reply
@@ -288,7 +305,7 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
     msgsRef.current = updated;
     setMsgs(updated);
     setInput("");
-    sendToGroq(text.trim());
+    sendToGroq(text.trim(), false, true);
   }, [thinking, sendToGroq]);
 
   // Auto context update + proactive chat
@@ -297,6 +314,16 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
     const ctx = buildContext(detectionsRef.current, recognizedFaceRef.current, trackInfoRef.current, scanStateRef.current, undefined, leftMotor, rightMotor);
       if (ctx === lastContextRef.current) return;
       lastContextRef.current = ctx;
+
+      // Face greeting: wajah baru muncul → AI nyapa, stop motor
+      const faceNow = recognizedFaceRef.current?.name ?? null;
+      if (faceNow && faceNow !== lastFaceRef.current && !speakingRef.current) {
+        lastFaceRef.current = faceNow;
+        motorRef?.current?.sendMotor(0, 0);
+        sendToGroq(`Ada ${faceNow} di depan. Sapa aja, jangan gerak!`, true, true);
+      } else if (!faceNow) {
+        lastFaceRef.current = null;
+      }
 
       // Update system prompt with latest context
       const systemMsg: ChatMsg = { role: "system", content: `${SYSTEM_PROMPT}\n\nKonteks saat ini: ${ctx}` };
@@ -315,43 +342,41 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
     return () => clearInterval(contextIvRef.current);
   }, []);
 
-  // Auto-report on state change (event-based + cooldown)
+  // Auto-report on state change (hemat token — max 2x/menit)
   useEffect(() => {
     const tick = () => {
       if (!apiKeyRef.current || speakingRef.current || convRef.current) return;
       updateMood();
       const trackInfo = trackInfoRef.current;
       const scanState = scanStateRef.current;
-      const dets = detectionsRef.current;
-      // Build a status key — only report on changes
-      const hasTarget = trackInfo.includes('✅') || trackInfo.includes('🔒');
-      const isScanning = trackInfo.startsWith('cari') || scanState === 'scanning';
-      const isBlocked = trackInfo.startsWith('hindar');
-      const isDark = trackInfo.includes('gelap');
-      const detCount = dets.length > 3 ? 'banyak' : dets.length === 0 ? 'kosong' : 'ada';
-      const key = `${hasTarget ? 'track' : ''}|${isScanning ? 'scan' : ''}|${isBlocked ? 'block' : ''}|${isDark ? 'dark' : ''}|${detCount}`;
+      // Cuma lapor kalo ada perubahan penting
+      const info = trackInfo;
+      const isTracking = info.includes('✅') || info.includes('🔒');
+      const isStuck = info.includes('stuck');
+      const isDark = info.includes('gelap');
+      const isBlocked = info.startsWith('hindar');
+      const key = `${isTracking ? 'T' : ''}${isStuck ? '!':''}${isDark ? 'D':''}${isBlocked ? 'B':''}|${scanState}`;
       if (key === lastStatusRef.current) return;
       lastStatusRef.current = key;
-      // Cooldown 5 detik
+      // Cooldown 30 detik
       const now = Date.now();
-      if (now - lastReportRef.current < 5000) return;
+      if (now - lastReportRef.current < 30000) return;
       lastReportRef.current = now;
-      sendToGroq("Keadaan gimana? Ceritain santai aja", true);
+      sendToGroq("Keadaan gimana? Ceritain santai aja", true, true);
     };
-    autoReplyIvRef.current = setInterval(tick, 2000);
+    autoReplyIvRef.current = setInterval(tick, 5000);
     return () => clearInterval(autoReplyIvRef.current);
   }, [sendToGroq]);
 
-  // Auto drive mode — AI decides movement every ~4s
+  // Auto drive mode — AI decides movement every ~10s (hemat token)
   useEffect(() => {
     if (!auto) return;
     autoRef.current = true;
     trackInfoRef.current = "🤖 auto...";
     const prompts = [
-      "Lagi jalan sendiri. Mau ke mana?",
-      "Cari sesuatu yang menarik.",
-      "Jelajah sekeliling, mutusin gerak.",
-      "Lihat situasi, mau ke arah mana?",
+      "Lagi jalan. Mau ke mana?",
+      "Arah mana?",
+      "Gerak. Jangan monoton.",
     ];
     let pi = 0;
 
@@ -394,7 +419,7 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
       pi++;
       sendToGroq(prompt, true);
     };
-    autoIvRef.current = setInterval(drive, 4000);
+    autoIvRef.current = setInterval(drive, 10000);
     // Safety: stop if no command for 8s
     autoSafeIvRef.current = setInterval(() => {
       if (autoRef.current && Date.now() - autoLastCmdRef.current > 8000) {

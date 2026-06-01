@@ -922,6 +922,7 @@ const mqttDeviceIdRef = useRef("");
     const vh = video.videoHeight || 480;
 
     const stableDetections = filterDetections(detections);
+    const motorRunning = leftMotor !== 0 || rightMotor !== 0;
 
     // Dark detection
     brightnessRef.current = sampleBrightness();
@@ -972,9 +973,17 @@ const mqttDeviceIdRef = useRef("");
       return;
     }
 
+    // Face detected → stop tracking motor, biarkan AI ngobrol
+    if (recognizedFaceRef.current) {
+      if (motorRunning) {
+        setLeftMotor(0); setRightMotor(0);
+        sendMotor(0, 0);
+      }
+      return;
+    }
+
     // Stuck detection — only when motors are running
     if (stuckCooldownRef.current > 0) stuckCooldownRef.current--;
-    const motorRunning = leftMotor !== 0 || rightMotor !== 0;
     if (motorRunning && stuckCooldownRef.current === 0) {
       if (sampleStuck()) {
         stuckFramesRef.current++;
