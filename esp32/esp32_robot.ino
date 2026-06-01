@@ -141,7 +141,7 @@ void applyPowerSave() {
 
 if (powerSave) {
 
-    WiFi.setSleep(WIFI_PS_MIN_MODEM);
+    WiFi.setSleep(WIFI_PS_NONE);
 
     setCpuFrequencyMhz(80);
 
@@ -327,6 +327,8 @@ Serial.println("Connecting WiFi...");
 loadWiFiConfig();
 
 WiFi.mode(WIFI_STA);
+
+WiFi.setSleep(WIFI_PS_NONE);
 
 WiFi.setAutoReconnect(true);
 
