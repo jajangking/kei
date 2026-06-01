@@ -55,6 +55,7 @@ export default function VisionPage() {
   const [mqttPort, setMqttPort] = useState(() => typeof window !== "undefined" ? Number(localStorage.getItem("mqttPort")) || 8884 : 8884);
   const [mqttUser, setMqttUser] = useState(() => typeof window !== "undefined" ? localStorage.getItem("mqttUser") || "" : "");
   const [mqttPass, setMqttPass] = useState(() => typeof window !== "undefined" ? localStorage.getItem("mqttPass") || "" : "");
+  const [mqttPrefix, setMqttPrefix] = useState(() => typeof window !== "undefined" ? localStorage.getItem("mqttPrefix") || "kei/robot" : "kei/robot");
   const [showMqttInput, setShowMqttInput] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [scanStatus, setScanStatus] = useState("");
@@ -159,7 +160,7 @@ export default function VisionPage() {
     if (mqtt?.connected) {
       const deviceId = mqttDeviceIdRef.current;
       if (deviceId) {
-        mqtt.publish(`kei/robot/${deviceId}/cmd`, JSON.stringify({ leftMotor: l, rightMotor: r }));
+        mqtt.publish(`${mqttPrefixRef.current}/${deviceId}/cmd`, JSON.stringify({ leftMotor: l, rightMotor: r }));
       }
       return;
     }
@@ -329,8 +330,9 @@ export default function VisionPage() {
 
   // MQTT
   const mqttClientRef = useRef<any>(null);
-  const mqttTeleTopicRef = useRef("");
-  const mqttDeviceIdRef = useRef("");
+const mqttTeleTopicRef = useRef("");
+const mqttPrefixRef = useRef("kei/robot");
+const mqttDeviceIdRef = useRef("");
   const mqttGenRef = useRef(0);
   const [mqttStatus, setMqttStatus] = useState("");
 
@@ -359,8 +361,9 @@ export default function VisionPage() {
         console.log("[MQTT] connected");
         setMqttConnected(true);
         setMqttStatus("terhubung");
-        const teleTopic = `kei/robot/+/telemetry`;
-        mqttTeleTopicRef.current = "kei/robot";
+        mqttPrefixRef.current = mqttPrefix;
+        const teleTopic = `${mqttPrefix}/+/telemetry`;
+        mqttTeleTopicRef.current = mqttPrefix;
         client.subscribe(teleTopic);
       });
       client.on("message", (topic: string, payload: Buffer) => {
@@ -392,12 +395,13 @@ export default function VisionPage() {
       mqttClientRef.current = client;
       localStorage.setItem("mqttBroker", mqttBroker);
       localStorage.setItem("mqttPort", String(mqttPort));
+      localStorage.setItem("mqttPrefix", mqttPrefix);
     } catch (e: any) {
       console.error("[MQTT] exception:", e);
       setMqttConnected(false);
       setMqttStatus("gagal: " + (e?.message || "unknown"));
     }
-  }, [mqttBroker, mqttUser, mqttPass]);
+  }, [mqttBroker, mqttUser, mqttPass, mqttPrefix]);
 
   const disconnectMQTT = useCallback(() => {
     ++mqttGenRef.current;
@@ -417,7 +421,7 @@ export default function VisionPage() {
     if (mqtt?.connected) {
       const deviceId = mqttDeviceIdRef.current;
       if (deviceId) {
-        const cmdTopic = `kei/robot/${deviceId}/cmd`;
+        const cmdTopic = `${mqttPrefixRef.current}/${deviceId}/cmd`;
         mqtt.publish(cmdTopic, JSON.stringify(data));
       }
       return;
@@ -1499,12 +1503,17 @@ export default function VisionPage() {
                   type="password"
                   className="flex-1 min-w-0 px-2 py-1 rounded-full bg-zinc-800 border border-zinc-700 text-white text-[9px] font-mono placeholder-zinc-500 focus:outline-none focus:border-zinc-500" />
               </div>
+              <div className="flex gap-1.5">
+                <input value={mqttPrefix} onChange={e => setMqttPrefix(e.target.value)}
+                  placeholder="kei/robot"
+                  className="flex-1 min-w-0 px-2 py-1 rounded-full bg-zinc-800 border border-zinc-700 text-white text-[9px] font-mono placeholder-zinc-500 focus:outline-none focus:border-zinc-500" />
+              </div>
               <div className="flex gap-1">
                 <button onClick={connectMQTT}
                   className="flex-1 px-2 py-1 rounded-full bg-emerald-600 text-white text-[9px] font-mono font-bold active:scale-90">
                   HUBUNGKAN
                 </button>
-                <button onClick={() => sendESP({ mqttBroker, mqttPort: 8883, mqttUser, mqttPass, mqttEnabled: true })}
+                <button onClick={() => sendESP({ mqttBroker, mqttPort: 8883, mqttUser, mqttPass, mqttPrefix, mqttEnabled: true })}
                   className="px-2 py-1 rounded-full bg-zinc-800 text-zinc-300 text-[9px] font-mono border border-zinc-700 active:scale-90">
                   KIRIM KE ESP
                 </button>
