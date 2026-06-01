@@ -136,6 +136,7 @@ export default function VisionPage() {
   const debugRef = useRef(false);
   const detectTimeRef = useRef(0);
   const aiBusyRef = useRef(false);
+  const motorRef = useRef({ sendMotor: (l: number, r: number) => {}, trackTarget: null as { label: string; lastSeen: number } | null, setTrackTarget: (t: { label: string; lastSeen: number } | null) => {} });
 
   const sendMotor = useCallback((l: number, r: number) => {
     const h = headingRef.current;
@@ -172,6 +173,17 @@ export default function VisionPage() {
       fetch(`http://${ip}/cmd`, { method: 'POST', body: JSON.stringify({ leftMotor: l, rightMotor: r }) }).catch(() => {});
     }
   }, []);
+
+  // Init motorRef for AI control
+  motorRef.current = {
+    sendMotor,
+    trackTarget: trackTargetRef.current,
+    setTrackTarget: (t) => {
+      trackTargetRef.current = t;
+      trackLabelRef.current = t?.label || null;
+      setTrackInfo(t ? `🔒 ${t.label}` : "");
+    },
+  };
 
   // Keyboard
   const keysRef = useRef(new Set<string>());
@@ -1763,6 +1775,7 @@ const mqttDeviceIdRef = useRef("");
         trackInfoRef={trackInfoRef}
         scanStateRef={scanStateRef}
         aiBusyRef={aiBusyRef}
+        motorRef={motorRef}
       />
     </main>
   );

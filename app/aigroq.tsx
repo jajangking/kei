@@ -8,6 +8,11 @@ interface AIGroqProps {
   trackInfoRef: React.MutableRefObject<string>;
   scanStateRef: React.MutableRefObject<string>;
   aiBusyRef?: React.MutableRefObject<boolean>;
+  motorRef?: React.MutableRefObject<{
+    sendMotor: (l: number, r: number) => void;
+    trackTarget: { label: string; lastSeen: number } | null;
+    setTrackTarget: (t: { label: string; lastSeen: number } | null) => void;
+  }>;
 }
 
 interface ChatMsg {
@@ -27,7 +32,17 @@ const SYSTEM_PROMPT = `Lo adalah Kei, suara robot. Aturan:
 - Kalo cuma greeting, jawab salam aja.
 - HANYA omongin apa yang ADA di konteks — jangan ngarang.
 - Jawab 1-2 kalimat pendek.
-- Gak usah pake emoticon.`;
+- Gak usah pake emoticon.
+
+Lo BISA gerakin robot pake perintah di dalem kurung siku:
+[motor:L,R] — gerak motor kiri=L kanan=R (-255 sd 255)
+[track:label] — tracking objek
+[stop] — berhenti
+[scan] — cari objek dari awal
+Contoh: "Ada mobil di kanan, gua follow. [track:mobil]"
+Contoh: "Maju dikit. [motor:50,50]"
+
+Sesuain gaya bicara sama situasi.`;
 
 function buildContext(
   dets: { categories: { categoryName: string; score: number }[] }[],
@@ -48,7 +63,7 @@ function buildContext(
   return ctx;
 }
 
-export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef, scanStateRef, aiBusyRef }: AIGroqProps) {
+export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef, scanStateRef, aiBusyRef, motorRef }: AIGroqProps) {
   const [msgs, setMsgs] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
   const [listening, setListening] = useState(false);
@@ -60,6 +75,7 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
   const [showSettings, setShowSettings] = useState(false);
   const [thinking, setThinking] = useState(false);
   const [hasSpeech, setHasSpeech] = useState(false);
+  const [mood, setMood] = useState("chill");
 
   const msgsRef = useRef<ChatMsg[]>([]);
   const apiKeyRef = useRef("");
@@ -77,6 +93,7 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
   const lastReportRef = useRef(0);
   const lastStatusRef = useRef("");
   const cooldownRef = useRef(0);
+  const moodRef = useRef("chill");
 
   // Load API key
   useEffect(() => {
@@ -105,12 +122,42 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
     if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
   }, [msgs]);
 
-  const speak = useCallback((text: string) => {
+  const moodMap: Record<string, { icon: string; pitch: number; rate: number }> = {
+    excited: { icon: "🔥", pitch: 1.3, rate: 1.2 },
+    confused: { icon: "❓", pitch: 1.0, rate: 0.8 },
+    curious: { icon: "👀", pitch: 1.1, rate: 0.9 },
+    alert: { icon: "⚠️", pitch: 0.9, rate: 1.1 },
+    chill: { icon: "💤", pitch: 0.85, rate: 0.85 },
+  };
+
+  function updateMood() {
+    const info = trackInfoRef.current;
+    const scan = scanStateRef.current;
+    let m = "chill";
+    if (info.includes("✅") || info.includes("🔒")) m = "excited";
+    else if (info.startsWith("cari") || scan === "scanning") m = "curious";
+    else if (info.startsWith("hindar") || info.includes("stuck")) m = "alert";
+    else if (info.includes("gelap")) m = "alert";
+    else if (trackLostRef()) m = "confused";
+    if (m !== moodRef.current) {
+      moodRef.current = m;
+      setMood(m);
+    }
+  }
+
+  function trackLostRef() {
+    // true if trackInfo contains "cari" without 🔒
+    return trackInfoRef.current.startsWith("cari") || trackInfoRef.current.includes("ilang");
+  }
+
+  const speak = useCallback((text: string, m?: string) => {
+    const moodKey = m || moodRef.current || "chill";
+    const cfg = moodMap[moodKey] || moodMap.chill;
     window.speechSynthesis.cancel();
     const utter = new SpeechSynthesisUtterance(text);
     utter.lang = "id-ID";
-    utter.rate = 1.0;
-    utter.pitch = 1.0;
+    utter.rate = cfg.rate;
+    utter.pitch = cfg.pitch;
     utter.onstart = () => {
       speakingRef.current = true;
       setSpeaking(true);
@@ -165,10 +212,36 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
       // Strip thinking tags (closed or unclosed)
       reply = reply.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/<think>[\s\S]*$/g, '').trim();
       if (reply) {
-        const updated: ChatMsg[] = [...msgsRef.current, { role: "assistant", content: reply }];
-        msgsRef.current = updated;
-        setMsgs(updated);
-        if (reply) speak(reply);
+        // Parse commands from reply: [motor:l,r] [track:label] [stop] [scan]
+        const cmds = reply.match(/\[([^\]]+)\]/g) || [];
+        for (const raw of cmds) {
+          const cmd = raw.slice(1, -1);
+          if (cmd.startsWith("motor:")) {
+            const parts = cmd.slice(6).split(",");
+            if (parts.length === 2) {
+              const l = parseInt(parts[0]), r = parseInt(parts[1]);
+              if (!isNaN(l) && !isNaN(r) && motorRef?.current) {
+                motorRef.current.sendMotor(l, r);
+              }
+            }
+          } else if (cmd.startsWith("track:")) {
+            const label = cmd.slice(6).trim();
+            if (label && motorRef?.current) {
+              motorRef.current.setTrackTarget({ label, lastSeen: Date.now() });
+            }
+          } else if (cmd === "stop") {
+            motorRef?.current?.sendMotor(0, 0);
+          }
+        }
+        // Strip commands from displayed reply
+        reply = reply.replace(/\[([^\]]+)\]/g, '').trim();
+        if (reply) {
+          const updated: ChatMsg[] = [...msgsRef.current, { role: "assistant", content: reply }];
+          msgsRef.current = updated;
+          setMsgs(updated);
+          updateMood();
+          speak(reply, moodRef.current);
+        }
       }
     } catch (err: any) {
       const errMsg = err?.message || "unknown error";
@@ -217,6 +290,7 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
   useEffect(() => {
     const tick = () => {
       if (!apiKeyRef.current || speakingRef.current || convRef.current) return;
+      updateMood();
       const trackInfo = trackInfoRef.current;
       const scanState = scanStateRef.current;
       const dets = detectionsRef.current;
@@ -356,6 +430,7 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
         <div className="flex items-center gap-1.5">
           <div className={`size-1.5 rounded-full ${speaking ? "bg-green-400 animate-pulse" : "bg-zinc-600"}`} />
           <span className="text-[10px] font-mono text-zinc-400">Kei</span>
+          <span className="text-[9px]">{moodMap[mood]?.icon || ""}</span>
           {thinking && <span className="text-[8px] text-zinc-500 animate-pulse">ngomong...</span>}
           {hasSpeech && (
             <button onClick={() => { wakeWord ? stopWakeWord() : startWakeWord(); }}
