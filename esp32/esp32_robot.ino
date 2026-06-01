@@ -1,6 +1,5 @@
 #include <WiFi.h>
 #include <WebSocketsServer.h>
-#include <ArduinoJson.h>
 #include <ESPmDNS.h>
 #include <ArduinoOTA.h>
 #include <Preferences.h>
@@ -625,45 +624,62 @@ default:
 }
 
 // =======================
+// JSON HELPERS (no ArduinoJson)
+// =======================
+
+String jsonStr(String json, String key) {
+  int idx = json.indexOf("\"" + key + "\"");
+  if (idx < 0) return "";
+  int colon = json.indexOf(':', idx);
+  if (colon < 0) return "";
+  int start = colon + 1;
+  while (start < (int)json.length() && json[start] == ' ') start++;
+  if (start >= (int)json.length()) return "";
+  if (json[start] == '"') {
+    start++;
+    int end = json.indexOf('"', start);
+    if (end < 0) return "";
+    return json.substring(start, end);
+  }
+  int end = start;
+  while (end < (int)json.length() && json[end] != ',' && json[end] != '}' && json[end] != ' ') end++;
+  return json.substring(start, end);
+}
+
+int jsonInt(String json, String key, int def = 0) {
+  String v = jsonStr(json, key);
+  if (v == "") return def;
+  return v.toInt();
+}
+
+bool jsonBool(String json, String key) {
+  String v = jsonStr(json, key);
+  return v == "true";
+}
+
+bool jsonHas(String json, String key) {
+  return json.indexOf("\"" + key + "\"") >= 0;
+}
+
+// =======================
 // HANDLE JSON
 // =======================
 
 void handleMessage(String msg) {
 
-DynamicJsonDocument doc(512);
-
-DeserializationError err = deserializeJson(doc, msg);
-
-if (err) {
-
-    Serial.print("JSON Error: ");
-
-    Serial.println(err.c_str());
-
-    return;
-}
-
 Serial.print("Received: ");
-
-serializeJson(doc, Serial);
-
-Serial.println();
+Serial.println(msg);
 
 // =======================
 // EMERGENCY
 // =======================
 
-if (doc["emergency"].is<bool>()) {
-
-    emergencyStop = doc["emergency"];
-
+if (jsonHas(msg, "emergency")) {
+    emergencyStop = jsonBool(msg, "emergency");
     if (emergencyStop) {
-
         Serial.println("EMERGENCY STOP");
-
         stopMotors();
     }
-
     return;
 }
 
@@ -671,18 +687,8 @@ if (doc["emergency"].is<bool>()) {
 // PING
 // =======================
 
-if (doc["ping"] == true) {
-
-    DynamicJsonDocument pong(128);
-
-    pong["pong"] = true;
-
-    String reply;
-
-    serializeJson(pong, reply);
-
-    webSocket.broadcastTXT(reply);
-
+if (jsonBool(msg, "ping")) {
+    webSocket.broadcastTXT("{\"pong\":true}");
     return;
 }
 
@@ -692,68 +698,45 @@ if (doc["ping"] == true) {
 
 bool configChanged = false;
 
-if (doc["maxSpeed"].is<int>()) {
-
-    maxSpeed = constrain(doc["maxSpeed"], 0, 255);
-
+if (jsonHas(msg, "maxSpeed")) {
+    maxSpeed = constrain(jsonInt(msg, "maxSpeed"), 0, 255);
     configChanged = true;
 }
 
-if (doc["rampRate"].is<int>()) {
-
-    rampRate = constrain(doc["rampRate"], 1, 50);
-
+if (jsonHas(msg, "rampRate")) {
+    rampRate = constrain(jsonInt(msg, "rampRate"), 1, 50);
     configChanged = true;
 }
 
-if (doc["motorTimeout"].is<int>()) {
-
-    motorTimeout = max(doc["motorTimeout"].as<int>(), 0);
-
+if (jsonHas(msg, "motorTimeout")) {
+    motorTimeout = max(jsonInt(msg, "motorTimeout"), 0);
     configChanged = true;
 }
 
-if (doc["powerSave"].is<bool>()) {
-
-    powerSave = doc["powerSave"];
-
+if (jsonHas(msg, "powerSave")) {
+    powerSave = jsonBool(msg, "powerSave");
     applyPowerSaveSafe();
-
     configChanged = true;
 }
 
-if (doc["speedLimitEnabled"].is<bool>()) {
-
-    speedLimitEnabled = doc["speedLimitEnabled"];
-
+if (jsonHas(msg, "speedLimitEnabled")) {
+    speedLimitEnabled = jsonBool(msg, "speedLimitEnabled");
     configChanged = true;
 }
 
-if (doc["speedLimit"].is<int>()) {
-
-    speedLimit = constrain(doc["speedLimit"], 0, 255);
-
+if (jsonHas(msg, "speedLimit")) {
+    speedLimit = constrain(jsonInt(msg, "speedLimit"), 0, 255);
     configChanged = true;
 }
 
 if (configChanged) {
-
-    DynamicJsonDocument conf(256);
-
-    conf["config"] = true;
-    conf["maxSpeed"] = maxSpeed;
-    conf["rampRate"] = rampRate;
-    conf["motorTimeout"] = motorTimeout;
-    conf["powerSave"] = powerSave;
-    conf["speedLimitEnabled"] = speedLimitEnabled;
-    conf["speedLimit"] = speedLimit;
-
-    String reply;
-
-    serializeJson(conf, reply);
-
+    String reply = "{\"config\":true,\"maxSpeed\":" + String(maxSpeed) +
+      ",\"rampRate\":" + String(rampRate) +
+      ",\"motorTimeout\":" + String(motorTimeout) +
+      ",\"powerSave\":" + (powerSave ? "true" : "false") +
+      ",\"speedLimitEnabled\":" + (speedLimitEnabled ? "true" : "false") +
+      ",\"speedLimit\":" + String(speedLimit) + "}";
     webSocket.broadcastTXT(reply);
-
     return;
 }
 
@@ -761,13 +744,13 @@ if (configChanged) {
 // MQTT CONFIG
 // =======================
 
-if (doc["mqttBroker"].is<String>()) {
-    String broker = doc["mqttBroker"];
-    int port = 8883; // ESP selalu pakai TLS/TCP (MQTTS), bukan WSS
-    String user = doc["mqttUser"] | "";
-    String pass = doc["mqttPass"] | "";
-    String prefix = doc["mqttPrefix"] | "kei/robot";
-    bool enabled = doc["mqttEnabled"] | true;
+if (jsonHas(msg, "mqttBroker")) {
+    String broker = jsonStr(msg, "mqttBroker");
+    int port = 8883;
+    String user = jsonHas(msg, "mqttUser") ? jsonStr(msg, "mqttUser") : "";
+    String pass = jsonHas(msg, "mqttPass") ? jsonStr(msg, "mqttPass") : "";
+    String prefix = jsonHas(msg, "mqttPrefix") ? jsonStr(msg, "mqttPrefix") : "kei/robot";
+    bool enabled = jsonHas(msg, "mqttEnabled") ? jsonBool(msg, "mqttEnabled") : true;
 
     saveMqttConfig(broker, port, user, pass, prefix, enabled);
     if (enabled) {
@@ -776,26 +759,18 @@ if (doc["mqttBroker"].is<String>()) {
       connectMQTT();
     }
 
-    DynamicJsonDocument ack(128);
-    ack["mqttConfig"] = true;
-    ack["mqttBroker"] = broker;
-    ack["mqttPort"] = port;
-    ack["mqttEnabled"] = enabled;
-    String reply;
-    serializeJson(ack, reply);
+    String reply = "{\"mqttConfig\":true,\"mqttBroker\":\"" + broker +
+      "\",\"mqttPort\":" + String(port) +
+      ",\"mqttEnabled\":" + (enabled ? "true" : "false") + "}";
     webSocket.broadcastTXT(reply);
     return;
 }
 
-if (doc["mqttDisable"].is<bool>() && doc["mqttDisable"]) {
+if (jsonHas(msg, "mqttDisable") && jsonBool(msg, "mqttDisable")) {
     saveMqttConfig("", 8883, "", "", "kei/robot", false);
     mqttClient.disconnect();
     mqttEnabled = false;
-    DynamicJsonDocument ack(128);
-    ack["mqttConfig"] = false;
-    String reply;
-    serializeJson(ack, reply);
-    webSocket.broadcastTXT(reply);
+    webSocket.broadcastTXT("{\"mqttConfig\":false}");
     return;
 }
 
@@ -803,28 +778,17 @@ if (doc["mqttDisable"].is<bool>() && doc["mqttDisable"]) {
 // WIFI CONFIG
 // =======================
 
-if (doc["ssid"].is<String>() && doc["password"].is<String>()) {
-
-    String newSsid = doc["ssid"];
-    String newPass = doc["password"];
+if (jsonHas(msg, "ssid") && jsonHas(msg, "password")) {
+    String newSsid = jsonStr(msg, "ssid");
+    String newPass = jsonStr(msg, "password");
 
     saveWiFiConfig(newSsid, newPass);
 
-    DynamicJsonDocument ack(128);
-
-    ack["wifiConfig"] = true;
-    ack["ssid"] = newSsid;
-
-    String reply;
-
-    serializeJson(ack, reply);
-
+    String reply = "{\"wifiConfig\":true,\"ssid\":\"" + newSsid + "\"}";
     webSocket.broadcastTXT(reply);
 
     delay(100);
-
     ESP.restart();
-
     return;
 }
 
@@ -832,22 +796,16 @@ if (doc["ssid"].is<String>() && doc["password"].is<String>()) {
 // MOTOR CONTROL
 // =======================
 
-if (doc["leftMotor"].is<int>() ||
-    doc["rightMotor"].is<int>()) {
-
+if (jsonHas(msg, "leftMotor") || jsonHas(msg, "rightMotor")) {
     if (emergencyStop) return;
 
-    int leftMotor = doc["leftMotor"] | 0;
-    int rightMotor = doc["rightMotor"] | 0;
+    int leftMotor = jsonHas(msg, "leftMotor") ? jsonInt(msg, "leftMotor") : 0;
+    int rightMotor = jsonHas(msg, "rightMotor") ? jsonInt(msg, "rightMotor") : 0;
 
     int cap = speedLimitEnabled ? speedLimit : maxSpeed;
 
-    targetLeftSpeed =
-        constrain(leftMotor, -cap, cap);
-
-    targetRightSpeed =
-        constrain(rightMotor, -cap, cap);
-
+    targetLeftSpeed = constrain(leftMotor, -cap, cap);
+    targetRightSpeed = constrain(rightMotor, -cap, cap);
     lastCommandTime = millis();
 }
 }
@@ -992,24 +950,21 @@ writeMotorB(0);
 String buildTelemetryJson() {
   String mode = emergencyStop ? "emergency" : "manual";
   int avgSpeed = (abs(currentLeftSpeed) + abs(currentRightSpeed)) / 2;
-  DynamicJsonDocument doc(256);
-  doc["rssi"] = WiFi.RSSI();
-  doc["heap"] = ESP.getFreeHeap();
-  doc["uptime"] = (millis() - startTime) / 1000;
-  doc["speed"] = avgSpeed;
-  doc["mode"] = mode;
-  doc["left"] = currentLeftSpeed;
-  doc["right"] = currentRightSpeed;
-  doc["powerSave"] = powerSave;
-  doc["emergency"] = emergencyStop;
-  doc["rampRate"] = rampRate;
-  doc["speedLimitEnabled"] = speedLimitEnabled;
-  doc["speedLimit"] = speedLimit;
-  doc["ip"] = WiFi.localIP().toString();
-  doc["ssid"] = wifiSsid;
-  doc["mqtt"] = mqttEnabled && mqttClient.connected();
-  String json;
-  serializeJson(doc, json);
+  String json = "{\"rssi\":" + String(WiFi.RSSI()) +
+    ",\"heap\":" + String(ESP.getFreeHeap()) +
+    ",\"uptime\":" + String((millis() - startTime) / 1000) +
+    ",\"speed\":" + String(avgSpeed) +
+    ",\"mode\":\"" + mode + "\"" +
+    ",\"left\":" + String(currentLeftSpeed) +
+    ",\"right\":" + String(currentRightSpeed) +
+    ",\"powerSave\":" + (powerSave ? "true" : "false") +
+    ",\"emergency\":" + (emergencyStop ? "true" : "false") +
+    ",\"rampRate\":" + String(rampRate) +
+    ",\"speedLimitEnabled\":" + (speedLimitEnabled ? "true" : "false") +
+    ",\"speedLimit\":" + String(speedLimit) +
+    ",\"ip\":\"" + WiFi.localIP().toString() + "\"" +
+    ",\"ssid\":\"" + wifiSsid + "\"" +
+    ",\"mqtt\":" + ((mqttEnabled && mqttClient.connected()) ? "true" : "false") + "}";
   return json;
 }
 
