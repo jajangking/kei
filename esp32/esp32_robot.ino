@@ -1,5 +1,6 @@
 #include <WiFi.h>
 #include <WebSocketsServer.h>
+#include <WebServer.h>
 #include <ArduinoJson.h>
 #include <ESPmDNS.h>
 #include <ArduinoOTA.h>
@@ -15,12 +16,15 @@ String wifiSsid = "STARLINK";
 String wifiPass = "12345678910";
 
 #define WIFI_TIMEOUT 15000
+#define WIFI_MAX_POWER WIFI_POWER_19_5dBm
 
 // =======================
 // WEBSOCKET
 // =======================
 
 WebSocketsServer webSocket(81);
+
+WebServer httpServer(80);
 
 // =======================
 // TB6612FNG PINS
@@ -367,6 +371,28 @@ if (WiFi.status() == WL_CONNECTED) {
 }
 
 // =======================
+// HTTP HANDLERS
+// =======================
+
+void handleRoot() {
+
+JsonDocument res;
+
+res["name"] = "Kei Robot";
+res["ip"] = WiFi.localIP().toString();
+res["rssi"] = WiFi.RSSI();
+res["uptime"] = (millis() - startTime) / 1000;
+
+String body;
+
+serializeJson(res, body);
+
+httpServer.sendHeader("Access-Control-Allow-Origin", "*");
+
+httpServer.send(200, "application/json", body);
+}
+
+// =======================
 // SETUP
 // =======================
 
@@ -425,6 +451,23 @@ webSocket.onEvent(webSocketEvent);
 
 Serial.println("WebSocket Started");
 
+// HTTP
+
+httpServer.on("/", handleRoot);
+
+httpServer.on("/cmd", HTTP_POST, []() {
+    if (httpServer.hasArg("plain")) {
+        handleMessage(httpServer.arg("plain"));
+        httpServer.send(200, "text/plain", "ok");
+    } else {
+        httpServer.send(400, "text/plain", "no body");
+    }
+});
+
+httpServer.begin();
+
+Serial.println("HTTP Started");
+
 // OTA
 
 ArduinoOTA.onStart([]() { stopMotors(); Serial.println("OTA Start"); });
@@ -458,6 +501,8 @@ applyPowerSave();
 void loop() {
 
 ArduinoOTA.handle();
+
+httpServer.handleClient();
 
 webSocket.loop();
 
@@ -971,6 +1016,8 @@ else {
 }
 }
 
+// =======================
+// STOP MOTORS
 // =======================
 
 void stopMotors() {
