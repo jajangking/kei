@@ -422,29 +422,129 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
     };
     autoIvRef.current = setInterval(drive, 10000);
 
-    // Fast safety loop — obstacle avoidance tiap 500ms
-    let dodgeTimer = 0;
+    // Smart obstacle avoidance — scan 360° cari jalan bersih
+    const SCAN_SECTORS = 6;
+    let scanState = 'idle';
+    let scanSector = 0;
+    let scanMap: { cnt: number }[] = [];
+    let scanTimer = 0;
+    let chosenDir = 0;
+    let scanCooldown = 0;
+
     const safety = () => {
       if (!autoRef.current || !apiKeyRef.current) return;
-      // Cooldown dodge biar gak mundur terus
-      if (dodgeTimer > 0) { dodgeTimer--; return; }
-      const dets = detectionsRef.current;
-      const close = dets.find(d => {
-        const b = d.boundingBox!;
-        const vw = 640, vh = 480;
-        const cx = (b.originX + b.width / 2) / vw;
-        const area = (b.width / vw) * (b.height / vh);
-        return area > 0.1 && cx > 0.1 && cx < 0.9;
-      });
-      if (close) {
-        const b = close.boundingBox!;
-        const cx = (b.originX + b.width / 2) / 640;
-        // Spin di tempat menjauh dari obstacle
-        const spin = cx < 0.5 ? 180 : -180;
-        motorRef?.current?.sendMotor(spin, -spin);
-        trackInfoRef.current = "🤖 hindar!";
-        // Cooldown 3 detik (500ms * 6)
-        dodgeTimer = 6;
+
+      if (scanCooldown > 0) { scanCooldown--; return; }
+
+      if (scanState === 'idle') {
+        const dets = detectionsRef.current;
+        const close = dets.find(d => {
+          const b = d.boundingBox!;
+          const vw = 640, vh = 480;
+          const cx = (b.originX + b.width / 2) / vw;
+          const area = (b.width / vw) * (b.height / vh);
+          return area > 0.1 && cx > 0.1 && cx < 0.9;
+        });
+        if (close) {
+          motorRef?.current?.sendMotor(0, 0);
+          scanState = 'scan_stop';
+          scanSector = 0;
+          scanMap = Array.from({length: SCAN_SECTORS}, () => ({cnt: 0}));
+          scanTimer = 0;
+          trackInfoRef.current = "🤖 cari jalan...";
+        }
+        return;
+      }
+
+      if (scanState === 'scan_stop') {
+        scanTimer++;
+        // Stop 2 tick (1s) — biar deteksi stabil
+        if (scanTimer >= 2) {
+          const dets = detectionsRef.current;
+          const vw = 640, vh = 480;
+          let obstacleCount = 0;
+          for (const d of dets) {
+            const b = d.boundingBox!;
+            const area = (b.width / vw) * (b.height / vh);
+            if (area > 0.05) obstacleCount++;
+          }
+          if (scanSector < SCAN_SECTORS && scanMap[scanSector]) {
+            scanMap[scanSector].cnt = obstacleCount;
+          }
+          scanSector++;
+          scanTimer = 0;
+          if (scanSector >= SCAN_SECTORS) {
+            scanState = 'scan_pick';
+          } else {
+            scanState = 'scan_turn';
+          }
+        }
+        return;
+      }
+
+      if (scanState === 'scan_turn') {
+        scanTimer++;
+        motorRef?.current?.sendMotor(-170, 170);
+        // Turn 2 tick (1s)
+        if (scanTimer >= 2) {
+          motorRef?.current?.sendMotor(0, 0);
+          scanTimer = 0;
+          scanState = 'scan_stop';
+        }
+        return;
+      }
+
+      if (scanState === 'scan_pick') {
+        // Pilih sektor paling bersih (paling dikit obstacle)
+        let best = 0, bestCnt = Infinity;
+        for (let i = 0; i < SCAN_SECTORS; i++) {
+          if (scanMap[i].cnt < bestCnt) {
+            bestCnt = scanMap[i].cnt;
+            best = i;
+          }
+        }
+        // Kalo semua penuh, pilih sektor yang udah dilewatin
+        if (bestCnt > 5) best = SCAN_SECTORS / 2;
+        chosenDir = best;
+        scanState = 'scan_rotato';
+        scanTimer = 0;
+        trackInfoRef.current = `🤖 arah ${best}`;
+        return;
+      }
+
+      if (scanState === 'scan_rotato') {
+        scanTimer++;
+        // Rotasi berlawanan arah buat balik ke sektor yang dipilih
+        const lastSector = SCAN_SECTORS - 1;
+        const dstCCW = (chosenDir - lastSector + SCAN_SECTORS) % SCAN_SECTORS;
+        const dstCW = (lastSector - chosenDir + SCAN_SECTORS) % SCAN_SECTORS;
+        const reverse = dstCCW < dstCW;
+        const needTurns = Math.min(dstCCW, dstCW);
+        if (scanTimer <= needTurns * 2) {
+          if (reverse) {
+            motorRef?.current?.sendMotor(170, -170);
+          } else {
+            motorRef?.current?.sendMotor(-170, 170);
+          }
+        } else {
+          motorRef?.current?.sendMotor(0, 0);
+          scanState = 'scan_go';
+          scanTimer = 0;
+        }
+        return;
+      }
+
+      if (scanState === 'scan_go') {
+        scanTimer++;
+        motorRef?.current?.sendMotor(180, 180);
+        // Maju 1.5 detik
+        if (scanTimer >= 3) {
+          motorRef?.current?.sendMotor(0, 0);
+          scanState = 'idle';
+          scanCooldown = 4; // cooldown 2 detik sebelum scan ulang
+          if (!trackInfoRef.current?.startsWith("🤖")) trackInfoRef.current = "";
+          else trackInfoRef.current = "🤖 auto...";
+        }
         return;
       }
     };
