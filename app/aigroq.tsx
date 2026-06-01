@@ -4,11 +4,13 @@ import { useRef, useEffect, useState, useCallback } from "react";
 
 interface AIGroqProps {
   recognizedFaceRef: React.MutableRefObject<{ name: string } | null>;
-  detectionsRef: React.MutableRefObject<{ categories: { categoryName: string; score: number }[] }[]>;
+  detectionsRef: React.MutableRefObject<{ categories: { categoryName: string; score: number }[]; boundingBox?: { originX: number; originY: number; width: number; height: number } }[]>;
   trackInfoRef: React.MutableRefObject<string>;
   scanStateRef: React.MutableRefObject<string>;
   aiBusyRef?: React.MutableRefObject<boolean>;
   headingRef?: React.MutableRefObject<number>;
+  leftMotor?: number;
+  rightMotor?: number;
   motorRef?: React.MutableRefObject<{
     sendMotor: (l: number, r: number) => void;
     trackTarget: { label: string; lastSeen: number } | null;
@@ -43,15 +45,21 @@ Lo BISA gerakin robot pake perintah di dalem kurung siku:
 Contoh: "Ada mobil di kanan, gua follow. [track:mobil]"
 Contoh: "Maju dikit. [motor:50,50]"
 
-Kalo lagi mode autonomous, lo yang mutusin mau ke mana. Kirim perintah gerak tiap respon.
+Kalo lagi mode autonomous, lo yang mutusin. Tapi aturan SAFETY:
+- Kalo gelap / gak liat apa-apa — JANGAN maju. MUNDUR atau muter.
+- Kalo ada objek gede di depan — minggir, jangan nayok.
+- Jangan monoton — kadang maju, kadang mundur, kadang puter, kadang tracking, kadang scan.
+- Kalo liat objek menarik, tracking aja.
 Sesuain gaya bicara sama situasi.`;
 
 function buildContext(
-  dets: { categories: { categoryName: string; score: number }[] }[],
+  dets: AIGroqProps["detectionsRef"]["current"],
   face: { name: string } | null,
   trackInfo: string,
   scanState: string,
   heading?: number,
+  leftMotor?: number,
+  rightMotor?: number,
 ): string {
   let ctx = "";
   if (dets.length > 0) {
@@ -64,10 +72,17 @@ function buildContext(
   if (trackInfo) ctx += `lagi ${trackInfo}. `;
   if (scanState !== "idle") ctx += `(state ${scanState}). `;
   if (heading !== undefined) ctx += `arah ${((heading * 180 / Math.PI) % 360).toFixed(0)}°. `;
+  if (leftMotor !== undefined && rightMotor !== undefined) {
+    if (leftMotor !== 0 || rightMotor !== 0) {
+      ctx += `motor kiri=${leftMotor} kanan=${rightMotor}. `;
+    } else {
+      ctx += "motor mati. ";
+    }
+  }
   return ctx;
 }
 
-export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef, scanStateRef, aiBusyRef, headingRef, motorRef }: AIGroqProps) {
+export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef, scanStateRef, aiBusyRef, headingRef, leftMotor, rightMotor, motorRef }: AIGroqProps) {
   const [msgs, setMsgs] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
   const [listening, setListening] = useState(false);
@@ -279,7 +294,7 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
   // Auto context update + proactive chat
   useEffect(() => {
     contextIvRef.current = setInterval(() => {
-      const ctx = buildContext(detectionsRef.current, recognizedFaceRef.current, trackInfoRef.current, scanStateRef.current);
+    const ctx = buildContext(detectionsRef.current, recognizedFaceRef.current, trackInfoRef.current, scanStateRef.current, undefined, leftMotor, rightMotor);
       if (ctx === lastContextRef.current) return;
       lastContextRef.current = ctx;
 
@@ -332,15 +347,52 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
     if (!auto) return;
     autoRef.current = true;
     trackInfoRef.current = "🤖 auto...";
+    const prompts = [
+      "Lagi jalan sendiri. Mau ke mana?",
+      "Cari sesuatu yang menarik.",
+      "Jelajah sekeliling, mutusin gerak.",
+      "Lihat situasi, mau ke arah mana?",
+    ];
+    let pi = 0;
 
     const drive = () => {
       if (!autoRef.current || !apiKeyRef.current || speakingRef.current) return;
-      const ctx = buildContext(detectionsRef.current, recognizedFaceRef.current, trackInfoRef.current, scanStateRef.current, headingRef?.current);
-      if (!ctx.includes("gak liat apa-apa")) {
-        // If tracking is active, let it run — no need to ask AI
-        if (trackInfoRef.current.includes("🔒") || trackInfoRef.current.includes("✅")) return;
+      const dets = detectionsRef.current;
+      const info = trackInfoRef.current;
+      const scan = scanStateRef.current;
+
+      // Safety 1: dark → mundur, jangan tanya AI
+      if (info.includes("gelap")) {
+        motorRef?.current?.sendMotor(-60, -60);
+        autoLastCmdRef.current = Date.now();
+        if (!info.includes("🤖")) trackInfoRef.current = "🤖 gelap mundur...";
+        return;
       }
-      sendToGroq("Lagi jalan sendiri. Mau ke mana? Kasih perintah gerak.", true);
+      // Safety 2: obstacle besar di tengah → hindar dulu
+      const big = dets.find(d => {
+        const b = d.boundingBox!;
+        const vw = 640, vh = 480;
+        const cx = (b.originX + b.width / 2) / vw;
+        const area = (b.width / vw) * (b.height / vh);
+        return area > 0.3 && cx > 0.2 && cx < 0.8;
+      });
+      if (big && !info.includes("🔒") && !info.includes("✅")) {
+        const b = big.boundingBox!;
+        const vw = 640;
+        const cx = (b.originX + b.width / 2) / vw;
+        const dir = cx < 0.5 ? 80 : -80;
+        motorRef?.current?.sendMotor(dir, -dir);
+        autoLastCmdRef.current = Date.now();
+        if (!info.includes("🤖")) trackInfoRef.current = "🤖 hindar...";
+        return;
+      }
+      // If tracking active, let it run
+      if (info.includes("🔒") || info.includes("✅")) return;
+
+      const ctx = buildContext(dets, recognizedFaceRef.current, info, scan, headingRef?.current, leftMotor, rightMotor);
+      const prompt = prompts[pi % prompts.length];
+      pi++;
+      sendToGroq(prompt, true);
     };
     autoIvRef.current = setInterval(drive, 4000);
     // Safety: stop if no command for 8s

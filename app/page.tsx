@@ -176,7 +176,11 @@ export default function VisionPage() {
 
   // Init motorRef for AI control
   motorRef.current = {
-    sendMotor,
+    sendMotor: (l, r) => {
+      sendMotor(l, r);
+      setLeftMotor(l);
+      setRightMotor(r);
+    },
     trackTarget: trackTargetRef.current,
     setTrackTarget: (t) => {
       trackTargetRef.current = t;
@@ -1775,6 +1779,8 @@ const mqttDeviceIdRef = useRef("");
         trackInfoRef={trackInfoRef}
         scanStateRef={scanStateRef}
         headingRef={headingRef}
+        leftMotor={leftMotor}
+        rightMotor={rightMotor}
         aiBusyRef={aiBusyRef}
         motorRef={motorRef}
       />
