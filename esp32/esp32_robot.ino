@@ -332,7 +332,7 @@ WiFi.setSleep(WIFI_PS_NONE);
 
 WiFi.setAutoReconnect(true);
 
-WiFi.setTxPower(WIFI_MAX_POWER);
+WiFi.setTxPower(WIFI_POWER_19_5dBm);
 
 WiFi.begin(wifiSsid.c_str(), wifiPass.c_str());
 
