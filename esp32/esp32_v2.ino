@@ -1120,6 +1120,8 @@ void rampMotors() {
 void writeMotorA(int speed) {
 
   speed = constrain(speed, -255, 255);
+  if (speed > 0 && speed < 50) speed = 50;
+  else if (speed < 0 && speed > -50) speed = -50;
 
   if (speed > 0) {
 
@@ -1151,6 +1153,8 @@ void writeMotorA(int speed) {
 void writeMotorB(int speed) {
 
   speed = constrain(speed, -255, 255);
+  if (speed > 0 && speed < 50) speed = 50;
+  else if (speed < 0 && speed > -50) speed = -50;
 
   if (speed > 0) {
 

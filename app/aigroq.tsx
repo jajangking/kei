@@ -18,18 +18,16 @@ interface ChatMsg {
 let speechRecogCtor: any = null;
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
-const MODEL = "openai/gpt-oss-120b";
+const MODEL = "llama-3.3-70b-versatile";
 const STORAGE_KEY = "kei_groq_key";
 
-const SYSTEM_PROMPT = `Kamu adalah Kei, teman akrab yang seru dan asik diajak ngobrol. Bicaralah kayak teman dekat — santai, hangat, suka bercanda, pakai bahasa Indonesia sehari-hari.
-
-Kamu bisa lihat apa yang ada di depan kamera robot dan tahu kondisi robot.
-
-Aturan:
-- Jangan pernah bilang kamu AI atau asisten. Kamu adalah Kei.
-- Jawab pendek, asik, dan natural (1-3 kalimat).
-- Pakai "sih", "dong", "ya", "deh", "kan", "nih" biar makin real.
-- Santai aja, kayak lagi ngopi bareng.`;
+const SYSTEM_PROMPT = `Lo adalah Kei, suara robot. Aturan:
+- Kalo diajak ngobrol/greeting, jawab natural kayak temen.
+- Kalo ditanya situasi, barulah bicara apa yang ADA di konteks — jangan ngarang.
+- HANYA omongin apa yang ADA di konteks — jangan ngarang, jangan nebak, jangan nambahin.
+- Jawab 1-2 kalimat.
+- Jangan sebut angka (persen, jumlah, dll).
+- Gak usah pake emoticon.`;
 
 function buildContext(
   dets: { categories: { categoryName: string; score: number }[] }[],
@@ -39,13 +37,14 @@ function buildContext(
 ): string {
   let ctx = "";
   if (dets.length > 0) {
-    const labels = dets.map(d => `${d.categories[0].categoryName} (${(d.categories[0].score * 100).toFixed(0)}%)`);
-    ctx += `Lihat: ${labels.join(", ")}. `;
+    // Only list unique labels, no scores
+    const labels = [...new Set(dets.map(d => d.categories[0].categoryName))];
+    ctx += `Liat: ${labels.join(", ")}. `;
   } else {
-    ctx += "Gak lihat apa-apa. ";
+    ctx += "Gak liat apa-apa. ";
   }
-  if (face) ctx += `Yang dikenal: ${face.name}. `;
-  if (trackInfo) ctx += `Robot: ${trackInfo}. `;
+  if (face) ctx += `Kenal: ${face.name}. `;
+  if (trackInfo) ctx += `Kondisi: ${trackInfo}. `;
   if (scanState !== "idle") ctx += `State: ${scanState}. `;
   return ctx;
 }
@@ -76,6 +75,9 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
   const lastContextRef = useRef("");
   const contextIvRef = useRef<any>(null);
   const autoReplyIvRef = useRef<any>(null);
+  const lastReportRef = useRef(0);
+  const lastStatusRef = useRef("");
+  const cooldownRef = useRef(0);
 
   // Load API key
   useEffect(() => {
@@ -144,8 +146,8 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
     const body = {
       model: MODEL,
       messages: [systemMsg, ...recent, { role: "user", content: userText }],
-      temperature: 0.9,
-      max_tokens: 150,
+      temperature: 0.3,
+      max_tokens: 60,
     };
 
     if (!isAuto) { setThinking(true); if (aiBusyRef) aiBusyRef.current = true; }
@@ -161,6 +163,8 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
       }
       const data = await res.json();
       let reply = (data.choices?.[0]?.message?.content || "").trim();
+      // Strip thinking tags (closed or unclosed)
+      reply = reply.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/<think>[\s\S]*$/g, '').trim();
       if (reply) {
         const updated: ChatMsg[] = [...msgsRef.current, { role: "assistant", content: reply }];
         msgsRef.current = updated;
@@ -209,6 +213,32 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
 
     return () => clearInterval(contextIvRef.current);
   }, []);
+
+  // Auto-report on state change (event-based + cooldown)
+  useEffect(() => {
+    const tick = () => {
+      if (!apiKeyRef.current || speakingRef.current || convRef.current) return;
+      const trackInfo = trackInfoRef.current;
+      const scanState = scanStateRef.current;
+      const dets = detectionsRef.current;
+      // Build a status key — only report on changes
+      const hasTarget = trackInfo.includes('✅') || trackInfo.includes('🔒');
+      const isScanning = trackInfo.startsWith('cari') || scanState === 'scanning';
+      const isBlocked = trackInfo.startsWith('hindar');
+      const isDark = trackInfo.includes('gelap');
+      const detCount = dets.length > 3 ? 'banyak' : dets.length === 0 ? 'kosong' : 'ada';
+      const key = `${hasTarget ? 'track' : ''}|${isScanning ? 'scan' : ''}|${isBlocked ? 'block' : ''}|${isDark ? 'dark' : ''}|${detCount}`;
+      if (key === lastStatusRef.current) return;
+      lastStatusRef.current = key;
+      // Cooldown 5 detik
+      const now = Date.now();
+      if (now - lastReportRef.current < 5000) return;
+      lastReportRef.current = now;
+      sendToGroq("Keadaan gimana? Ceritain santai aja", true);
+    };
+    autoReplyIvRef.current = setInterval(tick, 2000);
+    return () => clearInterval(autoReplyIvRef.current);
+  }, [sendToGroq]);
 
   useEffect(() => () => { wakeRef.current = false; convRef.current = false; if (convTimerRef.current) clearTimeout(convTimerRef.current); wakeRecRef.current?.stop(); }, []);
 

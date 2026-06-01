@@ -99,11 +99,13 @@ export default function VisionPage() {
   const trackTargetRef = useRef<{ label: string; lastSeen: number } | null>(null);
   const trackLabelRef = useRef<string | null>(null);
   const trackLostRef = useRef(0);
+  const trackSmoothRef = useRef({ l: 0, r: 0 });
+  const lastSeenPosRef = useRef({ cx: 0.5, cy: 0.5 });
   const persistenceRef = useRef<Map<string, number[]>>(new Map());
-  const HYST_ACQUIRE = 0.30;
-  const HYST_RELEASE = 0.15;
-  const PERSIST_FRAMES = 5;
-  const PERSIST_MIN = 2;
+  const HYST_ACQUIRE = 0.25;
+  const HYST_RELEASE = 0.05;
+  const PERSIST_FRAMES = 8;
+  const PERSIST_MIN = 3;
   const searchPhaseRef = useRef(0);
   const searchTimerRef = useRef(0);
   const [pickerTargets, setPickerTargets] = useState<string[]>([]);
@@ -141,13 +143,13 @@ export default function VisionPage() {
     const diff = Math.abs(l - r);
     const sum = Math.abs(l + r);
     if (diff > 30 && sum < 80) {
-      headingRef.current += (r - l) / 510 * 0.06;
+      headingRef.current += (l - r) / 510 * 0.06;
     } else if (sum > 30 && diff < 80) {
       const avg = (l + r) / 510;
       p.x += Math.sin(h) * avg * 2;
       p.y -= Math.cos(h) * avg * 2;
     } else if (diff > 30 && sum > 30) {
-      headingRef.current += (r - l) / 510 * 0.03;
+      headingRef.current += (l - r) / 510 * 0.03;
       const avg = (l + r) / 510;
       p.x += Math.sin(h) * avg * 1.5;
       p.y -= Math.cos(h) * avg * 1.5;
@@ -988,7 +990,7 @@ const mqttDeviceIdRef = useRef("");
       const box = d.boundingBox!;
       const area = (box.width / vw) * (box.height / vh);
       const cx = (box.originX + box.width / 2) / vw;
-      return area > 0.25 && cx > 0.2 && cx < 0.8;
+      return area > 0.35 && cx > 0.2 && cx < 0.8;
     });
 
     // Update telemetry map with persistent object positions
@@ -1040,7 +1042,8 @@ const mqttDeviceIdRef = useRef("");
     const target = trackTargetRef.current;
 
     if (target) {
-      let found: { cx: number; cy: number; area: number; box: Detection["boundingBox"] } | null = null;
+      // Try matching by label first
+      let found: { cx: number; cy: number; area: number; label: string; box: Detection["boundingBox"] } | null = null;
       for (const d of stableDetections) {
         if (d.categories[0].categoryName !== target.label) continue;
         const box = d.boundingBox!;
@@ -1049,7 +1052,22 @@ const mqttDeviceIdRef = useRef("");
         const area = (box.width / vw) * (box.height / vh);
         if (area < 0.005) continue;
         if (!found || Math.hypot(cx - 0.5, cy - 0.5) < Math.hypot(found.cx - 0.5, found.cy - 0.5)) {
-          found = { cx, cy, area, box };
+          found = { cx, cy, area, label: target.label, box };
+        }
+      }
+      // If label not found, fallback to nearest detection by position
+      if (!found) {
+        const lp = lastSeenPosRef.current;
+        for (const d of stableDetections) {
+          const box = d.boundingBox!;
+          const cx = (box.originX + box.width / 2) / vw;
+          const cy = (box.originY + box.height / 2) / vh;
+          const area = (box.width / vw) * (box.height / vh);
+          if (area < 0.005) continue;
+          const dist = Math.hypot(cx - lp.cx, cy - lp.cy);
+          if (dist < 0.25 && (!found || dist < Math.hypot(found.cx - lp.cx, found.cy - lp.cy))) {
+            found = { cx, cy, area, label: d.categories[0].categoryName, box };
+          }
         }
       }
 
@@ -1057,23 +1075,36 @@ const mqttDeviceIdRef = useRef("");
         trackLostRef.current = 0;
         scanStateRef.current = 'idle';
         trackTargetRef.current = { ...target, lastSeen: Date.now() };
+        lastSeenPosRef.current = { cx: found.cx, cy: found.cy };
         setTrackInfo(`${target.label}`);
 
-        // Obstacle avoidance — if something big is in the way, swerve
+        // Obstacle influence — gentle nudge only, no hard swerve
         if (obstacle) {
           const obox = obstacle.boundingBox!;
           const ocx = (obox.originX + obox.width / 2) / vw;
-          const steer = ocx < 0.5 ? 120 : -120;
-          setLeftMotor(steer); setRightMotor(-steer);
-          sendMotor(steer, -steer);
-          setTrackInfo(`hindar ${obstacle.categories[0].categoryName}`);
+          trackObject(found, ocx < 0.5 ? 40 : -40);
         } else {
-          trackObject(found);
+          trackObject(found, 0);
         }
       } else {
         trackLostRef.current++;
-        if (trackLostRef.current > 30) {
+        // Obstacle avoidance during scan
+        if (obstacle && !trackTargetRef.current) {
+          const obox = obstacle.boundingBox!;
+          const ocx = (obox.originX + obox.width / 2) / vw;
+          const steer = ocx < 0.5 ? 100 : -100;
+          setLeftMotor(steer); setRightMotor(-steer);
+          sendMotor(steer, -steer);
+          setTrackInfo(`hindar ${obstacle.categories[0].categoryName}`);
+        } else if (trackLostRef.current > 80) {
           trackTargetRef.current = null;
+          setTrackInfo(`cari ${trackLabelRef.current}...`);
+        } else if (trackLostRef.current > 15) {
+          const reacquireSpeed = 55;
+          // Turn toward last known position
+          const dir = lastSeenPosRef.current.cx < 0.5 ? 1 : -1;
+          setLeftMotor(-reacquireSpeed * dir); setRightMotor(reacquireSpeed * dir);
+          sendMotor(-reacquireSpeed * dir, reacquireSpeed * dir);
           setTrackInfo(`cari ${trackLabelRef.current}...`);
         }
       }
@@ -1098,8 +1129,10 @@ const mqttDeviceIdRef = useRef("");
         return;
       }
 
-      const SCAN_FRAMES = 60;
-      const SECTORS = 16;
+      const SCAN_FRAMES = 64;
+      const SECTORS = 8;
+      const MOVING_FRAMES = 6;
+      const LOOK_FRAMES = 2;
       const scan = scanStateRef.current;
 
       if (scan === 'idle') {
@@ -1112,21 +1145,31 @@ const mqttDeviceIdRef = useRef("");
 
       if (scan === 'scanning') {
         scanFrameRef.current++;
-        const speed = 80;
-        setLeftMotor(-speed); setRightMotor(speed);
-        sendMotor(-speed, speed);
+        const posInSector = (scanFrameRef.current - 1) % (MOVING_FRAMES + LOOK_FRAMES);
+        const shouldLook = posInSector >= MOVING_FRAMES;
+
+        if (shouldLook) {
+          setLeftMotor(0); setRightMotor(0);
+          sendMotor(0, 0);
+        } else {
+          const speed = 55;
+          setLeftMotor(-speed); setRightMotor(speed);
+          sendMotor(-speed, speed);
+        }
 
         const sector = Math.min(Math.floor((scanFrameRef.current / SCAN_FRAMES) * SECTORS), SECTORS - 1);
-        const sectorData = scanMapRef.current[sector];
-        for (const d of stableDetections) {
-          const box = d.boundingBox!;
-          const label = d.categories[0].categoryName;
-          const area = (box.width / vw) * (box.height / vh);
-          if (area > 0.005) {
-            sectorData.push({label, area});
-          }
-          if (trackLabelRef.current && label === trackLabelRef.current) {
-            scanTargetSeeRef.current = true;
+        if (!shouldLook) {
+          const sectorData = scanMapRef.current[sector];
+          for (const d of stableDetections) {
+            const box = d.boundingBox!;
+            const label = d.categories[0].categoryName;
+            const area = (box.width / vw) * (box.height / vh);
+            if (area > 0.005) {
+              sectorData.push({label, area});
+            }
+            if (trackLabelRef.current && label === trackLabelRef.current) {
+              scanTargetSeeRef.current = true;
+            }
           }
         }
 
@@ -1232,9 +1275,10 @@ const mqttDeviceIdRef = useRef("");
     }
   }
 
-  function trackObject(found: { cx: number; cy: number; area: number }) {
+  function trackObject(found: { cx: number; cy: number; area: number }, bias = 0) {
     const stopZone = 0.22;
     if (found.area > stopZone) {
+      trackSmoothRef.current = { l: 0, r: 0 };
       setLeftMotor(0); setRightMotor(0);
       sendMotor(0, 0);
       setTrackInfo(`🔒 ${trackLabelRef.current} ✅`);
@@ -1245,10 +1289,15 @@ const mqttDeviceIdRef = useRef("");
     const turn = errorX * kp;
     const speedT = found.area / stopZone;
     const baseSpeed = Math.round((1 - speedT) * 200);
-    let l = baseSpeed - Math.round(turn);
-    let r = baseSpeed + Math.round(turn);
+    let l = baseSpeed + Math.round(turn) + bias;
+    let r = baseSpeed - Math.round(turn) - bias;
     l = Math.max(-255, Math.min(255, l));
     r = Math.max(-255, Math.min(255, r));
+    const smooth = trackSmoothRef.current;
+    const alpha = 0.3;
+    l = Math.round(smooth.l + (l - smooth.l) * alpha);
+    r = Math.round(smooth.r + (r - smooth.r) * alpha);
+    trackSmoothRef.current = { l, r };
     setLeftMotor(l); setRightMotor(r);
     sendMotor(l, r);
   }
