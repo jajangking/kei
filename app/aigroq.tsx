@@ -423,8 +423,11 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
     autoIvRef.current = setInterval(drive, 10000);
 
     // Fast safety loop — obstacle avoidance tiap 500ms
+    let dodgeTimer = 0;
     const safety = () => {
       if (!autoRef.current || !apiKeyRef.current) return;
+      // Cooldown dodge biar gak mundur terus
+      if (dodgeTimer > 0) { dodgeTimer--; return; }
       const dets = detectionsRef.current;
       const close = dets.find(d => {
         const b = d.boundingBox!;
@@ -436,13 +439,12 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
       if (close) {
         const b = close.boundingBox!;
         const cx = (b.originX + b.width / 2) / 640;
-        // Mundur sambil belok menjauh
-        if (cx < 0.5) {
-          motorRef?.current?.sendMotor(-150, -180);
-        } else {
-          motorRef?.current?.sendMotor(-180, -150);
-        }
-        if (!trackInfoRef.current.includes("🤖")) trackInfoRef.current = "🤖 hindar cepat!";
+        // Spin di tempat menjauh dari obstacle
+        const spin = cx < 0.5 ? 180 : -180;
+        motorRef?.current?.sendMotor(spin, -spin);
+        trackInfoRef.current = "🤖 hindar!";
+        // Cooldown 3 detik (500ms * 6)
+        dodgeTimer = 6;
         return;
       }
     };
