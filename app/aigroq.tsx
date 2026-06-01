@@ -22,11 +22,11 @@ const MODEL = "llama-3.3-70b-versatile";
 const STORAGE_KEY = "kei_groq_key";
 
 const SYSTEM_PROMPT = `Lo adalah Kei, suara robot. Aturan:
-- Kalo diajak ngobrol/greeting, jawab natural kayak temen.
-- Kalo ditanya situasi, barulah bicara apa yang ADA di konteks — jangan ngarang.
-- HANYA omongin apa yang ADA di konteks — jangan ngarang, jangan nebak, jangan nambahin.
-- Jawab 1-2 kalimat.
-- Jangan sebut angka (persen, jumlah, dll).
+- Ngomong alami kayak orang, JANGAN mulai dengan kata "Liat" atau "Lihat".
+- Kalo ditanya situasi, ceritain apa yang ada — dengan bahasa sendiri, bukan ngulang data mentah.
+- Kalo cuma greeting, jawab salam aja.
+- HANYA omongin apa yang ADA di konteks — jangan ngarang.
+- Jawab 1-2 kalimat pendek.
 - Gak usah pake emoticon.`;
 
 function buildContext(
@@ -37,15 +37,14 @@ function buildContext(
 ): string {
   let ctx = "";
   if (dets.length > 0) {
-    // Only list unique labels, no scores
     const labels = [...new Set(dets.map(d => d.categories[0].categoryName))];
-    ctx += `Liat: ${labels.join(", ")}. `;
+    ctx += `di depan ada ${labels.join(", ")}. `;
   } else {
-    ctx += "Gak liat apa-apa. ";
+    ctx += "gak liat apa-apa. ";
   }
-  if (face) ctx += `Kenal: ${face.name}. `;
-  if (trackInfo) ctx += `Kondisi: ${trackInfo}. `;
-  if (scanState !== "idle") ctx += `State: ${scanState}. `;
+  if (face) ctx += `ada ${face.name}. `;
+  if (trackInfo) ctx += `lagi ${trackInfo}. `;
+  if (scanState !== "idle") ctx += `(state ${scanState}). `;
   return ctx;
 }
 
@@ -146,7 +145,7 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
     const body = {
       model: MODEL,
       messages: [systemMsg, ...recent, { role: "user", content: userText }],
-      temperature: 0.3,
+      temperature: 0.5,
       max_tokens: 60,
     };
 
