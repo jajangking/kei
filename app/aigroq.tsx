@@ -8,6 +8,7 @@ interface AIGroqProps {
   trackInfoRef: React.MutableRefObject<string>;
   scanStateRef: React.MutableRefObject<string>;
   aiBusyRef?: React.MutableRefObject<boolean>;
+  headingRef?: React.MutableRefObject<number>;
   motorRef?: React.MutableRefObject<{
     sendMotor: (l: number, r: number) => void;
     trackTarget: { label: string; lastSeen: number } | null;
@@ -42,6 +43,7 @@ Lo BISA gerakin robot pake perintah di dalem kurung siku:
 Contoh: "Ada mobil di kanan, gua follow. [track:mobil]"
 Contoh: "Maju dikit. [motor:50,50]"
 
+Kalo lagi mode autonomous, lo yang mutusin mau ke mana. Kirim perintah gerak tiap respon.
 Sesuain gaya bicara sama situasi.`;
 
 function buildContext(
@@ -49,6 +51,7 @@ function buildContext(
   face: { name: string } | null,
   trackInfo: string,
   scanState: string,
+  heading?: number,
 ): string {
   let ctx = "";
   if (dets.length > 0) {
@@ -60,10 +63,11 @@ function buildContext(
   if (face) ctx += `ada ${face.name}. `;
   if (trackInfo) ctx += `lagi ${trackInfo}. `;
   if (scanState !== "idle") ctx += `(state ${scanState}). `;
+  if (heading !== undefined) ctx += `arah ${((heading * 180 / Math.PI) % 360).toFixed(0)}°. `;
   return ctx;
 }
 
-export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef, scanStateRef, aiBusyRef, motorRef }: AIGroqProps) {
+export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef, scanStateRef, aiBusyRef, headingRef, motorRef }: AIGroqProps) {
   const [msgs, setMsgs] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
   const [listening, setListening] = useState(false);
@@ -76,6 +80,7 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
   const [thinking, setThinking] = useState(false);
   const [hasSpeech, setHasSpeech] = useState(false);
   const [mood, setMood] = useState("chill");
+  const [auto, setAuto] = useState(false);
 
   const msgsRef = useRef<ChatMsg[]>([]);
   const apiKeyRef = useRef("");
@@ -94,6 +99,10 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
   const lastStatusRef = useRef("");
   const cooldownRef = useRef(0);
   const moodRef = useRef("chill");
+  const autoRef = useRef(false);
+  const autoIvRef = useRef<any>(null);
+  const autoLastCmdRef = useRef(0);
+  const autoSafeIvRef = useRef<any>(null);
 
   // Load API key
   useEffect(() => {
@@ -222,15 +231,20 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
               const l = parseInt(parts[0]), r = parseInt(parts[1]);
               if (!isNaN(l) && !isNaN(r) && motorRef?.current) {
                 motorRef.current.sendMotor(l, r);
+                autoLastCmdRef.current = Date.now();
               }
             }
           } else if (cmd.startsWith("track:")) {
             const label = cmd.slice(6).trim();
             if (label && motorRef?.current) {
               motorRef.current.setTrackTarget({ label, lastSeen: Date.now() });
+              autoLastCmdRef.current = Date.now();
             }
           } else if (cmd === "stop") {
             motorRef?.current?.sendMotor(0, 0);
+            autoLastCmdRef.current = Date.now();
+          } else if (cmd === "auto") {
+            setAuto(true); autoRef.current = true;
           }
         }
         // Strip commands from displayed reply
@@ -312,6 +326,37 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
     autoReplyIvRef.current = setInterval(tick, 2000);
     return () => clearInterval(autoReplyIvRef.current);
   }, [sendToGroq]);
+
+  // Auto drive mode — AI decides movement every ~4s
+  useEffect(() => {
+    if (!auto) return;
+    autoRef.current = true;
+    trackInfoRef.current = "🤖 auto...";
+
+    const drive = () => {
+      if (!autoRef.current || !apiKeyRef.current || speakingRef.current) return;
+      const ctx = buildContext(detectionsRef.current, recognizedFaceRef.current, trackInfoRef.current, scanStateRef.current, headingRef?.current);
+      if (!ctx.includes("gak liat apa-apa")) {
+        // If tracking is active, let it run — no need to ask AI
+        if (trackInfoRef.current.includes("🔒") || trackInfoRef.current.includes("✅")) return;
+      }
+      sendToGroq("Lagi jalan sendiri. Mau ke mana? Kasih perintah gerak.", true);
+    };
+    autoIvRef.current = setInterval(drive, 4000);
+    // Safety: stop if no command for 8s
+    autoSafeIvRef.current = setInterval(() => {
+      if (autoRef.current && Date.now() - autoLastCmdRef.current > 8000) {
+        motorRef?.current?.sendMotor(0, 0);
+      }
+    }, 2000);
+    return () => {
+      clearInterval(autoIvRef.current);
+      clearInterval(autoSafeIvRef.current);
+      motorRef?.current?.sendMotor(0, 0);
+      autoRef.current = false;
+      if (!trackInfoRef.current?.startsWith("🤖")) trackInfoRef.current = "";
+    };
+  }, [auto]);
 
   useEffect(() => () => { wakeRef.current = false; convRef.current = false; if (convTimerRef.current) clearTimeout(convTimerRef.current); wakeRecRef.current?.stop(); }, []);
 
@@ -440,6 +485,10 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
               V
             </button>
           )}
+          <button onClick={() => { const nv = !autoRef.current; setAuto(nv); autoRef.current = nv; if (!nv) motorRef?.current?.sendMotor(0, 0); }}
+            className={`ml-1 size-4 rounded-full flex items-center justify-center text-[6px] font-mono font-bold border ${auto ? "bg-amber-500 border-amber-500 text-black animate-pulse" : "bg-transparent border-zinc-700 text-zinc-500"}`}>
+            A
+          </button>
         </div>
         <button onClick={() => setShowSettings(p => !p)}
           className="text-[9px] text-zinc-500 hover:text-zinc-300 font-mono">

@@ -1774,6 +1774,7 @@ const mqttDeviceIdRef = useRef("");
         detectionsRef={detectionsRef}
         trackInfoRef={trackInfoRef}
         scanStateRef={scanStateRef}
+        headingRef={headingRef}
         aiBusyRef={aiBusyRef}
         motorRef={motorRef}
       />
