@@ -26,7 +26,7 @@ interface ChatMsg {
 function clampMotor(v: number): number {
   if (v === 0) return 0;
   const abs = Math.abs(v);
-  if (abs < 90) return v > 0 ? 90 : -90;
+  if (abs < 100) return v > 0 ? 100 : -100;
   return v;
 }
 
