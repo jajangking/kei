@@ -25,7 +25,9 @@ interface ChatMsg {
 
 function clampMotor(v: number): number {
   if (v === 0) return 0;
-  return v > 0 ? 90 : -90;
+  const abs = Math.abs(v);
+  if (abs < 90) return v > 0 ? 90 : -90;
+  return v;
 }
 
 let speechRecogCtor: any = null;
