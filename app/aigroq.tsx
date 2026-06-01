@@ -368,17 +368,12 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
     return () => clearInterval(autoReplyIvRef.current);
   }, [sendToGroq]);
 
-  // Auto drive mode — AI decides movement every ~10s (hemat token)
+  // Auto hybrid mode — mostly built-in tracking/scan, Groq tiap 60s buat personality
   useEffect(() => {
     if (!auto) return;
     autoRef.current = true;
     trackInfoRef.current = "🤖 auto...";
-    const prompts = [
-      "Lagi jalan. Mau ke mana?",
-      "Arah mana?",
-      "Gerak. Jangan monoton.",
-    ];
-    let pi = 0;
+    let groqCalls = 0;
 
     const drive = () => {
       if (!autoRef.current || !apiKeyRef.current || speakingRef.current) return;
@@ -386,14 +381,12 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
       const info = trackInfoRef.current;
       const scan = scanStateRef.current;
 
-      // Safety 1: dark → mundur, jangan tanya AI
+      // Safety 1: dark → mundur (bypass AI)
       if (info.includes("gelap")) {
         motorRef?.current?.sendMotor(-60, -60);
-        autoLastCmdRef.current = Date.now();
-        if (!info.includes("🤖")) trackInfoRef.current = "🤖 gelap mundur...";
         return;
       }
-      // Safety 2: obstacle besar di tengah → hindar dulu
+      // Safety 2: obstacle besar di tengah → hindar (bypass AI)
       const big = dets.find(d => {
         const b = d.boundingBox!;
         const vw = 640, vh = 480;
@@ -407,28 +400,22 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
         const cx = (b.originX + b.width / 2) / vw;
         const dir = cx < 0.5 ? 80 : -80;
         motorRef?.current?.sendMotor(dir, -dir);
-        autoLastCmdRef.current = Date.now();
         if (!info.includes("🤖")) trackInfoRef.current = "🤖 hindar...";
         return;
       }
-      // If tracking active, let it run
+      // Kalo lagi tracking/scan, biarin tracking built-in jalan
       if (info.includes("🔒") || info.includes("✅")) return;
+      if (info.startsWith("cari") || scan === "scanning") return;
 
+      // Groq cuma tiap ~60s buat saran strategis
+      groqCalls++;
+      if (groqCalls % 6 !== 0) return; // 10s * 6 = 60s
       const ctx = buildContext(dets, recognizedFaceRef.current, info, scan, headingRef?.current, leftMotor, rightMotor);
-      const prompt = prompts[pi % prompts.length];
-      pi++;
-      sendToGroq(prompt, true);
+      sendToGroq("Ada yang menarik? Kasi saran target.", true, false);
     };
     autoIvRef.current = setInterval(drive, 10000);
-    // Safety: stop if no command for 8s
-    autoSafeIvRef.current = setInterval(() => {
-      if (autoRef.current && Date.now() - autoLastCmdRef.current > 8000) {
-        motorRef?.current?.sendMotor(0, 0);
-      }
-    }, 2000);
     return () => {
       clearInterval(autoIvRef.current);
-      clearInterval(autoSafeIvRef.current);
       motorRef?.current?.sendMotor(0, 0);
       autoRef.current = false;
       if (!trackInfoRef.current?.startsWith("🤖")) trackInfoRef.current = "";
