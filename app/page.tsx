@@ -41,7 +41,8 @@ export default function VisionPage() {
   const [source, setSource] = useState<"local" | "stream">("local");
   const [streamUrl, setStreamUrl] = useState("");
   const [inputUrl, setInputUrl] = useState("");
-  const proxiedStreamUrl = streamUrl ? `/api/proxy?url=${encodeURIComponent(streamUrl)}` : "";
+  const [useProxy, setUseProxy] = useState(false);
+  const proxiedStreamUrl = streamUrl ? (useProxy ? `/api/proxy?url=${encodeURIComponent(streamUrl)}` : streamUrl) : "";
 
   const [espIp, setEspIp] = useState(() => typeof window !== "undefined" ? localStorage.getItem("espIp") || "" : "");
   const espIpRef = useRef(espIp);
@@ -1342,10 +1343,10 @@ const mqttDeviceIdRef = useRef("");
       <div className="relative w-full max-w-sm aspect-square rounded-xl overflow-hidden bg-zinc-900 ring-1 ring-white/10 flex-shrink-0">
         <video ref={videoRef} autoPlay playsInline muted
           className={`absolute inset-0 h-full w-full object-contain ${source !== "local" ? "hidden" : ""}`} />
-        {source === "stream" && proxiedStreamUrl ? (
-          <img ref={streamImgRef} src={proxiedStreamUrl} crossOrigin="anonymous" alt="stream"
-            className="absolute inset-0 h-full w-full object-contain" />
-        ) : null}
+{source === "stream" && proxiedStreamUrl ? (
+  <img ref={streamImgRef} src={proxiedStreamUrl} alt="stream"
+    className="absolute inset-0 h-full w-full object-contain" />
+) : null}
         <canvas ref={overlayRef} className="absolute inset-0 w-full h-full pointer-events-none z-20" />
         <canvas ref={streamDetCanvasRef} className="hidden" />
 
@@ -1712,6 +1713,10 @@ const mqttDeviceIdRef = useRef("");
             className="px-3 py-1.5 rounded-full bg-white text-black text-xs font-semibold hover:bg-zinc-200 flex-shrink-0">
             {streamUrl ? "GANTI" : "PAKAI"}
           </button>
+          <button onClick={() => setUseProxy(p => !p)}
+            className={`px-2 py-1.5 rounded-full text-[10px] font-mono font-bold flex-shrink-0 ${useProxy ? "bg-amber-500 text-black" : "bg-zinc-800 text-zinc-400"}`}>
+            P
+          </button>
         </div>
       )}
 
@@ -1793,6 +1798,8 @@ const mqttDeviceIdRef = useRef("");
         rightMotor={rightMotor}
         aiBusyRef={aiBusyRef}
         motorRef={motorRef}
+        trackingRef={trackingRef}
+        setTracking={setTracking}
       />
     </main>
   );

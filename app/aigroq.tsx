@@ -11,6 +11,8 @@ interface AIGroqProps {
   headingRef?: React.MutableRefObject<number>;
   leftMotor?: number;
   rightMotor?: number;
+  trackingRef?: React.MutableRefObject<boolean>;
+  setTracking?: (v: boolean) => void;
   motorRef?: React.MutableRefObject<{
     sendMotor: (l: number, r: number) => void;
     trackTarget: { label: string; lastSeen: number } | null;
@@ -85,7 +87,7 @@ function buildContext(
   return ctx;
 }
 
-export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef, scanStateRef, aiBusyRef, headingRef, leftMotor, rightMotor, motorRef }: AIGroqProps) {
+export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef, scanStateRef, aiBusyRef, headingRef, leftMotor, rightMotor, trackingRef, setTracking, motorRef }: AIGroqProps) {
   const [msgs, setMsgs] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
   const [listening, setListening] = useState(false);
@@ -264,12 +266,15 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
           for (const raw of cmds) {
             const cmd = raw.slice(1, -1);
             if (cmd.startsWith("motor:")) {
-              const parts = cmd.slice(6).split(",");
-              if (parts.length === 2) {
-                const l = parseInt(parts[0]), r = parseInt(parts[1]);
-                if (!isNaN(l) && !isNaN(r) && motorRef?.current) {
-                  motorRef.current.sendMotor(clampMotor(l), clampMotor(r));
-                  autoLastCmdRef.current = Date.now();
+              // Auto mode = tracking handles navigation; skip motor cmds
+              if (!autoRef.current) {
+                const parts = cmd.slice(6).split(",");
+                if (parts.length === 2) {
+                  const l = parseInt(parts[0]), r = parseInt(parts[1]);
+                  if (!isNaN(l) && !isNaN(r) && motorRef?.current) {
+                    motorRef.current.sendMotor(clampMotor(l), clampMotor(r));
+                    autoLastCmdRef.current = Date.now();
+                  }
                 }
               }
             } else if (cmd.startsWith("track:")) {
@@ -279,7 +284,11 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
                 autoLastCmdRef.current = Date.now();
               }
             } else if (cmd === "stop") {
-              motorRef?.current?.sendMotor(0, 0);
+              if (autoRef.current) {
+                motorRef?.current?.setTrackTarget(null);
+              } else {
+                motorRef?.current?.sendMotor(0, 0);
+              }
               autoLastCmdRef.current = Date.now();
             } else if (cmd === "auto") {
               setAuto(true); autoRef.current = true;
@@ -375,189 +384,49 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
     return () => clearInterval(autoReplyIvRef.current);
   }, [sendToGroq]);
 
-  // Auto hybrid mode — mostly built-in tracking/scan, Groq tiap 60s buat personality
+  // Auto mode — enable built-in processTracking, AI cuma saran target
   useEffect(() => {
     if (!auto) return;
     autoRef.current = true;
-    trackInfoRef.current = "🤖 auto...";
+    if (trackingRef) {
+      trackingRef.current = true;
+      if (setTracking) setTracking(true);
+    }
+    if (!trackInfoRef.current.startsWith("🤖")) trackInfoRef.current = "🤖 auto...";
+
     let groqCalls = 0;
 
     const drive = () => {
       if (!autoRef.current || !apiKeyRef.current || speakingRef.current) return;
-      const dets = detectionsRef.current;
-      const info = trackInfoRef.current;
-      const scan = scanStateRef.current;
 
-      // Safety 1: dark → mundur (bypass AI)
-      if (info.includes("gelap")) {
-        motorRef?.current?.sendMotor(clampMotor(-60), clampMotor(-60));
-        return;
-      }
-      // Safety 2: obstacle besar di tengah → hindar (bypass AI)
-      const big = dets.find(d => {
-        const b = d.boundingBox!;
-        const vw = 640, vh = 480;
-        const cx = (b.originX + b.width / 2) / vw;
-        const area = (b.width / vw) * (b.height / vh);
-        return area > 0.3 && cx > 0.2 && cx < 0.8;
-      });
-      if (big && !info.includes("🔒") && !info.includes("✅")) {
-        const b = big.boundingBox!;
-        const vw = 640;
-        const cx = (b.originX + b.width / 2) / vw;
-        const dir = cx < 0.5 ? 80 : -80;
-        motorRef?.current?.sendMotor(clampMotor(dir), clampMotor(-dir));
-        if (!info.includes("🤖")) trackInfoRef.current = "🤖 hindar...";
-        return;
-      }
-      // Kalo lagi tracking/scan, biarin tracking built-in jalan
-      if (info.includes("🔒") || info.includes("✅")) return;
-      if (info.startsWith("cari") || scan === "scanning") return;
-
-      // Groq cuma tiap ~60s buat saran strategis
+      // Groq cuma tiap ~60s buat saran target / personality
       groqCalls++;
-      if (groqCalls % 6 !== 0) return; // 10s * 6 = 60s
-      const ctx = buildContext(dets, recognizedFaceRef.current, info, scan, headingRef?.current, leftMotor, rightMotor);
+      if (groqCalls % 6 !== 0) return;
+      const ctx = buildContext(
+        detectionsRef.current,
+        recognizedFaceRef.current,
+        trackInfoRef.current,
+        scanStateRef.current,
+        headingRef?.current,
+        leftMotor,
+        rightMotor,
+      );
       sendToGroq("Ada yang menarik? Kasi saran target.", true, false);
     };
     autoIvRef.current = setInterval(drive, 10000);
 
-    // Smart obstacle avoidance — scan 360° cari jalan bersih
-    const SCAN_SECTORS = 6;
-    let scanState = 'idle';
-    let scanSector = 0;
-    let scanMap: { cnt: number }[] = [];
-    let scanTimer = 0;
-    let chosenDir = 0;
-    let scanCooldown = 0;
-
-    const safety = () => {
-      if (!autoRef.current || !apiKeyRef.current) return;
-
-      if (scanCooldown > 0) { scanCooldown--; return; }
-
-      if (scanState === 'idle') {
-        const dets = detectionsRef.current;
-        const close = dets.find(d => {
-          const b = d.boundingBox!;
-          const vw = 640, vh = 480;
-          const cx = (b.originX + b.width / 2) / vw;
-          const area = (b.width / vw) * (b.height / vh);
-          return area > 0.1 && cx > 0.1 && cx < 0.9;
-        });
-        if (close) {
-          motorRef?.current?.sendMotor(0, 0);
-          scanState = 'scan_stop';
-          scanSector = 0;
-          scanMap = Array.from({length: SCAN_SECTORS}, () => ({cnt: 0}));
-          scanTimer = 0;
-          trackInfoRef.current = "🤖 cari jalan...";
-        }
-        return;
-      }
-
-      if (scanState === 'scan_stop') {
-        scanTimer++;
-        // Stop 2 tick (1s) — biar deteksi stabil
-        if (scanTimer >= 2) {
-          const dets = detectionsRef.current;
-          const vw = 640, vh = 480;
-          let obstacleCount = 0;
-          for (const d of dets) {
-            const b = d.boundingBox!;
-            const area = (b.width / vw) * (b.height / vh);
-            if (area > 0.05) obstacleCount++;
-          }
-          if (scanSector < SCAN_SECTORS && scanMap[scanSector]) {
-            scanMap[scanSector].cnt = obstacleCount;
-          }
-          scanSector++;
-          scanTimer = 0;
-          if (scanSector >= SCAN_SECTORS) {
-            scanState = 'scan_pick';
-          } else {
-            scanState = 'scan_turn';
-          }
-        }
-        return;
-      }
-
-      if (scanState === 'scan_turn') {
-        scanTimer++;
-        motorRef?.current?.sendMotor(-170, 170);
-        // Turn 2 tick (1s)
-        if (scanTimer >= 2) {
-          motorRef?.current?.sendMotor(0, 0);
-          scanTimer = 0;
-          scanState = 'scan_stop';
-        }
-        return;
-      }
-
-      if (scanState === 'scan_pick') {
-        // Pilih sektor paling bersih (paling dikit obstacle)
-        let best = 0, bestCnt = Infinity;
-        for (let i = 0; i < SCAN_SECTORS; i++) {
-          if (scanMap[i].cnt < bestCnt) {
-            bestCnt = scanMap[i].cnt;
-            best = i;
-          }
-        }
-        // Kalo semua penuh, pilih sektor yang udah dilewatin
-        if (bestCnt > 5) best = SCAN_SECTORS / 2;
-        chosenDir = best;
-        scanState = 'scan_rotato';
-        scanTimer = 0;
-        trackInfoRef.current = `🤖 arah ${best}`;
-        return;
-      }
-
-      if (scanState === 'scan_rotato') {
-        scanTimer++;
-        // Rotasi berlawanan arah buat balik ke sektor yang dipilih
-        const lastSector = SCAN_SECTORS - 1;
-        const dstCCW = (chosenDir - lastSector + SCAN_SECTORS) % SCAN_SECTORS;
-        const dstCW = (lastSector - chosenDir + SCAN_SECTORS) % SCAN_SECTORS;
-        const reverse = dstCCW < dstCW;
-        const needTurns = Math.min(dstCCW, dstCW);
-        if (scanTimer <= needTurns * 2) {
-          if (reverse) {
-            motorRef?.current?.sendMotor(170, -170);
-          } else {
-            motorRef?.current?.sendMotor(-170, 170);
-          }
-        } else {
-          motorRef?.current?.sendMotor(0, 0);
-          scanState = 'scan_go';
-          scanTimer = 0;
-        }
-        return;
-      }
-
-      if (scanState === 'scan_go') {
-        scanTimer++;
-        motorRef?.current?.sendMotor(180, 180);
-        // Maju 1.5 detik
-        if (scanTimer >= 3) {
-          motorRef?.current?.sendMotor(0, 0);
-          scanState = 'idle';
-          scanCooldown = 4; // cooldown 2 detik sebelum scan ulang
-          if (!trackInfoRef.current?.startsWith("🤖")) trackInfoRef.current = "";
-          else trackInfoRef.current = "🤖 auto...";
-        }
-        return;
-      }
-    };
-    autoSafeIvRef.current = setInterval(safety, 500);
-
     return () => {
       clearInterval(autoIvRef.current);
-      clearInterval(autoSafeIvRef.current);
+      if (trackingRef) {
+        trackingRef.current = false;
+        if (setTracking) setTracking(false);
+      }
       motorRef?.current?.sendMotor(0, 0);
+      motorRef?.current?.setTrackTarget(null);
       autoRef.current = false;
       if (!trackInfoRef.current?.startsWith("🤖")) trackInfoRef.current = "";
     };
-  }, [auto]);
+  }, [auto, trackingRef, setTracking]);
 
   useEffect(() => () => { wakeRef.current = false; convRef.current = false; if (convTimerRef.current) clearTimeout(convTimerRef.current); wakeRecRef.current?.stop(); }, []);
 
