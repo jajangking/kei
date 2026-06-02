@@ -638,14 +638,10 @@ const mqttDeviceIdRef = useRef("");
                   const rec = recognize(kp, faceDBRef.current);
                   if (rec && rec.id === faceStableRef.current.id) {
                     faceStableRef.current.count++;
-                    if (faceStableRef.current.count >= 10) {
-                      recognizedFaceRef.current = rec;
-                    } else {
-                      recognizedFaceRef.current = null;
-                    }
+                    recognizedFaceRef.current = rec;
                   } else if (rec) {
                     faceStableRef.current = { id: rec.id, count: 1 };
-                    recognizedFaceRef.current = null;
+                    recognizedFaceRef.current = rec;
                   } else {
                     faceStableRef.current = { id: "", count: 0 };
                     recognizedFaceRef.current = null;
