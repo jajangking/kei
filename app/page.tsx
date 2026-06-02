@@ -77,9 +77,12 @@ export default function VisionPage() {
   const [registering, setRegistering] = useState(false);
   const [regName, setRegName] = useState("");
   const [capturing, setCapturing] = useState(false);
+  const capturingRef = useRef(false);
   const [capMsg, setCapMsg] = useState("");
+  const capMsgRef = useRef("");
   const captureBufRef = useRef<number[][]>([]);
   const capCountRef = useRef(0);
+  const capNameRef = useRef("");
   const [showFaces, setShowFaces] = useState(false);
   const [editFaceId, setEditFaceId] = useState<string | null>(null);
   const [editFaceName, setEditFaceName] = useState("");
@@ -644,13 +647,15 @@ const mqttDeviceIdRef = useRef("");
                   faceLandmarksRef.current = kp;
 
                   // Auto-capture: collect landmarks for registration
-                  if (capturing) {
+                  if (capturingRef.current) {
                     captureBufRef.current.push([...kp]);
                     capCountRef.current++;
-                    setCapMsg(`gerak dikit... ${capCountRef.current}/5`);
+                    capMsgRef.current = `gerak dikit... ${capCountRef.current}/5`;
+                    setCapMsg(capMsgRef.current);
                     if (capCountRef.current >= 5) {
-                      faceDBRef.current = registerFace(faceDBRef.current, regName, captureBufRef.current);
+                      faceDBRef.current = registerFace(faceDBRef.current, capNameRef.current, captureBufRef.current);
                       recognizedFaceRef.current = faceDBRef.current[faceDBRef.current.length - 1];
+                      capturingRef.current = false;
                       setCapturing(false);
                       setRegistering(false);
                     }
@@ -1498,14 +1503,17 @@ const mqttDeviceIdRef = useRef("");
                 if (!regName) return;
                 captureBufRef.current = [];
                 capCountRef.current = 0;
+                capNameRef.current = regName;
+                capturingRef.current = true;
                 setCapturing(true);
+                capMsgRef.current = "gerak dikit...";
                 setCapMsg("gerak dikit...");
               }}
                 className="px-2 py-0.5 rounded-full bg-fuchsia-600 text-white text-[7px] font-mono font-bold active:scale-90">
                 SIMPAN
               </button>
             )}
-            <button onClick={() => { setRegistering(false); setCapturing(false); }}
+            <button onClick={() => { setRegistering(false); capturingRef.current = false; setCapturing(false); }}
               className="px-2 py-0.5 rounded-full bg-zinc-700 text-zinc-300 text-[7px] font-mono active:scale-90">
               X
             </button>
