@@ -135,6 +135,7 @@ export default function VisionPage() {
   const darkAvoidRef = useRef(false);
   const darkPhaseRef = useRef(0);
   const darkTimerRef = useRef(0);
+  const wallStateRef = useRef<{ phase: number; timer: number } | null>(null);
 
   const prevFrameRef = useRef<number[]>([]);
   const stuckFramesRef = useRef(0);
@@ -878,6 +879,66 @@ const mqttDeviceIdRef = useRef("");
     }
   }
 
+  function detectWall(): { blocked: boolean; left: boolean; center: boolean; right: boolean } {
+    let canvas = brightnessCanvasRef.current;
+    if (!canvas) {
+      canvas = document.createElement('canvas');
+      brightnessCanvasRef.current = canvas;
+    }
+    let w = 640, h = 480;
+    const video = videoRef.current;
+    const img = streamImgRef.current;
+    if (source === "local" && video && video.videoWidth) {
+      w = video.videoWidth; h = video.videoHeight;
+    } else if (img && img.complete && img.naturalWidth) {
+      w = img.naturalWidth; h = img.naturalHeight;
+    }
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return { blocked: false, left: false, center: false, right: false };
+    if (source === "local" && video) ctx.drawImage(video, 0, 0);
+    else if (img && img.complete) ctx.drawImage(img, 0, 0);
+    else return { blocked: false, left: false, center: false, right: false };
+    const data = ctx.getImageData(0, 0, w, h).data;
+    const GRID = 6;
+    const cellW = Math.floor(w / GRID);
+    const cellH = Math.floor(h / GRID);
+    let wallCells = 0;
+    const sideCount = { left: 0, center: 0, right: 0 };
+    for (let gy = 0; gy < GRID; gy++) {
+      for (let gx = 0; gx < GRID; gx++) {
+        let sum = 0, sumDiff = 0, count = 0, lastVal = 0;
+        const step = 4;
+        for (let py = 0; py < cellH; py += step) {
+          for (let px = 0; px < cellW; px += step) {
+            const idx = ((gy * cellH + py) * w + (gx * cellW + px)) * 4;
+            const val = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
+            sum += val;
+            if (count > 0) sumDiff += Math.abs(val - lastVal);
+            lastVal = val;
+            count++;
+          }
+        }
+        const avg = sum / count;
+        const varian = sumDiff / count;
+        // Low variance + mid brightness = wall
+        if (varian < 8 && avg > 30 && avg < 230) {
+          wallCells++;
+          if (gx < 2) sideCount.left++;
+          else if (gx >= 4) sideCount.right++;
+          else sideCount.center++;
+        }
+      }
+    }
+    const total = GRID * GRID;
+    return {
+      blocked: wallCells > total * 0.35,
+      left: sideCount.left > 3,
+      center: sideCount.center > 3,
+      right: sideCount.right > 3,
+    };
+  }
+
   function sampleBrightness(): number {
     let canvas = brightnessCanvasRef.current;
     if (!canvas) {
@@ -1057,6 +1118,42 @@ const mqttDeviceIdRef = useRef("");
       }
       return;
     }
+
+    // Wall detection — large uniform area = obstacle
+    if (!aiBusyRef.current && motorRunning) {
+      const wall = detectWall();
+      if (wall.blocked) {
+        if (!wallStateRef.current) {
+          wallStateRef.current = { phase: 0, timer: 0 };
+        }
+        const w = wallStateRef.current;
+        w.timer++;
+        if (w.phase === 0) {
+          // Stop
+          setLeftMotor(0); setRightMotor(0); sendMotor(0, 0);
+          setTrackInfo('tembok!');
+          if (w.timer > 5) { w.phase = 1; w.timer = 0; }
+        } else if (w.phase === 1) {
+          // Back up
+          const dir = wall.right && !wall.left ? 1 : wall.left && !wall.right ? -1 : 0;
+          setLeftMotor(dir * 180); setRightMotor(dir * 180);
+          sendMotor(-180 * (dir || 1), -180 * (dir || 1));
+          if (w.timer > 15) { w.phase = 2; w.timer = 0; }
+        } else {
+          // Turn away — belok ke sisi yang gak ketembok
+          const steer = wall.right && !wall.left ? 200 : wall.left && !wall.right ? -200 : wall.center ? 150 : -150;
+          setLeftMotor(-steer); setRightMotor(steer);
+          sendMotor(-steer, steer);
+          if (w.timer > 20) {
+            w.phase = 0; w.timer = 0;
+            wallStateRef.current = null;
+            scanStateRef.current = 'idle';
+          }
+        }
+        return;
+      }
+    }
+    wallStateRef.current = null;
 
     // Face detected → stop tracking motor, biarkan AI ngobrol
     // Skip jika user sedang manual kontrol (joystick/keyboard)

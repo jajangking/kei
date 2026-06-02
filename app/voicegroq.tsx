@@ -33,23 +33,28 @@ const EDGE_VOICES = [
   "en-GB-SoniaNeural", "en-GB-RyanNeural",
 ];
 
-const SYSTEM_PROMPT = `Lo adalah Kei, suara robot. Aturan:
+const SYSTEM_PROMPT = `Lo adalah Kei, robot pintar yang jelajah. Aturan:
 - Ngomong alami, 1 kalimat pendek aja.
 - JANGAN mulai dengan "Liat" atau "Lihat".
-- HANYA omongin apa yang ADA di konteks — jangan ngarang.
+- HANYA omongin apa yang ADA di konteks.
+- Lo suka jalan-jalan, cari petualangan!
 
-Lo BISA gerakin robot pake perintah di dalem kurung siku:
+Navigasi:
 [motor:L,R] — gerak motor kiri=L kanan=R (-255 sd 255)
-[track:label] — tracking objek
+[track:label] — kejar & follow objek
 [stop] — berhenti
 Contoh: "Ada mobil di kanan, gua follow. [track:mobil]"
 
-Kalo lagi mode autonomous, lo yang mutusin. Tapi aturan SAFETY:
-- Kalo gelap — JANGAN maju. MUNDUR atau muter.
-- Kalo ada objek gede di depan — minggir, jangan nayok.
+SAFETY (priority!):
+- Kalo gelap — MUNDUR atau muter, JANGAN maju.
+- Kalo ada TEMBOK di depan — MUNDUR, belok cari jalan lain.
+- Kalo ada objek gede menghalang — minggir, jangan nayok.
+- Kalo nyangkut/gerak tapi pemandangan gak berubah — MUTER balik.
 - Jangan monoton — kadang maju, kadang mundur, kadang puter.
-- Kalo liat objek menarik, tracking aja.
-Sesuain gaya bicara sama situasi.`;
+- Kalo liat objek menarik, tracking & follow.
+- Kalo ada wajah dikenal, sapa dan ngobrol.
+
+Lo suka eksplor dan selalu cari jalan. Sesuain gaya bicara sama situasi!`;
 
 function buildContext(
   dets: VoiceGroqProps["detectionsRef"]["current"],
@@ -112,6 +117,8 @@ export default function VoiceGroq({
   const lastListenRef = useRef(0);
   const listenCountRef = useRef(0);
   const recogRef = useRef<any>(null);
+  const lastStatusRef = useRef("");
+  const lastReportRef = useRef(0);
   const autoRef = useRef(false);
   const autoIvRef = useRef<any>(null);
   const lastFaceRef = useRef<string | null>(null);
@@ -290,7 +297,7 @@ export default function VoiceGroq({
 
     processingRef.current = false;
     setStatus("idle");
-    if (genRef.current === gen && !abortRef.current) {
+    if (genRef.current === gen && !abortRef.current && !autoRef.current) {
       startListeningRef.current?.();
     }
   }
@@ -344,7 +351,7 @@ export default function VoiceGroq({
     setStatus("listening");
   }
 
-  // Auto context update
+  // Auto context update + face greeting
   useEffect(() => {
     contextIvRef.current = setInterval(() => {
       const ctx = buildContext(detectionsRef.current, recognizedFaceRef.current, trackInfoRef.current, scanStateRef.current, undefined, leftMotor, rightMotor);
@@ -355,7 +362,18 @@ export default function VoiceGroq({
       if (faceNow && faceNow !== lastFaceRef.current && !speakingRef.current) {
         lastFaceRef.current = faceNow;
         motorRef?.current?.sendMotor(0, 0);
-        askGroqRef.current?.(`Ada ${faceNow} di depan. Sapa aja, jangan gerak!`, true);
+        // Lock tracking on face
+        if (motorRef?.current) {
+          motorRef.current.setTrackTarget({ label: `wajah ${faceNow}`, lastSeen: Date.now() });
+        }
+        // Matiin auto sementara
+        if (autoRef.current) {
+          setAuto(false);
+          autoRef.current = false;
+          clearInterval(autoIvRef.current);
+        }
+        // Sapa + buka mic untuk ngobrol
+        askGroqRef.current?.(`Ada ${faceNow} di depan. Sapa aja, jangan gerak!`, false);
       } else if (!faceNow) {
         lastFaceRef.current = null;
       }
@@ -363,10 +381,37 @@ export default function VoiceGroq({
     return () => clearInterval(contextIvRef.current);
   }, []);
 
+  // State-change proactive report
+  useEffect(() => {
+    const tick = () => {
+      if (speakingRef.current || !autoRef.current) return;
+      const trackInfo = trackInfoRef.current;
+      const scanState = scanStateRef.current;
+      const isTracking = trackInfo.includes('✅') || trackInfo.includes('🔒');
+      const isStuck = trackInfo.includes('stuck');
+      const isDark = trackInfo.includes('gelap');
+      const isBlocked = trackInfo.startsWith('hindar');
+      const key = `${isTracking ? 'T' : ''}${isStuck ? '!':''}${isDark ? 'D':''}${isBlocked ? 'B':''}|${scanState}`;
+      if (key === lastStatusRef.current) return;
+      lastStatusRef.current = key;
+      const now = Date.now();
+      if (now - lastReportRef.current < 30000) return;
+      lastReportRef.current = now;
+      askGroqRef.current?.("Keadaan gimana? Ceritain santai aja", true);
+    };
+    const iv = setInterval(tick, 5000);
+    return () => clearInterval(iv);
+  }, []);
+
   // Auto mode — periodic Groq calls
   useEffect(() => {
     if (!auto) return;
     autoRef.current = true;
+    // Stop mic saat auto mode aktif
+    recogRef.current?.abort();
+    recogRef.current = null;
+    listeningRef.current = false;
+    setStatus("idle");
     if (trackingRef) {
       trackingRef.current = true;
       if (setTracking) setTracking(true);
@@ -377,12 +422,20 @@ export default function VoiceGroq({
       if (!autoRef.current || speakingRef.current) return;
       groqCalls++;
       if (groqCalls % 6 !== 0) return;
-      const ctx = buildContext(detectionsRef.current, recognizedFaceRef.current, trackInfoRef.current, scanStateRef.current, headingRef?.current, leftMotor, rightMotor);
-      askGroqRef.current?.("Ada yang menarik? Kasi saran target.", true);
+      askGroqRef.current?.("Ada yang menarik? Kasi saran target. Jalan-jalan cari petualangan!", true);
     };
+    // Tiap ~30 detik juga lapor keadaan
+    const reportIv = setInterval(() => {
+      if (!autoRef.current || speakingRef.current) return;
+      const info = trackInfoRef.current;
+      if (info.includes('tembok') || info.includes('cari')) {
+        askGroqRef.current?.("Lagipula Ada tembok nih, cari jalan lain kemana?", true);
+      }
+    }, 30000);
     autoIvRef.current = setInterval(drive, 10000);
     return () => {
       clearInterval(autoIvRef.current);
+      clearInterval(reportIv);
       if (trackingRef) {
         trackingRef.current = false;
         if (setTracking) setTracking(false);
