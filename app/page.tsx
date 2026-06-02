@@ -3,7 +3,7 @@
 import { useRef, useEffect, useState, useCallback } from "react";
 import { ObjectDetector, FaceDetector, FilesetResolver, type Detection } from "@mediapipe/tasks-vision";
 import Simulasi from "./simulasi";
-import AIGroq from "./aigroq";
+import VoiceGroq from "./voicegroq";
 import { loadDB, saveDB, registerFace, renameFace, deleteFace, recognize, type FaceRecord } from "./facerecog";
 interface Telemetry {
   speed?: number;
@@ -1928,8 +1928,8 @@ const mqttDeviceIdRef = useRef("");
         </div>
       </div>
 
-      {/* AI GROQ */}
-      <AIGroq
+      {/* AI VOICE */}
+      <VoiceGroq
         recognizedFaceRef={recognizedFaceRef}
         detectionsRef={detectionsRef}
         trackInfoRef={trackInfoRef}

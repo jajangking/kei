@@ -35,6 +35,8 @@ export default function XiaozhiPage() {
   const processingRef = useRef(false);
   const listeningRef = useRef(false);
   const ttsEndRef = useRef(0);
+  const lastListenRef = useRef(0);
+  const listenCountRef = useRef(0);
 
   const addLog = useCallback((m: string) => {
     const t = `${new Date().toLocaleTimeString()} ${m}`;
@@ -224,6 +226,13 @@ export default function XiaozhiPage() {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) return;
 
+    const now = Date.now();
+    if (now - lastListenRef.current < 2000) return;
+    if (now - lastListenRef.current < 10000) listenCountRef.current++;
+    else listenCountRef.current = 0;
+    if (listenCountRef.current > 5) { setStatus("idle"); return; }
+    lastListenRef.current = now;
+
     let gotResult = false;
     listeningRef.current = true;
     const recog = new SR();
@@ -234,9 +243,9 @@ export default function XiaozhiPage() {
     recog.onresult = (e: any) => {
       gotResult = true;
       listeningRef.current = false;
+      listenCountRef.current = 0;
       const text = e.results[e.results.length - 1][0].transcript.trim();
       if (!text) return;
-      // ignore echo within 800ms after TTS
       if (Date.now() - ttsEndRef.current < 800) {
         addLog(`Echo ignored: ${text.slice(0, 40)}`);
         return;
