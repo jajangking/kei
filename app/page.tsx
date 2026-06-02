@@ -72,6 +72,7 @@ export default function VisionPage() {
   const faceTickRef = useRef(0);
   const faceDBRef = useRef<FaceRecord[]>([]);
   const faceLandmarksRef = useRef<number[]>([]);
+  const faceStableRef = useRef<{ id: string; count: number }>({ id: "", count: 0 });
   const recognizedFaceRef = useRef<FaceRecord | null>(null);
   const [registering, setRegistering] = useState(false);
   const [regName, setRegName] = useState("");
@@ -635,7 +636,20 @@ const mqttDeviceIdRef = useRef("");
                   for (const k of fd.keypoints) { kp.push(k.x * (video?.videoWidth || 640), k.y * (video?.videoHeight || 480)); }
                   faceLandmarksRef.current = kp;
                   const rec = recognize(kp, faceDBRef.current);
-                  recognizedFaceRef.current = rec;
+                  if (rec && rec.id === faceStableRef.current.id) {
+                    faceStableRef.current.count++;
+                    if (faceStableRef.current.count >= 10) {
+                      recognizedFaceRef.current = rec;
+                    } else {
+                      recognizedFaceRef.current = null;
+                    }
+                  } else if (rec) {
+                    faceStableRef.current = { id: rec.id, count: 1 };
+                    recognizedFaceRef.current = null;
+                  } else {
+                    faceStableRef.current = { id: "", count: 0 };
+                    recognizedFaceRef.current = null;
+                  }
                 }
               } else {
                 recognizedFaceRef.current = null;

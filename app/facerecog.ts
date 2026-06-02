@@ -6,7 +6,7 @@ export interface FaceRecord {
 }
 
 const STORAGE_KEY = "kei_face_db";
-const SIMILARITY_THRESHOLD = 0.8;
+const SIMILARITY_THRESHOLD = 0.15;
 
 function normalize(pts: number[]): number[] {
   const n = pts.length / 2;
