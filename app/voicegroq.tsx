@@ -117,6 +117,8 @@ export default function VoiceGroq({
   const [voices, setVoices] = useState<VoiceOption[]>([]);
   const [selectedVoice, setSelectedVoice] = useState("gtts");
   const [auto, setAuto] = useState(false);
+  const [apiKey, setApiKey] = useState("");
+  const [showSettings, setShowSettings] = useState(false);
 
   const genRef = useRef(0);
   const acRef = useRef<AudioContext | null>(null);
@@ -216,10 +218,11 @@ export default function VoiceGroq({
     let fullText = "";
 
     try {
+      const key = apiKey || undefined;
       const res = await fetch("/api/groq/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: [{ role: "user", content: text }] }),
+        body: JSON.stringify({ messages: [{ role: "user", content: text }], apiKey: key }),
       });
       if (!res.ok) throw new Error(await res.text());
 
@@ -469,6 +472,8 @@ export default function VoiceGroq({
   }, [auto, trackingRef, setTracking]);
 
   useEffect(() => {
+    const saved = localStorage.getItem("kei_groq_key");
+    if (saved) setApiKey(saved);
     if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window as any)) return;
     try {
       acRef.current = new AudioContext({ sampleRate: 24000 });
@@ -547,8 +552,22 @@ export default function VoiceGroq({
               <option key={v.id} value={v.id}>{v.label}</option>
             ))}
           </select>
+          <button onClick={() => setShowSettings(p => !p)}
+            className="text-[9px] text-zinc-500 hover:text-zinc-300 font-mono ml-1">
+            {showSettings ? "×" : "⚙"}
+          </button>
         </div>
       </div>
+
+      {showSettings && (
+        <div className="px-3 py-2 border-b border-white/5 flex gap-1.5 items-center">
+          <input value={apiKey} onChange={e => { setApiKey(e.target.value); localStorage.setItem("kei_groq_key", e.target.value); }}
+            placeholder="Groq API key"
+            type="password"
+            className="flex-1 min-w-0 px-2 py-1 rounded bg-zinc-800 text-white text-[9px] font-mono placeholder-zinc-500 focus:outline-none" />
+          {apiKey && <div className="size-1.5 rounded-full bg-green-400 shrink-0" />}
+        </div>
+      )}
 
       {lastLlm && (
         <div className="px-2.5 py-1.5 border-b border-white/5">

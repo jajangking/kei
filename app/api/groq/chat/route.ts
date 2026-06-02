@@ -2,12 +2,11 @@ export const dynamic = "force-dynamic";
 export const runtime = "edge";
 
 export async function POST(req: Request) {
-  const GROQ_API_KEY = process.env.GROQ_API_KEY;
+  const { messages, model = "llama-3.3-70b-versatile", apiKey } = await req.json();
+  const GROQ_API_KEY = apiKey || process.env.GROQ_API_KEY;
   if (!GROQ_API_KEY) {
     return new Response("GROQ_API_KEY not configured", { status: 500 });
   }
-
-  const { messages, model = "llama-3.3-70b-versatile" } = await req.json();
 
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",

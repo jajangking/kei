@@ -24,6 +24,9 @@ interface Telemetry {
   speedLimit?: number;
   maxSpeed?: number;
   motorTimeout?: number;
+  leftTrim?: number;
+  rightTrim?: number;
+  mqtt?: boolean;
 }
 
 export default function VisionPage() {
@@ -105,6 +108,11 @@ export default function VisionPage() {
   const [trackInfo, setTrackInfo] = useState("");
   const trackInfoRef = useRef("");
   useEffect(() => { trackInfoRef.current = trackInfo; }, [trackInfo]);
+
+  const [darkWarn, setDarkWarn] = useState(false);
+  const [stuckWarn, setStuckWarn] = useState(false);
+  const [scanLabel, setScanLabel] = useState("");
+  const [aiLabel, setAiLabel] = useState("");
 
   useEffect(() => { if (espIp) localStorage.setItem("espIp", espIp); }, [espIp]);
   const trackTargetRef = useRef<{ label: string; lastSeen: number } | null>(null);
@@ -453,7 +461,8 @@ const mqttDeviceIdRef = useRef("");
     mqttClientRef.current = null;
     setMqttConnected(false);
     setMqttStatus("putus");
-  }, []);
+    sendESP({ mqttDisable: true });
+  }, [sendESP]);
 
   const sendESP = useCallback((data: object) => {
     const ws = wsRef.current;
@@ -517,7 +526,7 @@ const mqttDeviceIdRef = useRef("");
         if (data.mqttPrefix) { localStorage.setItem("mqttPrefix", data.mqttPrefix); setMqttPrefix(data.mqttPrefix); }
         if (data.groqKey) { localStorage.setItem("kei_groq_key", data.groqKey); }
         if (data.faceDB) { localStorage.setItem("kei_face_db", JSON.stringify(data.faceDB)); faceDBRef.current = data.faceDB; }
-        alert("Config restored! Reload the page.");
+        setTimeout(() => location.reload(), 100);
       } catch {
         alert("Invalid config file.");
       }
@@ -1161,10 +1170,10 @@ const mqttDeviceIdRef = useRef("");
         loopTimerRef.current++;
         if (loopTimerRef.current > 5) {
           loopDetectRef.current = true;
-          aiActionRef.current = "loop";
+          aiActionRef.current = "loop"; setAiLabel("loop");
           setTrackInfo('muter aja! cari jalan');
           trackTargetRef.current = null;
-          scanStateRef.current = 'idle';
+          scanStateRef.current = 'idle'; setScanLabel('');
           scanLevelRef.current = 0;
           const dir = Math.random() > 0.5 ? -200 : 200;
           setLeftMotor(-dir); setRightMotor(dir);
@@ -1185,11 +1194,11 @@ const mqttDeviceIdRef = useRef("");
       if (dist < 50) {
         // Goal reached!
         goalRef.current = null;
-        aiActionRef.current = "";
+        aiActionRef.current = ""; setAiLabel("");
         setTrackInfo(`📍 ${goal.label} ✅`);
         setLeftMotor(0); setRightMotor(0); sendMotor(0, 0);
       } else {
-        aiActionRef.current = `goal:${goal.label}`;
+        aiActionRef.current = `goal:${goal.label}`; setAiLabel(`goal:${goal.label}`);
         const targetAngle = Math.atan2(dx, -dy);
         let angleDiff = targetAngle - headingRef.current;
         while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
@@ -1227,10 +1236,10 @@ const mqttDeviceIdRef = useRef("");
       darkFramesRef.current++;
     } else {
       darkFramesRef.current = 0;
-      darkAvoidRef.current = false;
+      darkAvoidRef.current = false; setDarkWarn(false);
     }
     if (darkFramesRef.current > 15) {
-      darkAvoidRef.current = true;
+      darkAvoidRef.current = true; setDarkWarn(true);
     }
 
     if (darkAvoidRef.current) {
@@ -1261,10 +1270,10 @@ const mqttDeviceIdRef = useRef("");
       } else {
         setLeftMotor(0); setRightMotor(0);
         sendMotor(0, 0);
-        darkAvoidRef.current = false;
+        darkAvoidRef.current = false; setDarkWarn(false);
         darkFramesRef.current = 0;
         darkPhaseRef.current = 0;
-        scanStateRef.current = 'idle';
+        scanStateRef.current = 'idle'; setScanLabel('');
         setTrackInfo('cari...');
       }
       return;
@@ -1275,7 +1284,7 @@ const mqttDeviceIdRef = useRef("");
       const wall = detectWall();
       const edges = edgeDensityRef.current;
       if (wall.blocked) {
-        aiActionRef.current = "wall";
+        aiActionRef.current = "wall"; setAiLabel("wall");
         if (!wallStateRef.current) {
           wallStateRef.current = { phase: 0, timer: 0 };
         }
@@ -1299,15 +1308,15 @@ const mqttDeviceIdRef = useRef("");
           if (w.timer > 15) {
             w.phase = 0; w.timer = 0;
             wallStateRef.current = null;
-            scanStateRef.current = 'idle';
-            aiActionRef.current = "";
+            scanStateRef.current = 'idle'; setScanLabel('');
+            aiActionRef.current = ""; setAiLabel("");
           }
         }
         return;
       }
     }
     wallStateRef.current = null;
-    if (!aiActionRef.current.startsWith("goal") && !loopDetectRef.current) aiActionRef.current = "";
+    if (!aiActionRef.current.startsWith("goal") && !loopDetectRef.current) { aiActionRef.current = ""; setAiLabel(""); }
 
     // Face detected → stop tracking motor, biarkan AI ngobrol
     // Skip jika user sedang manual kontrol (joystick/keyboard)
@@ -1332,10 +1341,12 @@ const mqttDeviceIdRef = useRef("");
     if (motorRunning && stuckCooldownRef.current === 0) {
       if (sampleStuck()) {
         stuckFramesRef.current++;
+        if (stuckFramesRef.current > 5 && !stuckWarn) setStuckWarn(true);
         if (stuckFramesRef.current > 10) {
           stuckFramesRef.current = 0;
+          setStuckWarn(false);
           stuckCooldownRef.current = 60;
-          scanStateRef.current = 'idle';
+          scanStateRef.current = 'idle'; setScanLabel('');
           scanLevelRef.current = 0;
           trackTargetRef.current = null;
           setLeftMotor(-200); setRightMotor(200);
@@ -1349,9 +1360,11 @@ const mqttDeviceIdRef = useRef("");
         }
       } else {
         stuckFramesRef.current = 0;
+        if (stuckWarn) setStuckWarn(false);
       }
     } else {
       stuckFramesRef.current = 0;
+      if (stuckWarn) setStuckWarn(false);
     }
 
     // Visual obstacle avoidance
@@ -1443,7 +1456,7 @@ const mqttDeviceIdRef = useRef("");
 
       if (found) {
         trackLostRef.current = 0;
-        scanStateRef.current = 'idle';
+        scanStateRef.current = 'idle'; setScanLabel('');
         trackTargetRef.current = { ...target, lastSeen: Date.now() };
         lastSeenPosRef.current = { cx: found.cx, cy: found.cy };
         setTrackInfo(`${target.label}`);
@@ -1494,7 +1507,7 @@ const mqttDeviceIdRef = useRef("");
         trackTargetRef.current = { label: best.label, lastSeen: Date.now() };
         trackLabelRef.current = best.label;
         trackLostRef.current = 0;
-        scanStateRef.current = 'idle';
+        scanStateRef.current = 'idle'; setScanLabel('');
         setTrackInfo(`🔒 ${best.label}`);
         return;
       }
@@ -1506,7 +1519,7 @@ const mqttDeviceIdRef = useRef("");
       const scan = scanStateRef.current;
 
       if (scan === 'idle') {
-        scanStateRef.current = 'scanning';
+        scanStateRef.current = 'scanning'; setScanLabel('scanning');
         scanFrameRef.current = 0;
         scanMapRef.current = Array.from({length: SECTORS}, () => []);
         scanTargetSeeRef.current = false;
@@ -1544,7 +1557,7 @@ const mqttDeviceIdRef = useRef("");
         }
 
         if (scanFrameRef.current >= SCAN_FRAMES) {
-          scanStateRef.current = 'waiting';
+          scanStateRef.current = 'waiting'; setScanLabel('waiting');
           scanFrameRef.current = 0;
           setLeftMotor(0); setRightMotor(0);
           sendMotor(0, 0);
@@ -1610,10 +1623,10 @@ const mqttDeviceIdRef = useRef("");
           sendMotor(0, 0);
 
           if (scanTargetSeeRef.current && trackLabelRef.current) {
-            scanStateRef.current = 'idle';
+            scanStateRef.current = 'idle'; setScanLabel('');
             setTrackInfo('cari...');
           } else {
-            scanStateRef.current = 'moving';
+            scanStateRef.current = 'moving'; setScanLabel('moving');
             scanFrameRef.current = 0;
             setTrackInfo('maju...');
           }
@@ -1630,11 +1643,11 @@ const mqttDeviceIdRef = useRef("");
           sendMotor(0, 0);
           if (scanLevelRef.current >= SPIRAL_MAX) {
             scanLevelRef.current = 0;
-            scanStateRef.current = 'idle';
+            scanStateRef.current = 'idle'; setScanLabel('');
             setTrackInfo('cari lagi...');
           } else {
             scanLevelRef.current++;
-            scanStateRef.current = 'scanning';
+            scanStateRef.current = 'scanning'; setScanLabel('scanning');
             scanFrameRef.current = 0;
             scanMapRef.current = Array.from({length: SECTORS}, () => []);
             scanTargetSeeRef.current = false;
@@ -1764,30 +1777,23 @@ const mqttDeviceIdRef = useRef("");
             </button>
           </div>
         )}
-        {aiActionRef.current !== "" && (
-          <div className="absolute top-1.5 left-24 z-30 flex items-center gap-1 bg-black/40 backdrop-blur-sm rounded-full px-1.5 py-0.5 border border-white/10">
-            <div className="size-1.5 rounded-full animate-pulse" style={{ backgroundColor: loopDetectRef.current ? "#f59e0b" : aiActionRef.current.startsWith("goal") ? "#3b82f6" : aiActionRef.current === "wall" ? "#ef4444" : "#22c55e" }} />
-            <span className="text-[6px] font-mono tracking-wider text-white/70">{aiActionRef.current}</span>
-          </div>
-        )}
+        {/* AI action badge — always visible */}
+        <div className={`absolute top-1.5 left-24 z-30 flex items-center gap-1 bg-black/40 backdrop-blur-sm rounded-full px-1.5 py-0.5 border ${aiLabel ? "border-white/10" : "border-white/5"}`}>
+          <div className="size-1.5 rounded-full" style={{ backgroundColor: aiLabel ? (loopDetectRef.current ? "#f59e0b" : aiLabel.startsWith("goal") ? "#3b82f6" : aiLabel === "wall" ? "#ef4444" : "#22c55e") : "#27272a", boxShadow: aiLabel ? "0 0 6px" : "none" }} />
+          <span className={`text-[6px] font-mono tracking-wider ${aiLabel ? "text-white/70" : "text-zinc-700"}`}>{aiLabel || "idle"}</span>
+        </div>
 
-        {/* Environmental indicators */}
+        {/* Environmental indicators — always visible, light up when active */}
         <div className="absolute top-1.5 right-9 z-30 flex items-center gap-1">
-          {darkAvoidRef.current && (
-            <div className="flex items-center gap-0.5 bg-black/40 backdrop-blur-sm rounded-full px-1.5 py-0.5 border border-yellow-600/30">
-              <span className="text-[7px] text-yellow-400 font-mono">🌑 gelap</span>
-            </div>
-          )}
-          {stuckFramesRef.current > 5 && (
-            <div className="flex items-center gap-0.5 bg-black/40 backdrop-blur-sm rounded-full px-1.5 py-0.5 border border-orange-600/30">
-              <span className="text-[7px] text-orange-400 font-mono">⚠ stuck</span>
-            </div>
-          )}
-          {scanStateRef.current !== "idle" && (
-            <div className="flex items-center gap-0.5 bg-black/40 backdrop-blur-sm rounded-full px-1.5 py-0.5 border border-blue-600/30">
-              <span className="text-[7px] text-blue-300 font-mono">🔍 {scanStateRef.current}</span>
-            </div>
-          )}
+          <div className={`flex items-center gap-0.5 bg-black/40 backdrop-blur-sm rounded-full px-1.5 py-0.5 border ${darkWarn ? "border-yellow-600/60 shadow-[0_0_6px_rgba(234,179,8,0.3)]" : "border-white/5"}`}>
+            <span className={`text-[7px] font-mono ${darkWarn ? "text-yellow-400" : "text-zinc-700"}`}>🌑 gelap</span>
+          </div>
+          <div className={`flex items-center gap-0.5 bg-black/40 backdrop-blur-sm rounded-full px-1.5 py-0.5 border ${stuckWarn ? "border-orange-600/60 shadow-[0_0_6px_rgba(234,88,12,0.3)]" : "border-white/5"}`}>
+            <span className={`text-[7px] font-mono ${stuckWarn ? "text-orange-400" : "text-zinc-700"}`}>⚠ stuck</span>
+          </div>
+          <div className={`flex items-center gap-0.5 bg-black/40 backdrop-blur-sm rounded-full px-1.5 py-0.5 border ${scanLabel ? "border-blue-600/60 shadow-[0_0_6px_rgba(37,99,235,0.3)]" : "border-white/5"}`}>
+            <span className={`text-[7px] font-mono ${scanLabel ? "text-blue-300" : "text-zinc-700"}`}>🔍 {scanLabel || "scan"}</span>
+          </div>
         </div>
         <button onClick={() => { if (source === "stream") { setSource("local"); setActive(false); } else { setSource("stream"); setActive(true); } }}
           className="absolute top-1.5 right-1.5 z-30 size-7 rounded-full bg-black/50 backdrop-blur-md border border-white/10 flex items-center justify-center hover:bg-black/70 active:scale-90">
@@ -2088,6 +2094,18 @@ const mqttDeviceIdRef = useRef("");
                   value={telemetry.motorTimeout ?? 5000}
                   onChange={(e) => sendConfig({ motorTimeout: parseInt(e.target.value) || 5000 })}
                   className="w-12 px-1 py-0.5 rounded-full bg-zinc-800 border border-zinc-700 text-white text-[7px] font-mono text-center" />
+                <span className="text-zinc-500 text-[8px] font-mono">L◀</span>
+                <input type="range" min="-100" max="100" step="1"
+                  value={telemetry.leftTrim ?? 0}
+                  onChange={(e) => sendConfig({ leftTrim: parseInt(e.target.value) })}
+                  className="w-12 h-1 accent-cyan-500" />
+                <span className="text-zinc-400 text-[7px] font-mono w-5 text-center">{telemetry.leftTrim ?? 0}</span>
+                <span className="text-zinc-500 text-[8px] font-mono">R◀</span>
+                <input type="range" min="-100" max="100" step="1"
+                  value={telemetry.rightTrim ?? 0}
+                  onChange={(e) => sendConfig({ rightTrim: parseInt(e.target.value) })}
+                  className="w-12 h-1 accent-cyan-500" />
+                <span className="text-zinc-400 text-[7px] font-mono w-5 text-center">{telemetry.rightTrim ?? 0}</span>
               </div>
               {/* telemetry grid */}
               <div className="grid grid-cols-3 gap-x-3 gap-y-0.5 px-3 py-1.5 rounded-xl bg-zinc-900/80 ring-1 ring-white/10 text-[8px] font-mono">
