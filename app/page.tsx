@@ -1836,19 +1836,6 @@ const mqttDeviceIdRef = useRef("");
         </div>
       )}
 
-      {/* CONFIG BACKUP */}
-      <div className="w-full max-w-sm flex gap-1.5">
-        <button onClick={exportConfig}
-          className="px-3 py-1.5 rounded-full bg-zinc-800 text-zinc-300 text-[9px] font-mono border border-zinc-700 active:scale-90 flex-1">
-          ⬇ CONFIG
-        </button>
-        <button onClick={() => fileInputRef.current?.click()}
-          className="px-3 py-1.5 rounded-full bg-zinc-800 text-zinc-300 text-[9px] font-mono border border-zinc-700 active:scale-90 flex-1">
-          ⬆ CONFIG
-        </button>
-        <input ref={fileInputRef} type="file" accept=".json" className="hidden" onChange={importConfig} />
-      </div>
-
       {source === "stream" && (
         <div className="flex gap-1.5 w-full max-w-sm">
           <input value={inputUrl} onChange={(e) => setInputUrl(e.target.value)}
@@ -1946,6 +1933,19 @@ const mqttDeviceIdRef = useRef("");
         trackingRef={trackingRef}
         setTracking={setTracking}
       />
+
+      {/* BACKUP KONFIGURASI */}
+      <div className="w-full max-w-sm flex gap-1.5">
+        <button onClick={exportConfig}
+          className="px-3 py-1.5 rounded-full bg-zinc-800 text-zinc-300 text-[9px] font-mono border border-zinc-700 active:scale-90 flex-1">
+          BACKUP KONFIG ⬇
+        </button>
+        <button onClick={() => fileInputRef.current?.click()}
+          className="px-3 py-1.5 rounded-full bg-zinc-800 text-zinc-300 text-[9px] font-mono border border-zinc-700 active:scale-90 flex-1">
+          PULIHKAN ⬆
+        </button>
+        <input ref={fileInputRef} type="file" accept=".json" className="hidden" onChange={importConfig} />
+      </div>
     </main>
   );
 }
