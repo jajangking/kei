@@ -5,8 +5,6 @@ import { ObjectDetector, FaceDetector, FilesetResolver, type Detection } from "@
 import Simulasi from "./simulasi";
 import AIGroq from "./aigroq";
 import { loadDB, saveDB, registerFace, recognize, type FaceRecord } from "./facerecog";
-import mqtt from "mqtt/dist/mqtt.esm";
-
 interface Telemetry {
   speed?: number;
   mode?: string;
@@ -356,7 +354,7 @@ const mqttDeviceIdRef = useRef("");
   const mqttGenRef = useRef(0);
   const [mqttStatus, setMqttStatus] = useState("");
 
-  const connectMQTT = useCallback(() => {
+  const connectMQTT = useCallback(async () => {
     if (!mqttBroker) return;
     try {
       if (mqttClientRef.current) { mqttClientRef.current.end(true); mqttClientRef.current = null; }
@@ -373,9 +371,10 @@ const mqttDeviceIdRef = useRef("");
       if (mqttUser) { opts.username = mqttUser; opts.password = mqttPass; }
       localStorage.setItem("mqttUser", mqttUser);
       localStorage.setItem("mqttPass", mqttPass);
+      const mqttMod = await import("mqtt/dist/mqtt.esm");
       const url = `wss://${mqttBroker}:8884/mqtt`;
       console.log("[MQTT] connecting to", url);
-      const client = mqtt.connect(url, opts);
+      const client = mqttMod.default.connect(url, opts);
       client.on("connect", () => {
         if (mqttGenRef.current !== gen) { client.end(true); return; }
         console.log("[MQTT] connected");
