@@ -4,7 +4,7 @@ import { useRef, useEffect, useState, useCallback } from "react";
 import { ObjectDetector, FaceDetector, FilesetResolver, type Detection } from "@mediapipe/tasks-vision";
 import Simulasi from "./simulasi";
 import AIGroq from "./aigroq";
-import { loadDB, saveDB, registerFace, recognize, type FaceRecord } from "./facerecog";
+import { loadDB, saveDB, registerFace, renameFace, deleteFace, recognize, type FaceRecord } from "./facerecog";
 interface Telemetry {
   speed?: number;
   mode?: string;
@@ -76,6 +76,9 @@ export default function VisionPage() {
   const recognizedFaceRef = useRef<FaceRecord | null>(null);
   const [registering, setRegistering] = useState(false);
   const [regName, setRegName] = useState("");
+  const [showFaces, setShowFaces] = useState(false);
+  const [editFaceId, setEditFaceId] = useState<string | null>(null);
+  const [editFaceName, setEditFaceName] = useState("");
 
   interface SmoothBox {
     key: string;
@@ -1483,6 +1486,47 @@ const mqttDeviceIdRef = useRef("");
               X
             </button>
           </div>
+        )}
+
+        {/* FACE LIST */}
+        {faceDBRef.current.length > 0 && !registering && (
+          <>
+            <button onClick={() => setShowFaces(p => !p)}
+              className="absolute bottom-8 right-10 z-40 size-7 rounded-full bg-zinc-700/80 text-white text-[7px] font-mono font-bold border border-white/10 backdrop-blur-md flex items-center justify-center active:scale-90">
+              {showFaces ? "×" : faceDBRef.current.length}
+            </button>
+            {showFaces && (
+              <div className="absolute bottom-16 right-0 z-50 bg-black/90 backdrop-blur-md border border-white/10 rounded-xl px-2 py-1.5 space-y-1 min-w-28">
+                {faceDBRef.current.map(f => (
+                  <div key={f.id} className="flex items-center gap-1">
+                    {editFaceId === f.id ? (
+                      <>
+                        <input value={editFaceName} onChange={e => setEditFaceName(e.target.value)}
+                          className="w-16 px-1 py-0.5 rounded bg-zinc-800 text-white text-[7px] font-mono focus:outline-none" />
+                        <button onClick={() => {
+                          if (editFaceName) {
+                            faceDBRef.current = renameFace(faceDBRef.current, f.id, editFaceName);
+                            setEditFaceId(null);
+                          }
+                        }}
+                          className="px-1.5 py-0.5 rounded-full bg-fuchsia-600 text-white text-[6px] font-mono font-bold active:scale-90">OK</button>
+                        <button onClick={() => setEditFaceId(null)}
+                          className="px-1.5 py-0.5 rounded-full bg-zinc-700 text-zinc-300 text-[6px] font-mono active:scale-90">X</button>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-white text-[8px] font-mono flex-1 truncate max-w-16">{f.name}</span>
+                        <button onClick={() => { setEditFaceId(f.id); setEditFaceName(f.name); }}
+                          className="size-4 rounded flex items-center justify-center text-zinc-400 hover:text-white text-[6px] active:scale-90">✎</button>
+                        <button onClick={() => { faceDBRef.current = deleteFace(faceDBRef.current, f.id); }}
+                          className="size-4 rounded flex items-center justify-center text-red-400 hover:text-red-300 text-[6px] active:scale-90">×</button>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
         )}
       </div>
 

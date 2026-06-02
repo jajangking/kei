@@ -1,55 +1,45 @@
 export interface FaceRecord {
   id: string;
   name: string;
-  landmarks: number[];
+  features: number[];
   timestamp: number;
 }
 
 const STORAGE_KEY = "kei_face_db";
 const SIMILARITY_THRESHOLD = 0.15;
 
-function normalize(pts: number[]): number[] {
+function pairwiseDistances(pts: number[]): number[] {
   const n = pts.length / 2;
-  let cx = 0, cy = 0;
+  const dists: number[] = [];
   for (let i = 0; i < n; i++) {
-    cx += pts[i * 2];
-    cy += pts[i * 2 + 1];
+    for (let j = i + 1; j < n; j++) {
+      const dx = pts[i * 2] - pts[j * 2];
+      const dy = pts[i * 2 + 1] - pts[j * 2 + 1];
+      dists.push(Math.hypot(dx, dy));
+    }
   }
-  cx /= n;
-  cy /= n;
-
-  let maxD = 0;
-  for (let i = 0; i < n; i++) {
-    const dx = pts[i * 2] - cx;
-    const dy = pts[i * 2 + 1] - cy;
-    maxD = Math.max(maxD, Math.hypot(dx, dy));
-  }
-  if (maxD < 0.001) return pts;
-
-  const out: number[] = [];
-  for (let i = 0; i < n; i++) {
-    out.push((pts[i * 2] - cx) / maxD);
-    out.push((pts[i * 2 + 1] - cy) / maxD);
-  }
-  return out;
+  const mean = dists.reduce((a, b) => a + b, 0) / dists.length;
+  if (mean < 0.001) return dists;
+  return dists.map(d => d / mean);
 }
 
-export function compareLandmarks(a: number[], b: number[]): number {
-  const an = normalize(a);
-  const bn = normalize(b);
-  const len = Math.min(an.length, bn.length);
+export function compareFaces(a: number[], b: number[]): number {
+  const len = Math.min(a.length, b.length);
   let sum = 0;
   for (let i = 0; i < len; i++) {
-    sum += (an[i] - bn[i]) ** 2;
+    sum += (a[i] - b[i]) ** 2;
   }
-  return Math.sqrt(sum / (len / 2));
+  return Math.sqrt(sum / len);
 }
 
 export function loadDB(): FaceRecord[] {
   if (typeof localStorage === "undefined") return [];
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
+    const db: FaceRecord[] = raw ? JSON.parse(raw) : [];
+    const cleaned = db.filter(r => r.features && r.features.length > 0);
+    if (cleaned.length !== db.length) saveDB(cleaned);
+    return cleaned;
   } catch {
     return [];
   }
@@ -70,10 +60,16 @@ export function registerFace(
   const rec: FaceRecord = {
     id: crypto.randomUUID?.() ?? `${Date.now()}_${Math.random()}`,
     name,
-    landmarks: normalize(landmarks),
+    features: pairwiseDistances(landmarks),
     timestamp: Date.now(),
   };
   const updated = [...db, rec];
+  saveDB(updated);
+  return updated;
+}
+
+export function renameFace(db: FaceRecord[], id: string, name: string): FaceRecord[] {
+  const updated = db.map(r => r.id === id ? { ...r, name } : r);
   saveDB(updated);
   return updated;
 }
@@ -86,11 +82,12 @@ export function deleteFace(db: FaceRecord[], id: string): FaceRecord[] {
 
 export function recognize(landmarks: number[], db: FaceRecord[]): FaceRecord | null {
   if (db.length === 0) return null;
-  const n = normalize(landmarks);
+  const feats = pairwiseDistances(landmarks);
   let best: FaceRecord | null = null;
   let bestScore = Infinity;
   for (const rec of db) {
-    const score = compareLandmarks(n, rec.landmarks);
+    if (!rec.features) continue;
+    const score = compareFaces(feats, rec.features);
     if (score < bestScore) {
       bestScore = score;
       best = rec;
