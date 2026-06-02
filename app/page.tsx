@@ -76,6 +76,10 @@ export default function VisionPage() {
   const recognizedFaceRef = useRef<FaceRecord | null>(null);
   const [registering, setRegistering] = useState(false);
   const [regName, setRegName] = useState("");
+  const [capturing, setCapturing] = useState(false);
+  const [capMsg, setCapMsg] = useState("");
+  const captureBufRef = useRef<number[][]>([]);
+  const capCountRef = useRef(0);
   const [showFaces, setShowFaces] = useState(false);
   const [editFaceId, setEditFaceId] = useState<string | null>(null);
   const [editFaceName, setEditFaceName] = useState("");
@@ -638,6 +642,21 @@ const mqttDeviceIdRef = useRef("");
                   const kp: number[] = [];
                   for (const k of fd.keypoints) { kp.push(k.x * (video?.videoWidth || 640), k.y * (video?.videoHeight || 480)); }
                   faceLandmarksRef.current = kp;
+
+                  // Auto-capture: collect landmarks for registration
+                  if (capturing) {
+                    captureBufRef.current.push([...kp]);
+                    capCountRef.current++;
+                    setCapMsg(`gerak dikit... ${capCountRef.current}/5`);
+                    if (capCountRef.current >= 5) {
+                      faceDBRef.current = registerFace(faceDBRef.current, regName, captureBufRef.current);
+                      recognizedFaceRef.current = faceDBRef.current[faceDBRef.current.length - 1];
+                      setCapturing(false);
+                      setRegistering(false);
+                    }
+                    return;
+                  }
+
                   const rec = recognize(kp, faceDBRef.current);
                   if (rec && rec.id === faceStableRef.current.id) {
                     faceStableRef.current.count++;
@@ -1472,16 +1491,21 @@ const mqttDeviceIdRef = useRef("");
           <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-50 flex gap-1 bg-black/80 backdrop-blur-md border border-white/10 rounded-xl px-2.5 py-2 items-center">
             <input value={regName} onChange={e => setRegName(e.target.value)} placeholder="nama"
               className="w-24 px-1.5 py-0.5 rounded bg-zinc-800 text-white text-[9px] font-mono placeholder-zinc-500 focus:outline-none" />
-            <button onClick={() => {
-              if (!regName) return;
-              faceDBRef.current = registerFace(faceDBRef.current, regName, faceLandmarksRef.current);
-              recognizedFaceRef.current = faceDBRef.current[faceDBRef.current.length - 1];
-              setRegistering(false);
-            }}
-              className="px-2 py-0.5 rounded-full bg-fuchsia-600 text-white text-[7px] font-mono font-bold active:scale-90">
-              SIMPAN
-            </button>
-            <button onClick={() => setRegistering(false)}
+            {capturing ? (
+              <span className="text-[7px] text-fuchsia-300 font-mono whitespace-nowrap">{capMsg}</span>
+            ) : (
+              <button onClick={() => {
+                if (!regName) return;
+                captureBufRef.current = [];
+                capCountRef.current = 0;
+                setCapturing(true);
+                setCapMsg("gerak dikit...");
+              }}
+                className="px-2 py-0.5 rounded-full bg-fuchsia-600 text-white text-[7px] font-mono font-bold active:scale-90">
+                SIMPAN
+              </button>
+            )}
+            <button onClick={() => { setRegistering(false); setCapturing(false); }}
               className="px-2 py-0.5 rounded-full bg-zinc-700 text-zinc-300 text-[7px] font-mono active:scale-90">
               X
             </button>

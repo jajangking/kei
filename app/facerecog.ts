@@ -1,7 +1,7 @@
 export interface FaceRecord {
   id: string;
   name: string;
-  features: number[];
+  features: number[][];
   timestamp: number;
 }
 
@@ -55,12 +55,12 @@ export function saveDB(db: FaceRecord[]) {
 export function registerFace(
   db: FaceRecord[],
   name: string,
-  landmarks: number[],
+  landmarkSets: number[][],
 ): FaceRecord[] {
   const rec: FaceRecord = {
     id: crypto.randomUUID?.() ?? `${Date.now()}_${Math.random()}`,
     name,
-    features: pairwiseDistances(landmarks),
+    features: landmarkSets.map(pts => pairwiseDistances(pts)),
     timestamp: Date.now(),
   };
   const updated = [...db, rec];
@@ -86,11 +86,13 @@ export function recognize(landmarks: number[], db: FaceRecord[]): FaceRecord | n
   let best: FaceRecord | null = null;
   let bestScore = Infinity;
   for (const rec of db) {
-    if (!rec.features) continue;
-    const score = compareFaces(feats, rec.features);
-    if (score < bestScore) {
-      bestScore = score;
-      best = rec;
+    if (!rec.features || rec.features.length === 0) continue;
+    for (const sample of rec.features) {
+      const score = compareFaces(feats, sample);
+      if (score < bestScore) {
+        bestScore = score;
+        best = rec;
+      }
     }
   }
   return best && bestScore < SIMILARITY_THRESHOLD ? best : null;
