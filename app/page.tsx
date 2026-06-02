@@ -86,6 +86,7 @@ export default function VisionPage() {
   const [showFaces, setShowFaces] = useState(false);
   const [editFaceId, setEditFaceId] = useState<string | null>(null);
   const [editFaceName, setEditFaceName] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   interface SmoothBox {
     key: string;
@@ -466,6 +467,52 @@ const mqttDeviceIdRef = useRef("");
   const sendPing = useCallback(() => sendESP({ ping: true }), [sendESP]);
   const sendEmergency = useCallback(() => sendESP({ emergency: true }), [sendESP]);
   const sendConfig = useCallback((cfg: object) => sendESP(cfg), [sendESP]);
+
+  function exportConfig() {
+    const data = {
+      version: 1,
+      exportedAt: Date.now(),
+      espIp: localStorage.getItem("espIp") || "",
+      mqttBroker: localStorage.getItem("mqttBroker") || "",
+      mqttPort: Number(localStorage.getItem("mqttPort")) || 8884,
+      mqttUser: localStorage.getItem("mqttUser") || "",
+      mqttPass: localStorage.getItem("mqttPass") || "",
+      mqttPrefix: localStorage.getItem("mqttPrefix") || "kei/robot",
+      groqKey: localStorage.getItem("kei_groq_key") || "",
+      faceDB: (() => { try { return JSON.parse(localStorage.getItem("kei_face_db") || "[]"); } catch { return []; } })(),
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `kei-config-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function importConfig(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result as string);
+        if (data.espIp) { localStorage.setItem("espIp", data.espIp); setEspIp(data.espIp); }
+        if (data.mqttBroker) { localStorage.setItem("mqttBroker", data.mqttBroker); setMqttBroker(data.mqttBroker); }
+        if (data.mqttPort) { localStorage.setItem("mqttPort", String(data.mqttPort)); setMqttPort(data.mqttPort); }
+        if (data.mqttUser !== undefined) { localStorage.setItem("mqttUser", data.mqttUser); setMqttUser(data.mqttUser); }
+        if (data.mqttPass !== undefined) { localStorage.setItem("mqttPass", data.mqttPass); setMqttPass(data.mqttPass); }
+        if (data.mqttPrefix) { localStorage.setItem("mqttPrefix", data.mqttPrefix); setMqttPrefix(data.mqttPrefix); }
+        if (data.groqKey) { localStorage.setItem("kei_groq_key", data.groqKey); }
+        if (data.faceDB) { localStorage.setItem("kei_face_db", JSON.stringify(data.faceDB)); faceDBRef.current = data.faceDB; }
+        alert("Config restored! Reload the page.");
+      } catch {
+        alert("Invalid config file.");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  }
 
   const discoverESP = useCallback(async () => {
     if (scanning) return;
@@ -1788,6 +1835,19 @@ const mqttDeviceIdRef = useRef("");
           )}
         </div>
       )}
+
+      {/* CONFIG BACKUP */}
+      <div className="w-full max-w-sm flex gap-1.5">
+        <button onClick={exportConfig}
+          className="px-3 py-1.5 rounded-full bg-zinc-800 text-zinc-300 text-[9px] font-mono border border-zinc-700 active:scale-90 flex-1">
+          ⬇ CONFIG
+        </button>
+        <button onClick={() => fileInputRef.current?.click()}
+          className="px-3 py-1.5 rounded-full bg-zinc-800 text-zinc-300 text-[9px] font-mono border border-zinc-700 active:scale-90 flex-1">
+          ⬆ CONFIG
+        </button>
+        <input ref={fileInputRef} type="file" accept=".json" className="hidden" onChange={importConfig} />
+      </div>
 
       {source === "stream" && (
         <div className="flex gap-1.5 w-full max-w-sm">
