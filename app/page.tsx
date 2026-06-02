@@ -137,6 +137,15 @@ export default function VisionPage() {
   const darkTimerRef = useRef(0);
   const wallStateRef = useRef<{ phase: number; timer: number } | null>(null);
 
+  // === Edge detection & path memory ===
+  const edgeDensityRef = useRef({ left: 0, center: 0, right: 0 });
+  const pathHistoryRef = useRef<{ x: number; y: number; t: number }[]>([]);
+  const loopDetectRef = useRef(false);
+  const loopTimerRef = useRef(0);
+  const pidErrorRef = useRef({ integral: 0, lastError: 0 });
+  const goalRef = useRef<{ x: number; y: number; label: string } | null>(null);
+  const aiActionRef = useRef("");
+
   const prevFrameRef = useRef<number[]>([]);
   const stuckFramesRef = useRef(0);
   const stuckCooldownRef = useRef(0);
@@ -148,7 +157,7 @@ export default function VisionPage() {
   const debugRef = useRef(false);
   const detectTimeRef = useRef(0);
   const aiBusyRef = useRef(false);
-  const motorRef = useRef({ sendMotor: (l: number, r: number) => {}, trackTarget: null as { label: string; lastSeen: number } | null, setTrackTarget: (t: { label: string; lastSeen: number } | null) => {}, aiMotor: null as { l: number; r: number } | null });
+  const motorRef = useRef({ sendMotor: (l: number, r: number) => {}, trackTarget: null as { label: string; lastSeen: number } | null, setTrackTarget: (t: { label: string; lastSeen: number } | null) => {}, aiMotor: null as { l: number; r: number } | null, goalRef: { current: null as { x: number; y: number; label: string } | null } });
 
   const sendMotor = useCallback((l: number, r: number) => {
     const h = headingRef.current;
@@ -200,6 +209,7 @@ export default function VisionPage() {
       setTrackInfo(t ? `🔒 ${t.label}` : "");
     },
     aiMotor: null,
+    goalRef,
   };
 
   // Keyboard
@@ -939,6 +949,73 @@ const mqttDeviceIdRef = useRef("");
     };
   }
 
+  function detectEdges(): { left: number; center: number; right: number } {
+    let canvas = brightnessCanvasRef.current;
+    if (!canvas) {
+      canvas = document.createElement('canvas');
+      brightnessCanvasRef.current = canvas;
+    }
+    let w = 640, h = 480;
+    const video = videoRef.current;
+    const img = streamImgRef.current;
+    if (source === "local" && video && video.videoWidth) {
+      w = video.videoWidth; h = video.videoHeight;
+    } else if (img && img.complete && img.naturalWidth) {
+      w = img.naturalWidth; h = img.naturalHeight;
+    }
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return { left: 0, center: 0, right: 0 };
+    if (source === "local" && video) ctx.drawImage(video, 0, 0);
+    else if (img && img.complete) ctx.drawImage(img, 0, 0);
+    else return { left: 0, center: 0, right: 0 };
+    const data = ctx.getImageData(0, 0, w, h).data;
+    // Sobel-like gradient: sample horizontal gradient at grid points
+    const GRID = 6;
+    const cellW = Math.floor(w / GRID);
+    const cellH = Math.floor(h / GRID);
+    let leftEdge = 0, centerEdge = 0, rightEdge = 0;
+    let leftN = 0, centerN = 0, rightN = 0;
+    const step = 8;
+    for (let gy = 0; gy < GRID; gy++) {
+      for (let gx = 0; gx < GRID; gx++) {
+        let gradSum = 0, count = 0;
+        for (let py = cellH / 2 - 8; py < cellH / 2 + 8; py += step) {
+          for (let px = 4; px < cellW - 4; px += step) {
+            const idx = ((gy * cellH + py) * w + (gx * cellW + px)) * 4;
+            const val = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
+            const idxR = idx + 4 * step;
+            const valR = (data[idxR] + data[idxR + 1] + data[idxR + 2]) / 3;
+            gradSum += Math.abs(valR - val);
+            count++;
+          }
+        }
+        const avgGrad = count > 0 ? gradSum / count : 0;
+        if (gx < 2) { leftEdge += avgGrad; leftN++; }
+        else if (gx >= 4) { rightEdge += avgGrad; rightN++; }
+        else { centerEdge += avgGrad; centerN++; }
+      }
+    }
+    return {
+      left: leftN > 0 ? leftEdge / leftN : 0,
+      center: centerN > 0 ? centerEdge / centerN : 0,
+      right: rightN > 0 ? rightEdge / rightN : 0,
+    };
+  }
+
+  function checkLoop(): boolean {
+    const path = pathHistoryRef.current;
+    if (path.length < 8) return false;
+    const cur = path[path.length - 1];
+    let closeCount = 0;
+    for (let i = path.length - 3; i >= 0; i--) {
+      const p = path[i];
+      const dist = Math.hypot(cur.x - p.x, cur.y - p.y);
+      if (dist < 20) closeCount++;
+    }
+    return closeCount >= 3;
+  }
+
   function sampleBrightness(): number {
     let canvas = brightnessCanvasRef.current;
     if (!canvas) {
@@ -1070,6 +1147,80 @@ const mqttDeviceIdRef = useRef("");
     const stableDetections = filterDetections(detections);
     const motorRunning = leftMotor !== 0 || rightMotor !== 0;
 
+    // Path memory — record position every 10 frames
+    const pos = posRef.current;
+    pathHistoryRef.current.push({ x: pos.x, y: pos.y, t: Date.now() });
+    if (pathHistoryRef.current.length > 30) pathHistoryRef.current.shift();
+
+    // Edge detection — for smart wall avoidance
+    edgeDensityRef.current = detectEdges();
+
+    // Loop detection
+    if (motorRunning && pathHistoryRef.current.length >= 10) {
+      if (checkLoop()) {
+        loopTimerRef.current++;
+        if (loopTimerRef.current > 5) {
+          loopDetectRef.current = true;
+          aiActionRef.current = "loop";
+          setTrackInfo('muter aja! cari jalan');
+          trackTargetRef.current = null;
+          scanStateRef.current = 'idle';
+          scanLevelRef.current = 0;
+          const dir = Math.random() > 0.5 ? -200 : 200;
+          setLeftMotor(-dir); setRightMotor(dir);
+          sendMotor(-dir, dir);
+        }
+      } else {
+        loopTimerRef.current = 0;
+        loopDetectRef.current = false;
+      }
+    }
+
+    // Goal navigation
+    const goal = goalRef.current;
+    if (goal && !trackTargetRef.current && motorRunning) {
+      const dx = goal.x - pos.x;
+      const dy = goal.y - pos.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist < 50) {
+        // Goal reached!
+        goalRef.current = null;
+        aiActionRef.current = "";
+        setTrackInfo(`📍 ${goal.label} ✅`);
+        setLeftMotor(0); setRightMotor(0); sendMotor(0, 0);
+      } else {
+        aiActionRef.current = `goal:${goal.label}`;
+        const targetAngle = Math.atan2(dx, -dy);
+        let angleDiff = targetAngle - headingRef.current;
+        while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+        while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+        const absDiff = Math.abs(angleDiff);
+        if (absDiff > 0.3) {
+          // Turn toward goal
+          const dir = angleDiff > 0 ? -1 : 1;
+          setLeftMotor(dir * 150); setRightMotor(-dir * 150);
+          sendMotor(dir * 150, -dir * 150);
+          setTrackInfo(`📍 ${goal.label} ${(absDiff * 180 / Math.PI).toFixed(0)}°`);
+          return;
+        }
+        // Edge-aware pathfinding: check if blocked, go around
+        const edges = edgeDensityRef.current;
+        const edgeScore = (edges.left + edges.center + edges.right) / 3;
+        if (edges.center < 5 && edges.left + edges.right > 0) {
+          // Blocked center, steer toward higher edge density
+          const steer = edges.left > edges.right ? -80 : 80;
+          setLeftMotor(150 + steer); setRightMotor(150 - steer);
+          sendMotor(150 + steer, 150 - steer);
+          setTrackInfo(`📍 cari jalan`);
+          return;
+        }
+        setLeftMotor(180); setRightMotor(180);
+        sendMotor(180, 180);
+        setTrackInfo(`📍 ${goal.label} ${Math.round(dist)}px`);
+        return;
+      }
+    }
+
     // Dark detection
     brightnessRef.current = sampleBrightness();
     if (brightnessRef.current < 35) {
@@ -1119,41 +1270,44 @@ const mqttDeviceIdRef = useRef("");
       return;
     }
 
-    // Wall detection — large uniform area = obstacle
-    if (!aiBusyRef.current && motorRunning) {
+    // Wall detection — large uniform area = obstacle, edge-aware
+    if (motorRunning && !aiBusyRef.current) {
       const wall = detectWall();
+      const edges = edgeDensityRef.current;
       if (wall.blocked) {
+        aiActionRef.current = "wall";
         if (!wallStateRef.current) {
           wallStateRef.current = { phase: 0, timer: 0 };
         }
         const w = wallStateRef.current;
         w.timer++;
         if (w.phase === 0) {
-          // Stop
           setLeftMotor(0); setRightMotor(0); sendMotor(0, 0);
           setTrackInfo('tembok!');
           if (w.timer > 5) { w.phase = 1; w.timer = 0; }
         } else if (w.phase === 1) {
-          // Back up
-          const dir = wall.right && !wall.left ? 1 : wall.left && !wall.right ? -1 : 0;
-          setLeftMotor(dir * 180); setRightMotor(dir * 180);
-          sendMotor(-180 * (dir || 1), -180 * (dir || 1));
-          if (w.timer > 15) { w.phase = 2; w.timer = 0; }
+          // Back up — prefer direction with more edges (clear path)
+          const clearSide = edges.left > edges.right ? 1 : -1;
+          setLeftMotor(-180 * clearSide); setRightMotor(-180 * clearSide);
+          sendMotor(-180 * clearSide, -180 * clearSide);
+          if (w.timer > 12) { w.phase = 2; w.timer = 0; }
         } else {
-          // Turn away — belok ke sisi yang gak ketembok
-          const steer = wall.right && !wall.left ? 200 : wall.left && !wall.right ? -200 : wall.center ? 150 : -150;
+          // Turn toward the side with highest edge density (open path)
+          const steer = edges.right > edges.left ? 200 : -200;
           setLeftMotor(-steer); setRightMotor(steer);
           sendMotor(-steer, steer);
-          if (w.timer > 20) {
+          if (w.timer > 15) {
             w.phase = 0; w.timer = 0;
             wallStateRef.current = null;
             scanStateRef.current = 'idle';
+            aiActionRef.current = "";
           }
         }
         return;
       }
     }
     wallStateRef.current = null;
+    if (!aiActionRef.current.startsWith("goal") && !loopDetectRef.current) aiActionRef.current = "";
 
     // Face detected → stop tracking motor, biarkan AI ngobrol
     // Skip jika user sedang manual kontrol (joystick/keyboard)
@@ -1495,14 +1649,22 @@ const mqttDeviceIdRef = useRef("");
     const stopZone = 0.22;
     if (found.area > stopZone) {
       trackSmoothRef.current = { l: 0, r: 0 };
+      pidErrorRef.current = { integral: 0, lastError: 0 };
       setLeftMotor(0); setRightMotor(0);
       sendMotor(0, 0);
       setTrackInfo(`🔒 ${trackLabelRef.current} ✅`);
       return;
     }
     const errorX = found.cx - 0.5;
-    const kp = 200;
-    const turn = errorX * kp;
+    // PID
+    const kp = 160;
+    const ki = 0.02;
+    const kd = 40;
+    const pid = pidErrorRef.current;
+    pid.integral = Math.max(-50, Math.min(50, pid.integral + errorX));
+    const deriv = errorX - pid.lastError;
+    pid.lastError = errorX;
+    const turn = errorX * kp + pid.integral * ki + deriv * kd;
     const speedT = found.area / stopZone;
     const baseSpeed = Math.max(150, Math.round((1 - speedT) * 200));
     let l = baseSpeed + Math.round(turn) + bias;
@@ -1602,6 +1764,31 @@ const mqttDeviceIdRef = useRef("");
             </button>
           </div>
         )}
+        {aiActionRef.current !== "" && (
+          <div className="absolute top-1.5 left-24 z-30 flex items-center gap-1 bg-black/40 backdrop-blur-sm rounded-full px-1.5 py-0.5 border border-white/10">
+            <div className="size-1.5 rounded-full animate-pulse" style={{ backgroundColor: loopDetectRef.current ? "#f59e0b" : aiActionRef.current.startsWith("goal") ? "#3b82f6" : aiActionRef.current === "wall" ? "#ef4444" : "#22c55e" }} />
+            <span className="text-[6px] font-mono tracking-wider text-white/70">{aiActionRef.current}</span>
+          </div>
+        )}
+
+        {/* Environmental indicators */}
+        <div className="absolute top-1.5 right-9 z-30 flex items-center gap-1">
+          {darkAvoidRef.current && (
+            <div className="flex items-center gap-0.5 bg-black/40 backdrop-blur-sm rounded-full px-1.5 py-0.5 border border-yellow-600/30">
+              <span className="text-[7px] text-yellow-400 font-mono">🌑 gelap</span>
+            </div>
+          )}
+          {stuckFramesRef.current > 5 && (
+            <div className="flex items-center gap-0.5 bg-black/40 backdrop-blur-sm rounded-full px-1.5 py-0.5 border border-orange-600/30">
+              <span className="text-[7px] text-orange-400 font-mono">⚠ stuck</span>
+            </div>
+          )}
+          {scanStateRef.current !== "idle" && (
+            <div className="flex items-center gap-0.5 bg-black/40 backdrop-blur-sm rounded-full px-1.5 py-0.5 border border-blue-600/30">
+              <span className="text-[7px] text-blue-300 font-mono">🔍 {scanStateRef.current}</span>
+            </div>
+          )}
+        </div>
         <button onClick={() => { if (source === "stream") { setSource("local"); setActive(false); } else { setSource("stream"); setActive(true); } }}
           className="absolute top-1.5 right-1.5 z-30 size-7 rounded-full bg-black/50 backdrop-blur-md border border-white/10 flex items-center justify-center hover:bg-black/70 active:scale-90">
           <svg className="size-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>

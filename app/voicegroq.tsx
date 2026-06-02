@@ -18,6 +18,7 @@ interface VoiceGroqProps {
     trackTarget: { label: string; lastSeen: number } | null;
     setTrackTarget: (t: { label: string; lastSeen: number } | null) => void;
     aiMotor: { l: number; r: number } | null;
+    goalRef: React.MutableRefObject<{ x: number; y: number; label: string } | null>;
   }>;
 }
 
@@ -42,19 +43,29 @@ const SYSTEM_PROMPT = `Lo adalah Kei, robot pintar yang jelajah. Aturan:
 Navigasi:
 [motor:L,R] — gerak motor kiri=L kanan=R (-255 sd 255)
 [track:label] — kejar & follow objek
+[goal:x,y,label] — set waypoint/tujuan navigasi (koordinat grid)
 [stop] — berhenti
 Contoh: "Ada mobil di kanan, gua follow. [track:mobil]"
+Contoh goal: "Gua mau ke pojok kiri. [goal:50,200,pojok kiri]"
+
+Goal navigation:
+- Pakai [goal:x,y,label] untuk kasih tujuan. Robot auto navigasi ke situ.
+- Kalo butuh explore, set goal ke arah tertentu.
+- Goal bagus buat jelajah terarah: kasih goal ke pojok, ke tengah, dll.
 
 SAFETY (priority!):
 - Kalo gelap — MUNDUR atau muter, JANGAN maju.
-- Kalo ada TEMBOK di depan — MUNDUR, belok cari jalan lain.
+- Kalo ada TEMBOK di depan — MUNDUR, belok cari jalan lain (cek tepi kiri/kanan).
 - Kalo ada objek gede menghalang — minggir, jangan nayok.
 - Kalo nyangkut/gerak tapi pemandangan gak berubah — MUTER balik.
+- Kalo muter terus (loop detected) — cari arah baru.
 - Jangan monoton — kadang maju, kadang mundur, kadang puter.
 - Kalo liat objek menarik, tracking & follow.
 - Kalo ada wajah dikenal, sapa dan ngobrol.
 
-Lo suka eksplor dan selalu cari jalan. Sesuain gaya bicara sama situasi!`;
+Lo suka eksplor dan selalu cari jalan. Sesuain gaya bicara sama situasi!
+Kalo auto mode nyala, lo jalan sendiri. Kita butuh variasi: kasih goal random biar explore.
+Contoh: gas ke pojok kanan, trus ke tengah, trus ke kiri. Explore terus!`;
 
 function buildContext(
   dets: VoiceGroqProps["detectionsRef"]["current"],
@@ -256,6 +267,16 @@ export default function VoiceGroq({
               if (label && motorRef?.current) {
                 if (motorRef.current.aiMotor) motorRef.current.aiMotor = null;
                 motorRef.current.setTrackTarget({ label, lastSeen: Date.now() });
+              }
+            } else if (cmd.startsWith("goal:")) {
+              const parts = cmd.slice(5).split(",");
+              if (parts.length >= 3 && motorRef?.current) {
+                const gx = parseInt(parts[0]), gy = parseInt(parts[1]);
+                const glabel = parts.slice(2).join(",").trim();
+                if (!isNaN(gx) && !isNaN(gy)) {
+                  motorRef.current.goalRef.current = { x: gx, y: gy, label: glabel || "tujuan" };
+                  if (motorRef.current.aiMotor) motorRef.current.aiMotor = null;
+                }
               }
             } else if (cmd === "stop") {
               if (autoRef.current) {
@@ -505,7 +526,11 @@ export default function VoiceGroq({
         <div className="flex items-center gap-1.5">
           <div className={`size-1.5 rounded-full ${status === "listening" ? "bg-green-400 animate-pulse" : status === "processing" ? "bg-yellow-400" : "bg-zinc-600"}`} />
           <span className="text-[10px] font-mono text-zinc-400">Kei Voice</span>
-          {ttsState === "speaking" && <span className="text-[7px] text-blue-400 font-mono">🔊</span>}
+          {ttsState === "speaking" ? (
+            <span className="text-[7px] text-blue-400 font-mono">🔊 {selectedVoiceRef.current === "gtts" ? "gTTS" : selectedVoiceRef.current?.startsWith("edge:") ? "Edge" : selectedVoiceRef.current?.startsWith("browser:") ? "Browser" : ""}</span>
+          ) : ttsSource ? (
+            <span className="text-[6px] text-zinc-600 font-mono">{ttsSource}</span>
+          ) : null}
           <button onClick={() => { const nv = !autoRef.current; setAuto(nv); autoRef.current = nv; if (!nv) motorRef?.current?.sendMotor(0, 0); }}
             className={`ml-1 size-4 rounded-full flex items-center justify-center text-[6px] font-mono font-bold border ${auto ? "bg-amber-500 border-amber-500 text-black animate-pulse" : "bg-transparent border-zinc-700 text-zinc-500"}`}>
             A
