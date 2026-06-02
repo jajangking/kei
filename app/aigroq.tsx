@@ -17,6 +17,7 @@ interface AIGroqProps {
     sendMotor: (l: number, r: number) => void;
     trackTarget: { label: string; lastSeen: number } | null;
     setTrackTarget: (t: { label: string; lastSeen: number } | null) => void;
+    aiMotor: { l: number; r: number } | null;
   }>;
 }
 
@@ -280,6 +281,7 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
             } else if (cmd.startsWith("track:")) {
               const label = cmd.slice(6).trim();
               if (label && motorRef?.current) {
+                if (motorRef.current.aiMotor) motorRef.current.aiMotor = null; // balik ke tracking built-in
                 motorRef.current.setTrackTarget({ label, lastSeen: Date.now() });
                 autoLastCmdRef.current = Date.now();
               }

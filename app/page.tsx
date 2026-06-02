@@ -147,7 +147,7 @@ export default function VisionPage() {
   const debugRef = useRef(false);
   const detectTimeRef = useRef(0);
   const aiBusyRef = useRef(false);
-  const motorRef = useRef({ sendMotor: (l: number, r: number) => {}, trackTarget: null as { label: string; lastSeen: number } | null, setTrackTarget: (t: { label: string; lastSeen: number } | null) => {} });
+  const motorRef = useRef({ sendMotor: (l: number, r: number) => {}, trackTarget: null as { label: string; lastSeen: number } | null, setTrackTarget: (t: { label: string; lastSeen: number } | null) => {}, aiMotor: null as { l: number; r: number } | null });
 
   const sendMotor = useCallback((l: number, r: number) => {
     const h = headingRef.current;
@@ -198,6 +198,7 @@ export default function VisionPage() {
       trackLabelRef.current = t?.label || null;
       setTrackInfo(t ? `🔒 ${t.label}` : "");
     },
+    aiMotor: null,
   };
 
   // Keyboard
@@ -1064,6 +1065,14 @@ const mqttDeviceIdRef = useRef("");
         setLeftMotor(0); setRightMotor(0);
         sendMotor(0, 0);
       }
+      return;
+    }
+
+    // AI motor override — Groq ngontrol langsung, persist sampai di-stop
+    const aiMotor = motorRef.current?.aiMotor;
+    if (aiMotor) {
+      setLeftMotor(aiMotor.l); setRightMotor(aiMotor.r);
+      sendMotor(aiMotor.l, aiMotor.r);
       return;
     }
 
