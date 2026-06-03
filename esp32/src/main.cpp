@@ -923,7 +923,6 @@ void writeMotorB(int speed) {
     ledcWrite(CH_RIGHT, 0);
   }
 }
-}
 
 // =======================
 // STOP
