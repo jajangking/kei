@@ -51,12 +51,6 @@ WebServer httpServer(80);
 #define BUZZER 4
 
 // =======================
-// PWM (ESP32 Core 3.x API)
-// =======================
-#define CH_LEFT 0
-#define CH_RIGHT 1
-
-// =======================
 // TELEMETRY
 // =======================
 #define TELEMETRY_INTERVAL 1000
@@ -377,10 +371,8 @@ void handleWiFi() {
     delay(100);
     digitalWrite(BUZZER, LOW);
 
-    ledcSetup(CH_LEFT, 1000, 8);
-    ledcAttachPin(PWMA, CH_LEFT);
-    ledcSetup(CH_RIGHT, 1000, 8);
-    ledcAttachPin(PWMB, CH_RIGHT);
+    ledcAttach(PWMA, 1000, 8);
+    ledcAttach(PWMB, 1000, 8);
 
     stopMotors();
 
