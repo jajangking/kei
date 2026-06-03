@@ -350,20 +350,18 @@ void connectWiFi() {
 void handleWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
     wifiConnecting = false;
-    if (!initialized) {
-      initialized = true;
-    }
+    initialized = true;
     return;
   }
 
-  // WIFI RECONNECT (sudah initialized)
-  if (initialized && WiFi.status() != WL_CONNECTED) {
+  if (initialized) {
     wifiConnecting = true;
     return;
   }
 
-  if (!initialized) {
-    // FIRST BOOT INIT
+  initialized = true;
+
+  // FIRST BOOT INIT
     pinMode(AIN1, OUTPUT);
     pinMode(AIN2, OUTPUT);
     pinMode(BIN1, OUTPUT);
@@ -445,7 +443,6 @@ void handleWiFi() {
     });
 
     ArduinoOTA.begin();
-  }
 }
 
 // =======================
