@@ -439,7 +439,7 @@ void handleWiFi() {
       }  
     });
 
-    httpServer.on("/update", HTTP_GET, []() {
+    httpServer.on("/update", []() {
       String html = F(
         "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
         "<title>Kei OTA Update</title>"
