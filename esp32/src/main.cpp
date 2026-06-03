@@ -80,7 +80,7 @@ bool wsConnected = false;
 // =======================
 // CONFIG
 // =======================
-int maxSpeed = 180;
+int maxSpeed = 255;
 int rampRate = 4;
 int motorTimeout = 5000;
 
@@ -827,9 +827,13 @@ void handleMessage(String msg) {
 
     int leftVal = (doc["leftMotor"] | 0) + leftTrim;
     targetLeftSpeed = constrain(leftVal, -cap, cap);
+    if (targetLeftSpeed > 0 && targetLeftSpeed < 120) targetLeftSpeed = 120;
+    else if (targetLeftSpeed < 0 && targetLeftSpeed > -120) targetLeftSpeed = -120;
 
     int rightVal = (doc["rightMotor"] | 0) + rightTrim;
     targetRightSpeed = constrain(rightVal, -cap, cap); 
+    if (targetRightSpeed > 0 && targetRightSpeed < 120) targetRightSpeed = 120;
+    else if (targetRightSpeed < 0 && targetRightSpeed > -120) targetRightSpeed = -120;
 
     lastCommandTime = millis();
   }
@@ -839,51 +843,31 @@ void handleMessage(String msg) {
 // RAMP
 // =======================
 void rampMotors() {
+  auto stepMotor = [](int &current, int target, int rate) {
+    const int DZ = 120;
+    if (target == 0 && abs(current) > 0 && abs(current) <= DZ) {
+      current = 0;
+    } else if (abs(target) >= DZ && current == 0) {
+      current = (target > 0) ? 60 : -60;
+    } else if (abs(target) >= DZ && abs(current) == 60) {
+      current = (target > 0) ? 90 : -90;
+    } else if (abs(target) >= DZ && abs(current) == 90) {
+      current = (target > 0) ? DZ : -DZ;
+    } else {
+      int step = (target > current) ? rate : -rate;
+      current += step;
+      if (abs(current - target) < rate) current = target;
+    }
+    current = constrain(current, -255, 255);
+  };
+
   if (currentLeftSpeed != targetLeftSpeed) {
-    int step =  
-      (targetLeftSpeed > currentLeftSpeed)  
-      ? rampRate  
-      : -rampRate;  
-
-    currentLeftSpeed += step;  
-
-    if (  
-      abs(currentLeftSpeed - targetLeftSpeed)  
-      < rampRate  
-    ) {  
-      currentLeftSpeed = targetLeftSpeed;  
-    }  
-
-    currentLeftSpeed = constrain(  
-      currentLeftSpeed,  
-      -255,  
-      255  
-    );  
-
+    stepMotor(currentLeftSpeed, targetLeftSpeed, rampRate);
     writeMotorA(currentLeftSpeed);
   }
 
   if (currentRightSpeed != targetRightSpeed) {
-    int step =  
-      (targetRightSpeed > currentRightSpeed)  
-      ? rampRate  
-      : -rampRate;  
-
-    currentRightSpeed += step;  
-
-    if (  
-      abs(currentRightSpeed - targetRightSpeed)  
-      < rampRate  
-    ) {  
-      currentRightSpeed = targetRightSpeed;  
-    }  
-
-    currentRightSpeed = constrain(  
-      currentRightSpeed,  
-      -255,  
-      255  
-    );  
-
+    stepMotor(currentRightSpeed, targetRightSpeed, rampRate);
     writeMotorB(currentRightSpeed);
   }
 }
@@ -893,9 +877,6 @@ void rampMotors() {
 // =======================
 void writeMotorA(int speed) {
   speed = constrain(speed, -255, 255);
-  
-  if (speed > 0 && speed < 90) speed = 90;
-  else if (speed < 0 && speed > -90) speed = -90;
 
   if (speed > 0) {
     digitalWrite(AIN1, HIGH);  
@@ -917,9 +898,6 @@ void writeMotorA(int speed) {
 // =======================
 void writeMotorB(int speed) {
   speed = constrain(speed, -255, 255);
-  
-  if (speed > 0 && speed < 90) speed = 90;
-  else if (speed < 0 && speed > -90) speed = -90;
 
   if (speed > 0) {
     digitalWrite(BIN1, HIGH);  
