@@ -80,7 +80,7 @@ bool wsConnected = false;
 // =======================
 // CONFIG
 // =======================
-int maxSpeed = 100;
+int maxSpeed = 180;
 int rampRate = 4;
 int motorTimeout = 5000;
 
@@ -894,8 +894,8 @@ void rampMotors() {
 void writeMotorA(int speed) {
   speed = constrain(speed, -255, 255);
   
-  if (speed > 0 && speed < 60) speed = 60;
-  else if (speed < 0 && speed > -60) speed = -60;
+  if (speed > 0 && speed < 90) speed = 90;
+  else if (speed < 0 && speed > -90) speed = -90;
 
   if (speed > 0) {
     digitalWrite(AIN1, HIGH);  
@@ -918,8 +918,8 @@ void writeMotorA(int speed) {
 void writeMotorB(int speed) {
   speed = constrain(speed, -255, 255);
   
-  if (speed > 0 && speed < 60) speed = 60;
-  else if (speed < 0 && speed > -60) speed = -60;
+  if (speed > 0 && speed < 90) speed = 90;
+  else if (speed < 0 && speed > -90) speed = -90;
 
   if (speed > 0) {
     digitalWrite(BIN1, HIGH);  
@@ -934,6 +934,7 @@ void writeMotorB(int speed) {
     digitalWrite(BIN2, LOW);  
     ledcWrite(CH_RIGHT, 0);
   }
+}
 }
 
 // =======================
