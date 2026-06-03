@@ -80,14 +80,14 @@ bool wsConnected = false;
 // =======================
 // CONFIG
 // =======================
-int maxSpeed = 180;
+int maxSpeed = 100;
 int rampRate = 4;
 int motorTimeout = 5000;
 
 bool powerSave = false;
 
-bool speedLimitEnabled = true;
-int speedLimit = 120;
+bool speedLimitEnabled = false;
+int speedLimit = 100;
 
 int leftTrim = 0;
 int rightTrim = 0;
