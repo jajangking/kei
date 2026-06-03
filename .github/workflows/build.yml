@@ -24,7 +24,7 @@ jobs:
         run: pip install platformio
 
       - name: Build firmware
-        run: pio run -d esp32 2>&1 | tee /tmp/pio_output.txt
+        run: set -o pipefail; pio run -d esp32 2>&1 | tee /tmp/pio_output.txt
 
       - name: Upload error log if failed
         if: failure()
