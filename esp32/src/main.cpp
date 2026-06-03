@@ -355,6 +355,11 @@ void handleWiFi() {
 
   if (initialized) {
     wifiConnecting = true;
+    if (millis() - lastWifiAttempt > 10000) {
+      lastWifiAttempt = millis();
+      WiFi.disconnect();
+      WiFi.begin(wifiSsid.c_str(), wifiPass.c_str());
+    }
     return;
   }
 
@@ -536,6 +541,12 @@ void loop() {
   if (WiFi.status() != WL_CONNECTED) {
     stopMotors();  
     return;
+  }
+
+  // GRACEFUL RECONNECT HANDOVER
+  if (wifiConnecting) {
+    wifiConnecting = false;
+    connectMQTT();
   }
 
   // TIMEOUT
