@@ -22,6 +22,11 @@ interface VoiceGroqProps {
   }>;
 }
 
+interface ChatMsg {
+  role: "system" | "user" | "assistant";
+  content: string;
+}
+
 function clampMotor(v: number): number {
   if (v === 0) return 0;
   const abs = Math.abs(v);
@@ -112,6 +117,7 @@ export default function VoiceGroq({
 }: VoiceGroqProps) {
   const [status, setStatus] = useState("idle");
   const [lastLlm, setLastLlm] = useState("");
+  const [chatHistory, setChatHistory] = useState<ChatMsg[]>([]);
   const [ttsState, setTtsState] = useState<"idle" | "speaking">("idle");
   const [ttsSource, setTtsSource] = useState("");
   const [voices, setVoices] = useState<VoiceOption[]>([]);
@@ -121,6 +127,7 @@ export default function VoiceGroq({
   const [showSettings, setShowSettings] = useState(false);
 
   const genRef = useRef(0);
+  const listenGenRef = useRef(0);
   const acRef = useRef<AudioContext | null>(null);
   const speakingRef = useRef(false);
   const abortRef = useRef(false);
@@ -137,6 +144,7 @@ export default function VoiceGroq({
   const lastFaceRef = useRef<string | null>(null);
   const contextIvRef = useRef<any>(null);
   const lastContextRef = useRef("");
+  const chatHistoryRef = useRef<ChatMsg[]>([]);
 
   const voicesRef = useRef(voices);
   voicesRef.current = voices;
@@ -213,16 +221,34 @@ export default function VoiceGroq({
   }
 
   async function askGroq(text: string, isAuto?: boolean) {
-    const gen = genRef.current;
+    processingRef.current = true;
+    processingRef.current = true;
+
+    const gen = ++genRef.current;
+    abortRef.current = false;
+    speechSynthesis.cancel();
+    speakingRef.current = false;
+    setTtsState("idle");
     setLastLlm("");
     let fullText = "";
 
+    const ctx = buildContext(detectionsRef.current, recognizedFaceRef.current, trackInfoRef.current, scanStateRef.current, headingRef?.current, leftMotor, rightMotor);
+    const systemMsg: ChatMsg = { role: "system", content: `${SYSTEM_PROMPT}\n\nKonteks saat ini: ${ctx}` };
+    const history = chatHistoryRef.current.filter(m => m.role !== "system");
+    const recent = history.slice(-10);
+
     try {
       const key = apiKey || undefined;
+      const body = {
+        messages: [...recent, { role: "user", content: text }],
+        apiKey: key,
+        systemPrompt: `${SYSTEM_PROMPT}\n\nKonteks saat ini: ${ctx}`,
+      };
+
       const res = await fetch("/api/groq/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: [{ role: "user", content: text }], apiKey: key }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) throw new Error(await res.text());
 
@@ -250,7 +276,12 @@ export default function VoiceGroq({
       }
 
       if (fullText && genRef.current === gen) {
-        // Parse robot commands
+        const userMsg: ChatMsg = { role: "user", content: text };
+        const reply = fullText.replace(/\[([^\]]+)\]/g, '').trim();
+
+        chatHistoryRef.current = [...chatHistoryRef.current, userMsg, { role: "assistant", content: reply }];
+        setChatHistory(chatHistoryRef.current);
+
         if (!isAuto) {
           const cmds = fullText.match(/\[([^\]]+)\]/g) || [];
           for (const raw of cmds) {
@@ -292,28 +323,28 @@ export default function VoiceGroq({
             }
           }
         }
-        fullText = fullText.replace(/\[([^\]]+)\]/g, "").trim();
-        if (!fullText) { processingRef.current = false; setStatus("idle"); startListeningRef.current?.(); return; }
 
-        setTtsState("speaking");
-        speakingRef.current = true;
-        if (aiBusyRef) aiBusyRef.current = true;
+        if (reply) {
+          setTtsState("speaking");
+          speakingRef.current = true;
+          if (aiBusyRef) aiBusyRef.current = true;
 
-        const voiceOpt = voicesRef.current.find((v) => v.id === selectedVoiceRef.current);
-        if (voiceOpt?.type === "browser" && voiceOpt.voice) {
-          setTtsSource(voiceOpt.voice.name);
-          await speakBrowser(fullText, voiceOpt.voice);
-        } else if (voiceOpt?.type === "edge") {
-          setTtsSource(voiceOpt.label);
-          await fetchEdgeTts(fullText, voiceOpt.id.replace("edge:", ""));
-        } else {
-          setTtsSource("gTTS");
-          await fetchTts(fullText);
+          const voiceOpt = voicesRef.current.find((v) => v.id === selectedVoiceRef.current);
+          if (voiceOpt?.type === "browser" && voiceOpt.voice) {
+            setTtsSource(voiceOpt.voice.name);
+            await speakBrowser(reply, voiceOpt.voice);
+          } else if (voiceOpt?.type === "edge") {
+            setTtsSource(voiceOpt.label);
+            await fetchEdgeTts(reply, voiceOpt.id.replace("edge:", ""));
+          } else {
+            setTtsSource("gTTS");
+            await fetchTts(reply);
+          }
+          speakingRef.current = false;
+          if (aiBusyRef) aiBusyRef.current = false;
+          ttsEndRef.current = Date.now();
+          setTtsState("idle");
         }
-        speakingRef.current = false;
-        if (aiBusyRef) aiBusyRef.current = false;
-        ttsEndRef.current = Date.now();
-        setTtsState("idle");
       }
     } catch (e: any) {
       setLastLlm(`Error: ${e.message}`);
@@ -327,11 +358,10 @@ export default function VoiceGroq({
   }
 
   function startListening() {
-    if (abortRef.current || listeningRef.current) return;
+    if (abortRef.current || listeningRef.current || processingRef.current) return;
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) return;
 
-    // Anti-spam: max 5 restart dalam 10 detik, minimal jeda 2 detik antar restart
     const now = Date.now();
     if (now - lastListenRef.current < 2000) return;
     if (now - lastListenRef.current < 10000) listenCountRef.current++;
@@ -339,6 +369,7 @@ export default function VoiceGroq({
     if (listenCountRef.current > 5) { setStatus("idle"); return; }
     lastListenRef.current = now;
 
+    const sessionGen = ++listenGenRef.current;
     let gotResult = false;
     listeningRef.current = true;
     const recog = new SR();
@@ -347,23 +378,28 @@ export default function VoiceGroq({
     recog.maxAlternatives = 1;
 
     recog.onresult = (e: any) => {
+      if (listenGenRef.current !== sessionGen) return;
       gotResult = true;
       listeningRef.current = false;
       listenCountRef.current = 0;
       const text = e.results[e.results.length - 1][0].transcript.trim();
       if (!text) return;
       if (Date.now() - ttsEndRef.current < 800) return;
-      processingRef.current = true;
+      genRef.current++;
+      speechSynthesis.cancel();
+      speakingRef.current = false;
       setStatus("processing");
       askGroqRef.current?.(text, false);
     };
 
     recog.onerror = () => {
+      if (listenGenRef.current !== sessionGen) return;
       listeningRef.current = false;
       if (!abortRef.current) setTimeout(() => startListeningRef.current?.(), 1000);
     };
 
     recog.onend = () => {
+      if (listenGenRef.current !== sessionGen) return;
       listeningRef.current = false;
       if (!abortRef.current && !gotResult && !processingRef.current) {
         setTimeout(() => startListeningRef.current?.(), 300);
@@ -378,6 +414,8 @@ export default function VoiceGroq({
   // Auto context update + face greeting
   useEffect(() => {
     contextIvRef.current = setInterval(() => {
+      if (processingRef.current) return;
+
       const ctx = buildContext(detectionsRef.current, recognizedFaceRef.current, trackInfoRef.current, scanStateRef.current, undefined, leftMotor, rightMotor);
       if (ctx === lastContextRef.current) return;
       lastContextRef.current = ctx;
@@ -386,17 +424,14 @@ export default function VoiceGroq({
       if (faceNow && faceNow !== lastFaceRef.current && !speakingRef.current) {
         lastFaceRef.current = faceNow;
         motorRef?.current?.sendMotor(0, 0);
-        // Lock tracking on face
         if (motorRef?.current) {
           motorRef.current.setTrackTarget({ label: `wajah ${faceNow}`, lastSeen: Date.now() });
         }
-        // Matiin auto sementara
         if (autoRef.current) {
           setAuto(false);
           autoRef.current = false;
           clearInterval(autoIvRef.current);
         }
-        // Sapa + buka mic untuk ngobrol
         askGroqRef.current?.(`Ada ${faceNow} di depan. Sapa aja, jangan gerak!`, false);
       } else if (!faceNow) {
         lastFaceRef.current = null;
@@ -408,7 +443,7 @@ export default function VoiceGroq({
   // State-change proactive report
   useEffect(() => {
     const tick = () => {
-      if (speakingRef.current || !autoRef.current) return;
+      if (speakingRef.current || !autoRef.current || processingRef.current) return;
       const trackInfo = trackInfoRef.current;
       const scanState = scanStateRef.current;
       const isTracking = trackInfo.includes('✅') || trackInfo.includes('🔒');
@@ -431,7 +466,6 @@ export default function VoiceGroq({
   useEffect(() => {
     if (!auto) return;
     autoRef.current = true;
-    // Stop mic saat auto mode aktif
     recogRef.current?.abort();
     recogRef.current = null;
     listeningRef.current = false;
@@ -443,14 +477,13 @@ export default function VoiceGroq({
     if (!trackInfoRef.current.startsWith("🤖")) trackInfoRef.current = "🤖 auto...";
     let groqCalls = 0;
     const drive = () => {
-      if (!autoRef.current || speakingRef.current) return;
+      if (!autoRef.current || speakingRef.current || processingRef.current) return;
       groqCalls++;
       if (groqCalls % 6 !== 0) return;
       askGroqRef.current?.("Ada yang menarik? Kasi saran target. Jalan-jalan cari petualangan!", true);
     };
-    // Tiap ~30 detik juga lapor keadaan
     const reportIv = setInterval(() => {
-      if (!autoRef.current || speakingRef.current) return;
+      if (!autoRef.current || speakingRef.current || processingRef.current) return;
       const info = trackInfoRef.current;
       if (info.includes('tembok') || info.includes('cari')) {
         askGroqRef.current?.("Lagipula Ada tembok nih, cari jalan lain kemana?", true);
@@ -505,7 +538,7 @@ export default function VoiceGroq({
   startListeningRef.current = startListening;
 
   const start = useCallback(() => {
-    ++genRef.current;
+    genRef.current++;
     abortRef.current = false;
     speakingRef.current = false;
     setLastLlm("");
@@ -514,13 +547,14 @@ export default function VoiceGroq({
   }, []);
 
   const stop = useCallback(() => {
-    ++genRef.current;
+    genRef.current++;
     abortRef.current = true;
+    speakingRef.current = false;
+    processingRef.current = false;
     listeningRef.current = false;
     recogRef.current?.abort();
     recogRef.current = null;
     speechSynthesis.cancel();
-    speakingRef.current = false;
     setStatus("idle");
     setTtsState("idle");
   }, []);
@@ -572,6 +606,16 @@ export default function VoiceGroq({
       {lastLlm && (
         <div className="px-2.5 py-1.5 border-b border-white/5">
           <div className="text-[8px] font-mono text-zinc-300 leading-relaxed">{lastLlm}</div>
+        </div>
+      )}
+
+      {chatHistory.length > 0 && (
+        <div className="px-2.5 py-1.5 border-b border-white/5 max-h-20 overflow-y-auto">
+          {chatHistory.filter(m => m.role !== "system").slice(-4).map((m, i) => (
+            <div key={i} className={`text-[7px] font-mono ${m.role === "user" ? "text-fuchsia-400" : "text-zinc-400"}`}>
+              {m.role === "user" ? "🧑 " : "🤖 "}{m.content.slice(0, 80)}{m.content.length > 80 ? "…" : ""}
+            </div>
+          ))}
         </div>
       )}
 

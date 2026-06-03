@@ -27,6 +27,7 @@ interface Telemetry {
   leftTrim?: number;
   rightTrim?: number;
   mqtt?: boolean;
+  deviceName?: string;
 }
 
 export default function VisionPage() {
@@ -455,15 +456,6 @@ const mqttDeviceIdRef = useRef("");
     }
   }, [mqttBroker, mqttUser, mqttPass, mqttPrefix]);
 
-  const disconnectMQTT = useCallback(() => {
-    ++mqttGenRef.current;
-    mqttClientRef.current?.end(true);
-    mqttClientRef.current = null;
-    setMqttConnected(false);
-    setMqttStatus("putus");
-    sendESP({ mqttDisable: true });
-  }, [sendESP]);
-
   const sendESP = useCallback((data: object) => {
     const ws = wsRef.current;
     if (ws?.readyState === WebSocket.OPEN) {
@@ -484,6 +476,15 @@ const mqttDeviceIdRef = useRef("");
       fetch(`http://${ip}/cmd`, { method: 'POST', body: JSON.stringify(data) }).catch(() => {});
     }
   }, []);
+
+  const disconnectMQTT = useCallback(() => {
+    ++mqttGenRef.current;
+    mqttClientRef.current?.end(true);
+    mqttClientRef.current = null;
+    setMqttConnected(false);
+    setMqttStatus("putus");
+    sendESP({ mqttDisable: true });
+  }, [sendESP]);
 
   const sendPing = useCallback(() => sendESP({ ping: true }), [sendESP]);
   const sendEmergency = useCallback(() => sendESP({ emergency: true }), [sendESP]);
@@ -2022,7 +2023,7 @@ const mqttDeviceIdRef = useRef("");
                   className="flex-1 px-2 py-1 rounded-full bg-emerald-600 text-white text-[9px] font-mono font-bold active:scale-90">
                   HUBUNGKAN
                 </button>
-                <button onClick={() => sendESP({ mqttBroker, mqttPort: 8883, mqttUser, mqttPass, mqttPrefix, mqttEnabled: true })}
+                <button onClick={() => sendESP({ mqttBroker, mqttPort, mqttUser, mqttPass, mqttPrefix, mqttEnabled: true })}
                   className="px-2 py-1 rounded-full bg-zinc-800 text-zinc-300 text-[9px] font-mono border border-zinc-700 active:scale-90">
                   KIRIM KE ESP
                 </button>
@@ -2125,6 +2126,10 @@ const mqttDeviceIdRef = useRef("");
                     {showWifiConfig ? "tutup" : "ganti wifi"}
                   </button>
                 )}
+                <span className="text-zinc-500">mqtt ESP <span className={telemetry.mqtt ? 'text-green-400' : 'text-red-400'}>{telemetry.mqtt ? 'ON' : 'OFF'}</span></span>
+                {telemetry.deviceName && (
+                  <span className="text-zinc-500 col-span-2">nama <span className="text-fuchsia-400">{telemetry.deviceName}</span></span>
+                )}
               </div>
               {/* wifi config */}
               {showWifiConfig && (
@@ -2142,6 +2147,22 @@ const mqttDeviceIdRef = useRef("");
                   </button>
                 </div>
               )}
+              {/* device name, reboot, factory reset */}
+              <div className="flex flex-wrap gap-1.5 items-center">
+                <input value={telemetry.deviceName ?? ''}
+                  onChange={(e) => sendESP({ deviceName: e.target.value })}
+                  placeholder="nama device"
+                  className="w-24 px-2 py-1 rounded-full bg-zinc-900 border border-zinc-700 text-white text-[9px] font-mono placeholder-zinc-500 focus:outline-none focus:border-zinc-500" />
+                <span className="text-zinc-600 text-[7px] font-mono">nama</span>
+                <button onClick={() => { if (window.confirm('Restart ESP?')) sendESP({ reboot: true }); }}
+                  className="px-2 py-1 rounded-full bg-zinc-800 text-zinc-300 text-[9px] font-mono border border-zinc-700 active:scale-90">
+                  RESTART
+                </button>
+                <button onClick={() => { if (window.confirm('Reset pabrik? Semua config akan hilang!')) sendESP({ factoryReset: true }); }}
+                  className="px-2 py-1 rounded-full bg-red-900/60 text-red-300 text-[9px] font-mono border border-red-800/60 active:scale-90">
+                  RESET
+                </button>
+              </div>
             </>
           )}
         </div>
