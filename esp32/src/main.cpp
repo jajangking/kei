@@ -894,9 +894,8 @@ void rampMotors() {
 void writeMotorA(int speed) {
   speed = constrain(speed, -255, 255);
   
-  // Deadzone untuk mengatasi gesekan statis motor
-  if (speed > 0 && speed < 130) speed = 130;
-  else if (speed < 0 && speed > -130) speed = -130;
+  if (speed > 0 && speed < 60) speed = 60;
+  else if (speed < 0 && speed > -60) speed = -60;
 
   if (speed > 0) {
     digitalWrite(AIN1, HIGH);  
@@ -919,9 +918,8 @@ void writeMotorA(int speed) {
 void writeMotorB(int speed) {
   speed = constrain(speed, -255, 255);
   
-  // Deadzone untuk mengatasi gesekan statis motor
-  if (speed > 0 && speed < 130) speed = 130;
-  else if (speed < 0 && speed > -130) speed = -130;
+  if (speed > 0 && speed < 60) speed = 60;
+  else if (speed < 0 && speed > -60) speed = -60;
 
   if (speed > 0) {
     digitalWrite(BIN1, HIGH);  
