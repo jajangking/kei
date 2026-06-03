@@ -15,6 +15,11 @@
 #define JSON_DOC(x) JsonDocument
 
 // =======================
+// VERSION
+// =======================
+#define FW_VERSION __DATE__ " " __TIME__
+
+// =======================
 // PINS
 // =======================
 #define LED_PIN 2
@@ -440,6 +445,11 @@ void handleWiFi() {
       } else {  
         httpServer.send(400, "text/plain", "no body");  
       }  
+    });
+
+    httpServer.on("/version", []() {
+      String json = "{\"fw\":\"" + String(FW_VERSION) + "\"}";
+      httpServer.send(200, "application/json", json);
     });
 
     httpServer.on("/update", []() {
@@ -1023,6 +1033,7 @@ String buildTelemetryJson() {
   doc["ssid"] = wifiSsid;
   doc["mqtt"] = mqttEnabled && mqttClient.connected();
   doc["deviceName"] = deviceName;
+  doc["fw"] = FW_VERSION;
 
   String json;
   serializeJson(doc, json);
@@ -1058,6 +1069,7 @@ void sendConfigToClient(uint8_t clientNum) {
   doc["mqttPrefix"] = mqttTopicPrefix;
   doc["mqttEnabled"] = mqttEnabled;
   doc["deviceName"] = deviceName;
+  doc["fw"] = FW_VERSION;
   doc["emergency"] = emergencyStop;
   String json;
   serializeJson(doc, json);
