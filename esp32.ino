@@ -94,6 +94,8 @@ int speedLimit = 150;
 int leftTrim = 0;
 int rightTrim = 0;
 
+bool initialized = false;
+
 // =======================
 // MQTT
 // =======================
@@ -347,113 +349,103 @@ void connectWiFi() {
 
 void handleWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
-    wifiConnecting = false;  
+    wifiConnecting = false;
+    if (!initialized) {
+      initialized = true;
+    }
     return;
   }
 
-  // MOTOR
-  pinMode(AIN1, OUTPUT);
-  pinMode(AIN2, OUTPUT);
-  pinMode(BIN1, OUTPUT);
-  pinMode(BIN2, OUTPUT);
-  pinMode(STBY, OUTPUT);
-  pinMode(BUZZER, OUTPUT);
+  // WIFI RECONNECT (sudah initialized)
+  if (initialized && WiFi.status() != WL_CONNECTED) {
+    wifiConnecting = true;
+    return;
+  }
 
-  digitalWrite(STBY, HIGH);
+  if (!initialized) {
+    // FIRST BOOT INIT
+    pinMode(AIN1, OUTPUT);
+    pinMode(AIN2, OUTPUT);
+    pinMode(BIN1, OUTPUT);
+    pinMode(BIN2, OUTPUT);
+    pinMode(STBY, OUTPUT);
+    pinMode(BUZZER, OUTPUT);
 
-  // Buzzer startup
-  digitalWrite(BUZZER, HIGH);
-  delay(100);
-  digitalWrite(BUZZER, LOW);
+    digitalWrite(STBY, HIGH);
 
-  // PWM (ESP32 Core 3.x API)
-  ledcAttachChannel(
-    PWMA,
-    1000,
-    8,
-    CH_LEFT
-  );
+    digitalWrite(BUZZER, HIGH);
+    delay(100);
+    digitalWrite(BUZZER, LOW);
 
-  ledcAttachChannel(
-    PWMB,
-    1000,
-    8,
-    CH_RIGHT
-  );
+    ledcAttachChannel(PWMA, 1000, 8, CH_LEFT);
+    ledcAttachChannel(PWMB, 1000, 8, CH_RIGHT);
 
-  stopMotors();
-
-  // LOAD CONFIG
-  loadRuntimeConfig();
-  loadPowerSaveConfig();
-  loadSpeedLimitConfig();
-  loadDeviceNameConfig();
-  loadMqttConfig();
-
-  applyPowerSave();
-
-  // WIFI
-  connectWiFi();
-
-  // MDNS
-  MDNS.begin("kei");
-
-  // WEBSOCKET
-  webSocket.begin();
-  webSocket.enableHeartbeat(
-    3000,
-    3000,
-    3
-  );
-
-  webSocket.onEvent(
-    [](uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
-      switch(type) {  
-        case WStype_CONNECTED:  
-          wsConnected = true;  
-          emergencyStop = false;  
-          sendConfigToClient(num);  
-          break;  
-
-        case WStype_DISCONNECTED:  
-          wsConnected = false;  
-          stopMotors();  
-          break;  
-
-        case WStype_TEXT:  
-          handleMessage(String((char*)payload));  
-          break;  
-
-        default:  
-          break;  
-      }  
-    }
-  );
-
-  // HTTP
-  httpServer.on("/", handleRoot);
-
-  httpServer.on("/config", []() {
-    handleConfig();
-  });
-
-  httpServer.on("/cmd", []() {
-    if (httpServer.hasArg("plain")) {  
-      handleMessage(httpServer.arg("plain"));  
-      httpServer.send(200, "text/plain", "ok");  
-    } else {  
-      httpServer.send(400, "text/plain", "no body");  
-    }  
-  });
-
-  httpServer.begin();
-
-  // OTA
-  ArduinoOTA.onStart([]() {
     stopMotors();
-  });
 
-  ArduinoOTA.begin();
+    loadRuntimeConfig();
+    loadPowerSaveConfig();
+    loadSpeedLimitConfig();
+    loadDeviceNameConfig();
+    loadMqttConfig();
+
+    applyPowerSave();
+
+    connectWiFi();
+
+    MDNS.begin("kei");
+
+    webSocket.begin();
+    webSocket.enableHeartbeat(15000, 5000, 3);
+
+    webSocket.onEvent(
+      [](uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
+        switch(type) {  
+          case WStype_CONNECTED:  
+            wsConnected = true;  
+            emergencyStop = false;  
+            sendConfigToClient(num);  
+            break;  
+
+          case WStype_DISCONNECTED:  
+            wsConnected = false;  
+            stopMotors();  
+            break;  
+
+          case WStype_TEXT:  
+            handleMessage(String((char*)payload));  
+            break;  
+
+          default:  
+            break;  
+        }  
+      }
+    );
+
+    // HTTP
+    httpServer.on("/", handleRoot);
+
+    httpServer.on("/config", []() {
+      handleConfig();
+    });
+
+    httpServer.on("/cmd", []() {
+      if (httpServer.hasArg("plain")) {  
+        handleMessage(httpServer.arg("plain"));  
+        httpServer.send(200, "text/plain", "ok");  
+      } else {  
+        httpServer.send(400, "text/plain", "no body");  
+      }  
+    });
+
+    httpServer.begin();
+
+    // OTA
+    ArduinoOTA.onStart([]() {
+      stopMotors();
+    });
+
+    ArduinoOTA.begin();
+  }
 }
 
 // =======================
