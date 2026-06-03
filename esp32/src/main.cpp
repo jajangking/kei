@@ -7,6 +7,7 @@
 #include <Preferences.h>
 #include <PubSubClient.h>
 #include <WiFiClientSecure.h>
+#include <Update.h>
 
 // =======================
 // ARDUINOJSON COMPATIBILITY (v6 & v7)
@@ -436,6 +437,68 @@ void handleWiFi() {
       } else {  
         httpServer.send(400, "text/plain", "no body");  
       }  
+    });
+
+    httpServer.on("/update", HTTP_GET, []() {
+      String html = F(
+        "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>Kei OTA Update</title>"
+        "<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:sans-serif;background:#1a1a2e;color:#fff;padding:16px}"
+        "h1{font-size:20px;text-align:center;color:#e94560;margin-bottom:16px}"
+        ".sec{background:#16213e;border-radius:10px;padding:16px}"
+        "label{display:block;font-size:14px;margin-bottom:8px}"
+        "input[type=file]{width:100%;padding:10px;background:#0f3460;border:1px solid #1a3a6a;border-radius:6px;color:#fff}"
+        ".btn{width:100%;padding:12px;border:none;border-radius:8px;font-size:14px;font-weight:bold;cursor:pointer;margin-top:12px}"
+        ".btn-primary{background:#e94560;color:#fff}"
+        ".status{margin-top:12px;padding:10px;border-radius:6px;display:none;text-align:center}"
+        ".nav{margin-top:12px;text-align:center;font-size:12px}"
+        ".nav a{color:#e94560;text-decoration:none}"
+        "</style></head><body>"
+        "<h1>Firmware Update</h1>"
+        "<div class=sec>"
+        "<label>Pilih file .bin firmware</label>"
+        "<form id=form method=POST action=/upload enctype=multipart/form-data>"
+        "<input type=file name=firmware accept='.bin' required>"
+        "<button class='btn btn-primary' type=submit>Upload</button>"
+        "</form>"
+        "<div id=status class=status></div>"
+        "</div>"
+        "<div class=nav><a href='https://github.com/jajangking/kei/releases/latest' target=_blank>Download firmware dari GitHub</a> &middot; <a href='/'>Kembali ke kontrol</a></div>"
+        "<script>document.getElementById('form').onsubmit=function(e){"
+        "e.preventDefault();var f=new FormData(this);var s=document.getElementById('status');"
+        "s.style.display='block';s.style.background='#0f3460';s.textContent='Uploading...';"
+        "var x=new XMLHttpRequest();x.upload.onprogress=function(e){if(e.lengthComputable){"
+        "s.textContent=Math.round(e.loaded/e.total*100)+'% uploaded';}};"
+        "x.onload=function(){s.textContent=x.responseText;s.style.background=x.status==200?'#00a86b':'#e94560';};"
+        "x.onerror=function(){s.textContent='Upload failed';s.style.background='#e94560';};"
+        "x.open('POST','/upload');x.send(f);};</script>"
+        "</body></html>"
+      );
+      httpServer.send(200, "text/html", html);
+    });
+
+    httpServer.on("/upload", HTTP_POST, []() {
+      httpServer.send(200, "text/plain", "Firmware updated! Rebooting...");
+      delay(1000);
+      ESP.restart();
+    }, []() {
+      HTTPUpload& upload = httpServer.upload();
+      if (upload.status == UPLOAD_FILE_START) {
+        stopMotors();
+        if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+          Update.printError(Serial);
+        }
+      } else if (upload.status == UPLOAD_FILE_WRITE) {
+        if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+          Update.printError(Serial);
+        }
+      } else if (upload.status == UPLOAD_FILE_END) {
+        if (Update.end(true)) {
+          Serial.printf("OTA update success: %u bytes\n", upload.totalSize);
+        } else {
+          Update.printError(Serial);
+        }
+      }
     });
 
     httpServer.begin();
