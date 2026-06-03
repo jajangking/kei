@@ -24,8 +24,7 @@ jobs:
         run: pip install platformio
 
       - name: Build firmware
-        working-directory: esp32
-        run: pio run 2>&1 | tee /tmp/pio_output.txt
+        run: pio run -d esp32 2>&1 | tee /tmp/pio_output.txt
 
       - name: Upload error log if failed
         if: failure()
@@ -34,27 +33,29 @@ jobs:
           name: build-log
           path: /tmp/pio_output.txt
 
+      - name: Stage binaries
+        if: success()
+        run: |
+          mkdir -p /tmp/release
+          cp esp32/.pio/build/esp32dev/bootloader.bin /tmp/release/
+          cp esp32/.pio/build/esp32dev/partitions.bin /tmp/release/
+          cp esp32/.pio/build/esp32dev/firmware.bin /tmp/release/
+          ls -la /tmp/release/
+
       - name: Upload all binaries
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: firmware-full
-          path: |
-            esp32/.pio/build/esp32dev/bootloader.bin
-            esp32/.pio/build/esp32dev/partitions.bin
-            esp32/.pio/build/esp32dev/firmware.bin
-
-      - name: List build output
-        if: success()
-        run: find esp32/.pio/build/esp32dev -name "*.bin" -ls
+          path: /tmp/release/*.bin
 
       - name: Create Release
         if: success() && github.ref == 'refs/heads/main'
         run: |
           gh release create "build-${{ github.run_number }}" \
-            esp32/.pio/build/esp32dev/bootloader.bin \
-            esp32/.pio/build/esp32dev/partitions.bin \
-            esp32/.pio/build/esp32dev/firmware.bin \
+            /tmp/release/bootloader.bin \
+            /tmp/release/partitions.bin \
+            /tmp/release/firmware.bin \
             --repo "${{ github.repository }}" \
             --title "Firmware Build #${{ github.run_number }}" \
             --notes "Firmware build from commit ${{ github.sha }}"
