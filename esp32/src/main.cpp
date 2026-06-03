@@ -8,6 +8,7 @@
 #include <PubSubClient.h>
 #include <WiFiClientSecure.h>
 #include <Update.h>
+#include <soc/rtc_cntl_reg.h>
 
 // =======================
 // ARDUINOJSON COMPATIBILITY (v6 & v7)
@@ -277,7 +278,7 @@ void applyPowerSave() {
     setCpuFrequencyMhz(80);
   } else {
     WiFi.setSleep(WIFI_PS_NONE);  
-    setCpuFrequencyMhz(160);
+    setCpuFrequencyMhz(240);
   }
 }
 
@@ -339,7 +340,8 @@ void connectWiFi() {
 
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(WIFI_PS_NONE);
-  WiFi.setTxPower(WIFI_POWER_17dBm);
+  WiFi.setAutoReconnect(true);
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
 
   WiFi.begin(
     wifiSsid.c_str(),
@@ -353,6 +355,7 @@ void connectWiFi() {
 void handleWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
     wifiConnecting = false;
+    initialized = true;
     return;
   }
 
@@ -365,6 +368,8 @@ void handleWiFi() {
     }
     return;
   }
+
+  initialized = true;
 
   // FIRST BOOT INIT
     pinMode(AIN1, OUTPUT);
@@ -525,8 +530,6 @@ void handleWiFi() {
     });
 
     ArduinoOTA.begin();
-
-    initialized = true;
 }
 
 // =======================
@@ -1188,13 +1191,16 @@ void handleConfig() {
 // SETUP
 // =======================
 void setup() {
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
   Serial.begin(115200);
   startTime = millis();
 
-  delay(100);
+  delay(300);
 
   pinMode(LED_PIN, OUTPUT);
   pinMode(BUZZER, OUTPUT);
   digitalWrite(LED_PIN, LOW);
   digitalWrite(BUZZER, LOW);
+
+  connectWiFi();
 }
