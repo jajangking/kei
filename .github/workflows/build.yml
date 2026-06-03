@@ -22,7 +22,6 @@ jobs:
 
       - name: Build firmware
         run: pio run -v
-        continue-on-error: true
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
