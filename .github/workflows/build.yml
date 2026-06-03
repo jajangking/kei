@@ -8,33 +8,32 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Arduino CLI
-        run: |
-          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh
-          sudo mv bin/arduino-cli /usr/local/bin/
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+          key: pio-${{ runner.os }}
 
-      - name: Install ESP32 core
-        run: |
-          arduino-cli config init
-          arduino-cli core update-index
-          arduino-cli core install esp32:esp32
-
-      - name: Install libraries
-        run: |
-          arduino-cli lib install "WebSockets"
-          arduino-cli lib install "ArduinoJson"
-          arduino-cli lib install "PubSubClient"
+      - name: Install PlatformIO
+        run: pip install platformio
 
       - name: Build firmware
-        run: |
-          arduino-cli compile --fqbn esp32:esp32:esp32 esp32.ino -o firmware
+        run: pio run 2>&1 | tee /tmp/pio_output.txt
+
+      - name: Upload error log if failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: /tmp/pio_output.txt
 
       - name: Upload binary
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: firmware
-          path: firmware.bin
+          path: .pio/build/esp32dev/firmware.bin
