@@ -24,6 +24,7 @@ jobs:
         run: pip install platformio
 
       - name: Build firmware
+        working-directory: esp32
         run: pio run 2>&1 | tee /tmp/pio_output.txt
 
       - name: Upload error log if failed
@@ -38,13 +39,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: firmware
-          path: .pio/build/esp32dev/firmware.bin
+          path: esp32/.pio/build/esp32dev/firmware.bin
 
       - name: Create Release
         if: success() && github.ref == 'refs/heads/main'
         run: |
           gh release create "build-${{ github.run_number }}" \
-            .pio/build/esp32dev/firmware.bin \
+            esp32/.pio/build/esp32dev/firmware.bin \
             --repo "${{ github.repository }}" \
             --title "Firmware Build #${{ github.run_number }}" \
             --notes "Firmware build from commit ${{ github.sha }}"
