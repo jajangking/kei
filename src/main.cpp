@@ -845,21 +845,21 @@ void writeMotorA(int speed) {
   speed = constrain(speed, -255, 255);
   
   // Deadzone untuk mengatasi gesekan statis motor
-  if (speed > 0 && speed < 50) speed = 50;
-  else if (speed < 0 && speed > -50) speed = -50;
+  if (speed > 0 && speed < 130) speed = 130;
+  else if (speed < 0 && speed > -130) speed = -130;
 
   if (speed > 0) {
     digitalWrite(AIN1, HIGH);  
     digitalWrite(AIN2, LOW);  
-    ledcWrite(PWMA, speed);    // FIXED: Menggunakan PIN, bukan channel
+    ledcWrite(PWMA, speed);
   } else if (speed < 0) {
     digitalWrite(AIN1, LOW);  
     digitalWrite(AIN2, HIGH);  
-    ledcWrite(PWMA, -speed);   // FIXED: Menggunakan PIN, bukan channel
+    ledcWrite(PWMA, -speed);
   } else {
     digitalWrite(AIN1, LOW);  
     digitalWrite(AIN2, LOW);  
-    ledcWrite(PWMA, 0);        // FIXED: Menggunakan PIN, bukan channel
+    ledcWrite(PWMA, 0);
   }
 }
 
@@ -870,8 +870,8 @@ void writeMotorB(int speed) {
   speed = constrain(speed, -255, 255);
   
   // Deadzone untuk mengatasi gesekan statis motor
-  if (speed > 0 && speed < 50) speed = 50;
-  else if (speed < 0 && speed > -50) speed = -50;
+  if (speed > 0 && speed < 130) speed = 130;
+  else if (speed < 0 && speed > -130) speed = -130;
 
   if (speed > 0) {
     digitalWrite(BIN1, HIGH);  
