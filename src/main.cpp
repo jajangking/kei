@@ -552,7 +552,7 @@ void handleMessage(String msg) {
 
   if (doc["maxSpeed"].is<int>()) {
     maxSpeed = constrain(  
-      doc["maxSpeed"],  
+      doc["maxSpeed"].as<int>(),  
       0,  
       255  
     );  
@@ -561,7 +561,7 @@ void handleMessage(String msg) {
 
   if (doc["rampRate"].is<int>()) {
     rampRate = constrain(  
-      doc["rampRate"],  
+      doc["rampRate"].as<int>(),  
       1,  
       50  
     );  
@@ -589,7 +589,7 @@ void handleMessage(String msg) {
 
   if (doc["speedLimit"].is<int>()) {
     speedLimit = constrain(  
-      doc["speedLimit"],  
+      doc["speedLimit"].as<int>(),  
       0,  
       255  
     );  
