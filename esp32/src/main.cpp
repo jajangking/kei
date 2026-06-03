@@ -17,7 +17,7 @@
 // =======================
 // VERSION
 // =======================
-#define FW_VERSION __DATE__ " " __TIME__
+#define FW_VERSION "1.0.0 - " __DATE__ " " __TIME__
 
 // =======================
 // PINS
