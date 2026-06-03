@@ -1,12 +1,15 @@
 export const dynamic = "force-dynamic";
-export const runtime = "edge";
+export const runtime = "nodejs";
 
 export async function POST(req: Request) {
-  const { messages, model = "llama-3.3-70b-versatile", apiKey } = await req.json();
+  const { messages, model = "llama-3.3-70b-versatile", apiKey, systemPrompt } = await req.json();
   const GROQ_API_KEY = apiKey || process.env.GROQ_API_KEY;
   if (!GROQ_API_KEY) {
     return new Response("GROQ_API_KEY not configured", { status: 500 });
   }
+
+  const defaultSystem = "Kamu adalah Kei, asisten robot yang membantu. Jawab dengan singkat, 1-2 kalimat dalam Bahasa Indonesia. Natural, gak kaku.";
+  const systemMsg = { role: "system", content: systemPrompt || defaultSystem };
 
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
@@ -16,14 +19,7 @@ export async function POST(req: Request) {
     },
     body: JSON.stringify({
       model,
-      messages: [
-        {
-          role: "system",
-          content:
-            "Kamu adalah Kei, asisten robot yang membantu. Jawab dengan singkat, 1-2 kalimat dalam Bahasa Indonesia. Natural, gak kaku.",
-        },
-        ...messages,
-      ],
+      messages: [systemMsg, ...messages],
       stream: true,
     }),
   });
