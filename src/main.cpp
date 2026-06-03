@@ -146,6 +146,7 @@ void saveDeviceNameConfig(String name);
 void loadDeviceNameConfig();
 void applyPowerSave();
 void applyPowerSaveSafe();
+void sendConfigToClient(uint8_t clientNum);
 
 // =======================
 // SAVE CONFIG
@@ -375,8 +376,8 @@ void handleWiFi() {
     delay(100);
     digitalWrite(BUZZER, LOW);
 
-    ledcAttachChannel(PWMA, 1000, 8, CH_LEFT);
-    ledcAttachChannel(PWMB, 1000, 8, CH_RIGHT);
+    ledcAttach(PWMA, 1000, 8);
+    ledcAttach(PWMB, 1000, 8);
 
     stopMotors();
 
