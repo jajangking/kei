@@ -80,14 +80,14 @@ bool wsConnected = false;
 // =======================
 // CONFIG
 // =======================
-int maxSpeed = 255;
-int rampRate = 8;
+int maxSpeed = 180;
+int rampRate = 4;
 int motorTimeout = 5000;
 
 bool powerSave = false;
 
-bool speedLimitEnabled = false;
-int speedLimit = 150;
+bool speedLimitEnabled = true;
+int speedLimit = 120;
 
 int leftTrim = 0;
 int rightTrim = 0;
@@ -373,6 +373,7 @@ void handleWiFi() {
     pinMode(STBY, OUTPUT);
     pinMode(BUZZER, OUTPUT);
 
+    delay(500);
     digitalWrite(STBY, HIGH);
 
     digitalWrite(BUZZER, HIGH);
@@ -1147,6 +1148,7 @@ void handleConfig() {
 // SETUP
 // =======================
 void setup() {
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
   Serial.begin(115200);
   startTime = millis();
 
