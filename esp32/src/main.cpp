@@ -50,6 +50,9 @@ WebServer httpServer(80);
 #define STBY 32
 #define BUZZER 4
 
+#define CH_LEFT 0
+#define CH_RIGHT 1
+
 // =======================
 // TELEMETRY
 // =======================
@@ -371,8 +374,10 @@ void handleWiFi() {
     delay(100);
     digitalWrite(BUZZER, LOW);
 
-    ledcAttach(PWMA, 1000, 8);
-    ledcAttach(PWMB, 1000, 8);
+    ledcSetup(CH_LEFT, 1000, 8);
+    ledcAttachPin(PWMA, CH_LEFT);
+    ledcSetup(CH_RIGHT, 1000, 8);
+    ledcAttachPin(PWMB, CH_RIGHT);
 
     stopMotors();
 
@@ -884,15 +889,15 @@ void writeMotorA(int speed) {
   if (speed > 0) {
     digitalWrite(AIN1, HIGH);  
     digitalWrite(AIN2, LOW);  
-    ledcWrite(PWMA, speed);
+    ledcWrite(CH_LEFT, speed);
   } else if (speed < 0) {
     digitalWrite(AIN1, LOW);  
     digitalWrite(AIN2, HIGH);  
-    ledcWrite(PWMA, -speed);
+    ledcWrite(CH_LEFT, -speed);
   } else {
     digitalWrite(AIN1, LOW);  
     digitalWrite(AIN2, LOW);  
-    ledcWrite(PWMA, 0);
+    ledcWrite(CH_LEFT, 0);
   }
 }
 
@@ -909,15 +914,15 @@ void writeMotorB(int speed) {
   if (speed > 0) {
     digitalWrite(BIN1, HIGH);  
     digitalWrite(BIN2, LOW);  
-    ledcWrite(PWMB, speed);    // FIXED: Menggunakan PIN, bukan channel
+    ledcWrite(CH_RIGHT, speed);
   } else if (speed < 0) {
     digitalWrite(BIN1, LOW);  
     digitalWrite(BIN2, HIGH);  
-    ledcWrite(PWMB, -speed);   // FIXED: Menggunakan PIN, bukan channel
+    ledcWrite(CH_RIGHT, -speed);
   } else {
     digitalWrite(BIN1, LOW);  
     digitalWrite(BIN2, LOW);  
-    ledcWrite(PWMB, 0);        // FIXED: Menggunakan PIN, bukan channel
+    ledcWrite(CH_RIGHT, 0);
   }
 }
 
