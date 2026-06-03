@@ -8,6 +8,7 @@
 #include <PubSubClient.h>
 #include <WiFiClientSecure.h>
 #include <Update.h>
+#include <soc/rtc_cntl_reg.h>
 
 // =======================
 // ARDUINOJSON COMPATIBILITY (v6 & v7)
@@ -375,7 +376,14 @@ void handleWiFi() {
     pinMode(AIN2, OUTPUT);
     pinMode(BIN1, OUTPUT);
     pinMode(BIN2, OUTPUT);
+    digitalWrite(AIN1, LOW);
+    digitalWrite(AIN2, LOW);
+    digitalWrite(BIN1, LOW);
+    digitalWrite(BIN2, LOW);
+
     pinMode(STBY, OUTPUT);
+    digitalWrite(STBY, LOW);
+
     pinMode(BUZZER, OUTPUT);
 
     delay(500);
@@ -1183,8 +1191,11 @@ void handleConfig() {
 // SETUP
 // =======================
 void setup() {
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
   Serial.begin(115200);
   startTime = millis();
+
+  delay(300);
 
   pinMode(LED_PIN, OUTPUT);
   pinMode(BUZZER, OUTPUT);
