@@ -376,8 +376,10 @@ void handleWiFi() {
     delay(100);
     digitalWrite(BUZZER, LOW);
 
-    ledcAttach(PWMA, 1000, 8);
-    ledcAttach(PWMB, 1000, 8);
+    ledcSetup(CH_LEFT, 1000, 8);
+    ledcAttachPin(PWMA, CH_LEFT);
+    ledcSetup(CH_RIGHT, 1000, 8);
+    ledcAttachPin(PWMB, CH_RIGHT);
 
     stopMotors();
 
