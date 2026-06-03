@@ -513,7 +513,7 @@ void handleMessage(String msg) {
 
   // EMERGENCY
   if (doc["emergency"].is<bool>()) {
-    emergencyStop = doc["emergency"];  
+    emergencyStop = doc["emergency"].as<bool>();  
     if (emergencyStop) {  
       stopMotors();  
     }  
@@ -532,19 +532,11 @@ void handleMessage(String msg) {
 
   // MOTOR TRIM
   if (doc["leftTrim"].is<int>()) {
-    leftTrim = constrain(  
-      doc["leftTrim"],  
-      -100,  
-      100  
-    );
+    leftTrim = constrain(doc["leftTrim"].as<int>(), -100, 100);
   }
 
   if (doc["rightTrim"].is<int>()) {
-    rightTrim = constrain(  
-      doc["rightTrim"],  
-      -100,  
-      100  
-    );
+    rightTrim = constrain(doc["rightTrim"].as<int>(), -100, 100);
   }
 
   // CONFIG
@@ -577,13 +569,13 @@ void handleMessage(String msg) {
   }
 
   if (doc["powerSave"].is<bool>()) {
-    powerSave = doc["powerSave"];  
+    powerSave = doc["powerSave"].as<bool>();  
     configChanged = true;  
     applyPowerSaveSafe();
   }
 
   if (doc["speedLimitEnabled"].is<bool>()) {
-    speedLimitEnabled = doc["speedLimitEnabled"];  
+    speedLimitEnabled = doc["speedLimitEnabled"].as<bool>();  
     configChanged = true;
   }
 
@@ -618,14 +610,14 @@ void handleMessage(String msg) {
 
   // MQTT CONFIG
   if (doc["mqttBroker"].is<String>()) {
-    int port = doc["mqttPort"] | 8883;
+    int port = doc["mqttPort"].as<int>() | 8883;
     saveMqttConfig(  
-      doc["mqttBroker"],  
+      doc["mqttBroker"].as<String>(),  
       port,  
-      doc["mqttUser"] | "",  
-      doc["mqttPass"] | "",  
-      doc["mqttPrefix"] | "kei/robot",  
-      doc["mqttEnabled"] | true  
+      doc["mqttUser"].as<String>(),  
+      doc["mqttPass"].as<String>(),  
+      doc["mqttPrefix"].as<String>(),  
+      doc["mqttEnabled"].as<bool>()  
     );  
 
     mqttClient.disconnect();  
@@ -672,8 +664,8 @@ void handleMessage(String msg) {
     doc["password"].is<String>()
   ) {
     saveWiFiConfig(  
-      doc["ssid"],  
-      doc["password"]  
+      doc["ssid"].as<String>(),  
+      doc["password"].as<String>()  
     );  
 
     JSON_DOC(128) ack;  
@@ -691,7 +683,7 @@ void handleMessage(String msg) {
 
   // DEVICE NAME
   if (doc["deviceName"].is<String>()) {
-    saveDeviceNameConfig(doc["deviceName"]);
+    saveDeviceNameConfig(doc["deviceName"].as<String>());
 
     JSON_DOC(64) ack;
     ack["deviceName"] = deviceName;
@@ -758,17 +750,11 @@ void handleMessage(String msg) {
       ? speedLimit  
       : maxSpeed;  
 
-    targetLeftSpeed = constrain(  
-      (doc["leftMotor"] | 0) + leftTrim,  
-      -cap,  
-      cap  
-    );  
+    int leftVal = (doc["leftMotor"] | 0) + leftTrim;
+    targetLeftSpeed = constrain(leftVal, -cap, cap);
 
-    targetRightSpeed = constrain(  
-      (doc["rightMotor"] | 0) + rightTrim,  
-      -cap,  
-      cap  
-    );  
+    int rightVal = (doc["rightMotor"] | 0) + rightTrim;
+    targetRightSpeed = constrain(rightVal, -cap, cap); 
 
     lastCommandTime = millis();
   }
