@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -40,12 +42,11 @@ jobs:
 
       - name: Create Release
         if: success() && github.ref == 'refs/heads/main'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: build-${{ github.run_number }}
-          name: Firmware Build #${{ github.run_number }}
-          body: |
-            Firmware build from commit ${{ github.sha }}
-            - [Download firmware.bin](https://github.com/${{ github.repository }}/releases/download/build-${{ github.run_number }}/firmware.bin)
-          files: .pio/build/esp32dev/firmware.bin
-          generate_release_notes: false
+        run: |
+          gh release create "build-${{ github.run_number }}" \
+            .pio/build/esp32dev/firmware.bin \
+            --repo "${{ github.repository }}" \
+            --title "Firmware Build #${{ github.run_number }}" \
+            --notes "Firmware build from commit ${{ github.sha }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
