@@ -179,7 +179,7 @@ void saveRuntimeConfig() {
 
 void loadRuntimeConfig() {
   Preferences prefs;
-  prefs.begin("runtime", true);
+  prefs.begin("runtime", false);
   maxSpeed = prefs.getInt("maxSpeed", 255);
   rampRate = prefs.getInt("rampRate", 8);
   motorTimeout = prefs.getInt("motorTimeout", 5000);
@@ -197,7 +197,7 @@ void savePowerSaveConfig() {
 
 void loadPowerSaveConfig() {
   Preferences prefs;
-  prefs.begin("pwr", true);
+  prefs.begin("pwr", false);
   powerSave = prefs.getBool("save", false);
   prefs.end();
 }
@@ -212,7 +212,7 @@ void saveSpeedLimitConfig() {
 
 void loadSpeedLimitConfig() {
   Preferences prefs;
-  prefs.begin("sl", true);
+  prefs.begin("sl", false);
   speedLimitEnabled = prefs.getBool("enabled", false);
   speedLimit = prefs.getInt("limit", 150);
   prefs.end();
@@ -220,7 +220,7 @@ void loadSpeedLimitConfig() {
 
 void loadWiFiConfig() {
   Preferences prefs;
-  prefs.begin("wifi", true);
+  prefs.begin("wifi", false);
   String ssid = prefs.getString("ssid", "");
   String pass = prefs.getString("pass", "");
   prefs.end();
@@ -244,7 +244,7 @@ void saveWiFiConfig(String ssid, String pass) {
 
 void loadMqttConfig() {
   Preferences prefs;
-  prefs.begin("mqtt", true);
+  prefs.begin("mqtt", false);
   mqttBroker = prefs.getString("broker", "");
   mqttPort = prefs.getInt("port", 8883);
   mqttUser = prefs.getString("user", "");
@@ -313,7 +313,7 @@ void saveDeviceNameConfig(String name) {
 
 void loadDeviceNameConfig() {
   Preferences prefs;
-  prefs.begin("dname", true);
+  prefs.begin("dname", false);
   String name = prefs.getString("name", "");
   prefs.end();
 
@@ -551,7 +551,7 @@ void handleWiFi() {
 
     ArduinoOTA.begin();
 
-    wsLog("ESP32 ready — IP: " + WiFi.localIP().toString());
+    wsLog("ESP32 ready — services started");
 }
 
 // =======================
@@ -1247,6 +1247,4 @@ void setup() {
   analogSetPinAttenuation(BATTERY_PIN, ADC_11db);
   digitalWrite(LED_PIN, LOW);
   digitalWrite(BUZZER, LOW);
-
-  connectWiFi();
 }
