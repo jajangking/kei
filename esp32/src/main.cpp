@@ -845,13 +845,9 @@ void handleMessage(String msg) {
 
     int leftVal = (doc["leftMotor"] | 0) + leftTrim;
     targetLeftSpeed = constrain(leftVal, -cap, cap);
-    if (targetLeftSpeed > 0 && targetLeftSpeed < 120) targetLeftSpeed = 120;
-    else if (targetLeftSpeed < 0 && targetLeftSpeed > -120) targetLeftSpeed = -120;
 
     int rightVal = (doc["rightMotor"] | 0) + rightTrim;
     targetRightSpeed = constrain(rightVal, -cap, cap); 
-    if (targetRightSpeed > 0 && targetRightSpeed < 120) targetRightSpeed = 120;
-    else if (targetRightSpeed < 0 && targetRightSpeed > -120) targetRightSpeed = -120;
 
     lastCommandTime = millis();
   }

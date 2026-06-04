@@ -1713,6 +1713,14 @@ const mqttDeviceIdRef = useRef("");
 
   useEffect(() => { faceDBRef.current = loadDB(); }, []);
 
+  // Auto-connect on mount if saved IP exists
+  useEffect(() => {
+    if (espIp) {
+      const t = setTimeout(() => connectESP(), 500);
+      return () => clearTimeout(t);
+    }
+  }, []); // only on mount
+
   useEffect(() => () => {
     wsRef.current?.close();
     if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
