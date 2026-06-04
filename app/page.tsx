@@ -195,8 +195,8 @@ export default function VisionPage() {
       const deviceId = mqttDeviceIdRef.current;
       if (deviceId) {
         mqtt.publish(`${mqttPrefixRef.current}/${deviceId}/cmd`, JSON.stringify({ leftMotor: l, rightMotor: r }));
+        return;
       }
-      return;
     }
     const ip = espIpRef.current;
     if (ip) {
@@ -330,6 +330,8 @@ export default function VisionPage() {
   const pingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const espGenRef = useRef(0);
+  const lastTelemetryRef = useRef(0);
+  const reconnectAttemptRef = useRef(0);
   const connectESP = useCallback(async () => {
     if (!espIp) return;
     if (reconnectTimerRef.current) { clearTimeout(reconnectTimerRef.current); reconnectTimerRef.current = null; }
@@ -351,19 +353,26 @@ export default function VisionPage() {
     ws.onopen = () => {
       if (espGenRef.current !== gen) { ws.close(); return; }
       setWsConnected(true);
+      reconnectAttemptRef.current = 0;
       pingIntervalRef.current = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ ping: true }));
       }, 10000);
     };
     ws.onmessage = (e) => {
       if (espGenRef.current !== gen) return;
-      try { const d = JSON.parse(e.data); const { config: _cfg, ...rest } = d; setTelemetry(p => ({ ...p, ...rest })); } catch {}
+      try { const d = JSON.parse(e.data); const { config: _cfg, ...rest } = d; lastTelemetryRef.current = Date.now(); setTelemetry(p => ({ ...p, ...rest })); } catch {}
     };
     ws.onclose = () => {
       if (espGenRef.current !== gen) return;
       setWsConnected(false); setTelemetry({}); wsRef.current = null;
       if (pingIntervalRef.current) { clearInterval(pingIntervalRef.current); pingIntervalRef.current = null; }
-      reconnectTimerRef.current = setTimeout(() => connectESP(), 3000);
+      reconnectAttemptRef.current++;
+      if (reconnectAttemptRef.current >= 5) {
+        reconnectAttemptRef.current = 0;
+        discoverESP();
+      } else {
+        reconnectTimerRef.current = setTimeout(() => connectESP(), 3000);
+      }
     };
     ws.onerror = () => ws.close();
     wsRef.current = ws;
@@ -401,11 +410,12 @@ const mqttDeviceIdRef = useRef("");
         connectTimeout: 15000,
         protocolVersion: 4,
       };
-      if (mqttUser) { opts.username = mqttUser; opts.password = mqttPass; }
+      if (mqttUser) { opts.username = mqttUser; }
+      if (mqttPass) { opts.password = mqttPass; }
       localStorage.setItem("mqttUser", mqttUser);
       localStorage.setItem("mqttPass", mqttPass);
       const mqttMod = await import("mqtt/dist/mqtt.esm");
-      const url = `wss://${mqttBroker}:8884/mqtt`;
+      const url = `wss://${mqttBroker}:${mqttPort}/mqtt`;
       console.log("[MQTT] connecting to", url);
       const client = mqttMod.default.connect(url, opts);
       client.on("connect", () => {
@@ -415,7 +425,7 @@ const mqttDeviceIdRef = useRef("");
         setMqttStatus("terhubung");
         mqttPrefixRef.current = mqttPrefix;
         const teleTopic = `${mqttPrefix}/+/telemetry`;
-        mqttTeleTopicRef.current = mqttPrefix;
+        mqttTeleTopicRef.current = teleTopic;
         client.subscribe(teleTopic);
       });
       client.on("message", (topic: string, payload: Buffer) => {
@@ -424,11 +434,12 @@ const mqttDeviceIdRef = useRef("");
           const data = JSON.parse(payload.toString());
           const parts = topic.split("/");
           if (parts.length >= 3) {
-            mqttDeviceIdRef.current = parts[2];
+            mqttDeviceIdRef.current = parts[parts.length - 2];
           }
           if (data.ip && data.ip !== espIpRef.current) {
             setEspIp(data.ip);
           }
+          lastTelemetryRef.current = Date.now();
           const { config: _cfg, ...rest } = data;
           setTelemetry(p => ({ ...p, ...rest }));
         } catch {}
@@ -454,7 +465,7 @@ const mqttDeviceIdRef = useRef("");
       setMqttConnected(false);
       setMqttStatus("gagal: " + (e?.message || "unknown"));
     }
-  }, [mqttBroker, mqttUser, mqttPass, mqttPrefix]);
+  }, [mqttBroker, mqttUser, mqttPass, mqttPrefix, mqttPort]);
 
   const sendESP = useCallback((data: object) => {
     const ws = wsRef.current;
@@ -468,8 +479,8 @@ const mqttDeviceIdRef = useRef("");
       if (deviceId) {
         const cmdTopic = `${mqttPrefixRef.current}/${deviceId}/cmd`;
         mqtt.publish(cmdTopic, JSON.stringify(data));
+        return;
       }
-      return;
     }
     const ip = espIpRef.current;
     if (ip) {
@@ -1130,6 +1141,12 @@ const mqttDeviceIdRef = useRef("");
       }
     }
 
+    for (const [label, buf] of persist) {
+      if (buf.length >= PERSIST_FRAMES && buf.every(v => v === 0)) {
+        persist.delete(label);
+      }
+    }
+
     const stable = new Set<string>();
     for (const [label, buf] of persist) {
       if (buf.length >= PERSIST_MIN) {
@@ -1700,6 +1717,20 @@ const mqttDeviceIdRef = useRef("");
     wsRef.current?.close();
     if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
     if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+  }, []);
+
+  // Clear telemetry if stale (no MQTT update for 15s)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (!lastTelemetryRef.current) return;
+      if (Date.now() - lastTelemetryRef.current > 15000) {
+        setTelemetry(p => {
+          if (!p.mqtt && !p.rssi) return p;
+          return { ...p, mqtt: false };
+        });
+      }
+    }, 5000);
+    return () => clearInterval(interval);
   }, []);
 
   return (

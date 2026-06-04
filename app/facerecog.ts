@@ -18,6 +18,7 @@ function pairwiseDistances(pts: number[]): number[] {
       dists.push(Math.hypot(dx, dy));
     }
   }
+  if (dists.length === 0) return dists;
   const mean = dists.reduce((a, b) => a + b, 0) / dists.length;
   if (mean < 0.001) return dists;
   return dists.map(d => d / mean);

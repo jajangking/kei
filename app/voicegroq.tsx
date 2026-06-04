@@ -222,7 +222,6 @@ export default function VoiceGroq({
 
   async function askGroq(text: string, isAuto?: boolean) {
     processingRef.current = true;
-    processingRef.current = true;
 
     const gen = ++genRef.current;
     abortRef.current = false;
