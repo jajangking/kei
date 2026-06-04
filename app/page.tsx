@@ -59,6 +59,7 @@ export default function VisionPage() {
   const [showWifiConfig, setShowWifiConfig] = useState(false);
   const [mqttBroker, setMqttBroker] = useState(() => typeof window !== "undefined" ? localStorage.getItem("mqttBroker") || "" : "");
   const [mqttPort, setMqttPort] = useState(() => typeof window !== "undefined" ? Number(localStorage.getItem("mqttPort")) || 8884 : 8884);
+  const [mqttEspPort, setMqttEspPort] = useState(() => typeof window !== "undefined" ? Number(localStorage.getItem("mqttEspPort")) || 8883 : 8883);
   const [mqttUser, setMqttUser] = useState(() => typeof window !== "undefined" ? localStorage.getItem("mqttUser") || "" : "");
   const [mqttPass, setMqttPass] = useState(() => typeof window !== "undefined" ? localStorage.getItem("mqttPass") || "" : "");
   const [mqttPrefix, setMqttPrefix] = useState(() => typeof window !== "undefined" ? localStorage.getItem("mqttPrefix") || "kei/robot" : "kei/robot");
@@ -520,6 +521,7 @@ const mqttDeviceIdRef = useRef("");
       espIp: localStorage.getItem("espIp") || "",
       mqttBroker: localStorage.getItem("mqttBroker") || "",
       mqttPort: Number(localStorage.getItem("mqttPort")) || 8884,
+      mqttEspPort: Number(localStorage.getItem("mqttEspPort")) || 8883,
       mqttUser: localStorage.getItem("mqttUser") || "",
       mqttPass: localStorage.getItem("mqttPass") || "",
       mqttPrefix: localStorage.getItem("mqttPrefix") || "kei/robot",
@@ -545,6 +547,7 @@ const mqttDeviceIdRef = useRef("");
         if (data.espIp) { localStorage.setItem("espIp", data.espIp); setEspIp(data.espIp); }
         if (data.mqttBroker) { localStorage.setItem("mqttBroker", data.mqttBroker); setMqttBroker(data.mqttBroker); }
         if (data.mqttPort) { localStorage.setItem("mqttPort", String(data.mqttPort)); setMqttPort(data.mqttPort); }
+        if (data.mqttEspPort) { localStorage.setItem("mqttEspPort", String(data.mqttEspPort)); setMqttEspPort(data.mqttEspPort); }
         if (data.mqttUser !== undefined) { localStorage.setItem("mqttUser", data.mqttUser); setMqttUser(data.mqttUser); }
         if (data.mqttPass !== undefined) { localStorage.setItem("mqttPass", data.mqttPass); setMqttPass(data.mqttPass); }
         if (data.mqttPrefix) { localStorage.setItem("mqttPrefix", data.mqttPrefix); setMqttPrefix(data.mqttPrefix); }
@@ -2061,7 +2064,11 @@ const mqttDeviceIdRef = useRef("");
                   className="flex-1 min-w-0 px-2 py-1 rounded-full bg-zinc-800 border border-zinc-700 text-white text-[9px] font-mono placeholder-zinc-500 focus:outline-none focus:border-zinc-500" />
                 <input value={mqttPort} onChange={e => setMqttPort(Number(e.target.value))}
                   placeholder="8884"
-                  title="Browser: WSS :8884 | ESP: TLS :8883"
+                  title="Browser WSS port"
+                  className="w-14 px-1.5 py-1 rounded-full bg-zinc-800 border border-zinc-700 text-white text-[9px] font-mono placeholder-zinc-500 focus:outline-none focus:border-zinc-500 text-center" />
+                <input value={mqttEspPort} onChange={e => setMqttEspPort(Number(e.target.value))}
+                  placeholder="8883"
+                  title="ESP TLS port"
                   className="w-14 px-1.5 py-1 rounded-full bg-zinc-800 border border-zinc-700 text-white text-[9px] font-mono placeholder-zinc-500 focus:outline-none focus:border-zinc-500 text-center" />
               </div>
               <div className="flex gap-1.5">
@@ -2083,7 +2090,7 @@ const mqttDeviceIdRef = useRef("");
                   className="flex-1 px-2 py-1 rounded-full bg-emerald-600 text-white text-[9px] font-mono font-bold active:scale-90">
                   HUBUNGKAN
                 </button>
-                <button onClick={() => sendESP({ mqttBroker, mqttPort, mqttUser, mqttPass, mqttPrefix, mqttEnabled: true })}
+                <button onClick={() => sendESP({ mqttBroker, mqttPort, mqttEspPort, mqttUser, mqttPass, mqttPrefix, mqttEnabled: true })}
                   className="px-2 py-1 rounded-full bg-zinc-800 text-zinc-300 text-[9px] font-mono border border-zinc-700 active:scale-90">
                   KIRIM KE ESP
                 </button>

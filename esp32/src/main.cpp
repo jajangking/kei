@@ -725,7 +725,7 @@ void handleMessage(String msg) {
 
   // MQTT CONFIG
   if (doc["mqttBroker"].is<String>()) {
-    int port = doc["mqttPort"].as<int>() | 8883;
+    int port = doc["mqttEspPort"] | doc["mqttPort"] | 8883;
     saveMqttConfig(  
       doc["mqttBroker"].as<String>(),  
       port,  
@@ -1117,6 +1117,7 @@ void sendConfigToClient(uint8_t clientNum) {
   doc["ssid"] = wifiSsid;
   doc["mqttBroker"] = mqttBroker;
   doc["mqttPort"] = mqttPort;
+  doc["mqttEspPort"] = mqttPort;
   doc["mqttUser"] = mqttUser;
   doc["mqttPass"] = mqttPass;
   doc["mqttPrefix"] = mqttTopicPrefix;
