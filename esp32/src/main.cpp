@@ -126,6 +126,16 @@ void writeMotorA(int speed);
 void writeMotorB(int speed);
 void rampMotors();
 void sendTelemetry();
+
+void wsLog(String msg) {
+  JSON_DOC(128) doc;
+  doc["type"] = "log";
+  doc["msg"] = msg;
+  String json;
+  serializeJson(doc, json);
+  webSocket.broadcastTXT(json);
+  Serial.println(msg);
+}
 String buildTelemetryJson();
 void updateLED();
 void updateBuzzer();
@@ -354,7 +364,10 @@ void connectWiFi() {
 
 void handleWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
-    wifiConnecting = false;
+    if (wifiConnecting) {
+      wifiConnecting = false;
+      wsLog("WiFi connected: " + WiFi.localIP().toString() + " (" + String(WiFi.RSSI()) + " dBm)");
+    }
     initialized = true;
     return;
   }
@@ -521,6 +534,7 @@ void handleWiFi() {
       } else if (upload.status == UPLOAD_FILE_END) {
         if (Update.end(true)) {
           Serial.printf("OTA update success: %u bytes\n", upload.totalSize);
+          wsLog("OTA update success: " + String(upload.totalSize) + " bytes");
         } else {
           Update.printError(Serial);
         }
@@ -535,7 +549,8 @@ void handleWiFi() {
     });
 
     ArduinoOTA.begin();
-}
+
+    wsLog("ESP32 ready — IP: " + WiFi.localIP().toString());
 
 // =======================
 // LOOP
@@ -1105,6 +1120,9 @@ void connectMQTT() {
 
   if (mqttClient.connected()) {
     mqttClient.subscribe(getCmdTopic().c_str());
+    wsLog("MQTT connected: " + mqttBroker + ":" + String(mqttPort));
+  } else {
+    wsLog("MQTT connect failed: " + mqttBroker);
   }
 }
 

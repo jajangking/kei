@@ -66,6 +66,7 @@ export default function VisionPage() {
   const [leftMotor, setLeftMotor] = useState(0);
   const [rightMotor, setRightMotor] = useState(0);
   const [telemetry, setTelemetry] = useState<Telemetry>({});
+  const [logs, setLogs] = useState<{ msg: string; t: number }[]>([]);
 
   const [modelReady, setModelReady] = useState(false);
   const [modelLoading, setModelLoading] = useState(false);
@@ -360,7 +361,16 @@ export default function VisionPage() {
     };
     ws.onmessage = (e) => {
       if (espGenRef.current !== gen) return;
-      try { const d = JSON.parse(e.data); const { config: _cfg, ...rest } = d; lastTelemetryRef.current = Date.now(); setTelemetry(p => ({ ...p, ...rest })); } catch {}
+      try {
+        const d = JSON.parse(e.data);
+        if (d.type === "log") {
+          setLogs(prev => [...prev.slice(-99), { msg: d.msg, t: Date.now() }]);
+          return;
+        }
+        const { config: _cfg, ...rest } = d;
+        lastTelemetryRef.current = Date.now();
+        setTelemetry(p => ({ ...p, ...rest }));
+      } catch {}
     };
     ws.onclose = () => {
       if (espGenRef.current !== gen) return;
@@ -1976,7 +1986,16 @@ const mqttDeviceIdRef = useRef("");
             </div>
           )}
         </div>
-      )}
+          )}
+          {logs.length > 0 && (
+            <div className="w-full max-w-sm rounded-xl bg-black/80 ring-1 ring-zinc-800 px-3 py-2 max-h-32 overflow-y-auto text-[7px] font-mono leading-3">
+              {logs.map((l, i) => (
+                <div key={i} className="text-zinc-500 truncate">
+                  <span className="text-zinc-700">{new Date(l.t).toLocaleTimeString()}</span> {l.msg}
+                </div>
+              ))}
+            </div>
+          )}
 
       {/* ESP / STREAM INPUT */}
       {showEspInput && (
