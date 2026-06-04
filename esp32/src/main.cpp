@@ -447,12 +447,17 @@ void handleWiFi() {
     });
 
     httpServer.on("/cmd", []() {
-      if (httpServer.hasArg("plain")) {  
-        handleMessage(httpServer.arg("plain"));  
-        httpServer.send(200, "text/plain", "ok");  
-      } else {  
-        httpServer.send(400, "text/plain", "no body");  
-      }  
+      if (httpServer.hasArg("plain")) {
+        String body = httpServer.arg("plain");
+        handleMessage(body);
+        if (body.indexOf("\"ping\"") >= 0 || body.indexOf("ping") >= 0) {
+          httpServer.send(200, "application/json", "{\"pong\":true,\"ip\":\"" + WiFi.localIP().toString() + "\",\"rssi\":" + WiFi.RSSI() + ",\"fw\":\"" + String(FW_VERSION) + "\"}");
+        } else {
+          httpServer.send(200, "text/plain", "ok");
+        }
+      } else {
+        httpServer.send(400, "text/plain", "no body");
+      }
     });
 
     httpServer.on("/version", []() {
@@ -1149,13 +1154,9 @@ void handleRoot() {
     "</div>"
     "<script>"
     "fetch('/version').then(r=>r.json()).then(d=>{document.getElementById('fw').textContent=d.fw});"
-    "fetch('/cmd',{method:'POST',body:JSON.stringify({ping:true})}).then(r=>r.json()).then(d=>{"
-    "  if(d.pong){"
-    "    var ws=new WebSocket('ws://'+location.hostname+':81');"
-    "    ws.onmessage=function(e){var d=JSON.parse(e.data);if(d.ip)document.getElementById('ip').textContent=d.ip;if(d.rssi)document.getElementById('rssi').textContent=d.rssi+' dBm';if(d.fw)document.getElementById('fw').textContent=d.fw};"
-    "    ws.onopen=function(){ws.send(JSON.stringify({ping:true}))};"
-    "  }"
-    "});"
+    "var ws=new WebSocket('ws://'+location.hostname+':81');"
+    "ws.onmessage=function(e){var d=JSON.parse(e.data);if(d.ip)document.getElementById('ip').textContent=d.ip;if(d.rssi)document.getElementById('rssi').textContent=d.rssi+' dBm';if(d.fw)document.getElementById('fw').textContent=d.fw};"
+    "ws.onopen=function(){ws.send(JSON.stringify({ping:true}))};"
     "document.getElementById('form').onsubmit=function(e){"
     "e.preventDefault();var f=new FormData(this);var s=document.getElementById('status');"
     "s.style.display='block';s.style.background='#0f3460';s.textContent='Uploading...';"
