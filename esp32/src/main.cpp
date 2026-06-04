@@ -106,7 +106,7 @@ bool initialized = false;
 // =======================
 WiFiClient mqttPlainClient;
 WiFiClientSecure mqttSecureClient;
-PubSubClient mqttClient;
+PubSubClient mqttClient(mqttSecureClient);
 
 String mqttBroker = "";
 int mqttPort = 8883;
