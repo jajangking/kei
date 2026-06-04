@@ -24,6 +24,7 @@
 // PINS
 // =======================
 #define LED_PIN 2
+#define BATTERY_PIN 34
 
 // =======================
 // WIFI
@@ -551,6 +552,7 @@ void handleWiFi() {
     ArduinoOTA.begin();
 
     wsLog("ESP32 ready — IP: " + WiFi.localIP().toString());
+}
 
 // =======================
 // LOOP
@@ -1012,6 +1014,20 @@ void updateLED() {
 }
 
 // =======================
+// BATTERY
+// =======================
+int batteryPercent(float v) {
+  if (v >= 8.20) return 100;
+  if (v >= 8.00) return 80 + (v - 8.00) / 0.20 * 20;
+  if (v >= 7.80) return 60 + (v - 7.80) / 0.20 * 20;
+  if (v >= 7.60) return 40 + (v - 7.60) / 0.20 * 20;
+  if (v >= 7.40) return 20 + (v - 7.40) / 0.20 * 20;
+  if (v >= 7.20) return 10 + (v - 7.20) / 0.20 * 10;
+  if (v >= 7.00) return 5  + (v - 7.00) / 0.20 * 5;
+  return 0;
+}
+
+// =======================
 // TELEMETRY
 // =======================
 String buildTelemetryJson() {
@@ -1025,6 +1041,14 @@ String buildTelemetryJson() {
     abs(currentLeftSpeed) +
     abs(currentRightSpeed)
   ) / 2;
+
+  // battery
+  static float filteredV = 0;
+  float raw = analogRead(BATTERY_PIN) * 3.3 / 4095.0;
+  float v = raw * 3.0;
+  filteredV = filteredV * 0.85 + v * 0.15;
+  doc["batteryV"] = round(filteredV * 10) / 10;
+  doc["batteryPct"] = batteryPercent(filteredV);
 
   doc["rssi"] = WiFi.RSSI();
   doc["heap"] = ESP.getFreeHeap();
@@ -1203,6 +1227,8 @@ void setup() {
 
   pinMode(LED_PIN, OUTPUT);
   pinMode(BUZZER, OUTPUT);
+  pinMode(BATTERY_PIN, INPUT);
+  analogSetPinAttenuation(BATTERY_PIN, ADC_11db);
   digitalWrite(LED_PIN, LOW);
   digitalWrite(BUZZER, LOW);
 

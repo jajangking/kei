@@ -28,6 +28,8 @@ interface Telemetry {
   rightTrim?: number;
   mqtt?: boolean;
   deviceName?: string;
+  batteryV?: number;
+  batteryPct?: number;
 }
 
 export default function VisionPage() {
@@ -2172,6 +2174,18 @@ const mqttDeviceIdRef = useRef("");
                 <span className="text-zinc-500">R <span className="text-orange-400">{telemetry.right ?? telemetry.speed ?? '-'}</span></span>
                 <span className="text-zinc-500">mode <span className={telemetry.mode === 'emergency' ? 'text-red-400' : 'text-green-400'}>{telemetry.mode ?? '-'}</span></span>
                 <span className="text-zinc-500">rssi <span className="text-yellow-400">{telemetry.rssi ?? '-'} dBm</span></span>
+                <span className="text-zinc-500">batre{' '}
+                  <span className={
+                    telemetry.batteryPct == null ? 'text-zinc-600'
+                    : telemetry.batteryPct > 60 ? 'text-green-400'
+                    : telemetry.batteryPct > 20 ? 'text-yellow-400'
+                    : 'text-red-400'
+                  }>
+                    {telemetry.batteryPct != null ? `${telemetry.batteryPct}%` : '?'}
+                  </span>
+                  {telemetry.batteryV != null &&
+                    <span className="text-zinc-600">/{telemetry.batteryV}V</span>}
+                </span>
                 <span className="text-zinc-500">heap <span className="text-fuchsia-400">{telemetry.heap ? `${(telemetry.heap / 1024).toFixed(0)}KB` : '-'}</span></span>
                 <span className="text-zinc-500">uptime <span className="text-white">{telemetry.uptime ? `${Math.floor(telemetry.uptime / 60)}m${telemetry.uptime % 60}s` : '-'}</span></span>
                 <span className="text-zinc-500">{telemetry.ip ?? '-'}</span>
