@@ -862,20 +862,10 @@ void handleMessage(String msg) {
 // =======================
 void rampMotors() {
   auto stepMotor = [](int &current, int target, int rate) {
-    const int DZ = 120;
-    if (target == 0 && abs(current) > 0 && abs(current) <= DZ) {
-      current = 0;
-    } else if (abs(target) >= DZ && current == 0) {
-      current = (target > 0) ? 60 : -60;
-    } else if (abs(target) >= DZ && abs(current) == 60) {
-      current = (target > 0) ? 90 : -90;
-    } else if (abs(target) >= DZ && abs(current) == 90) {
-      current = (target > 0) ? DZ : -DZ;
-    } else {
-      int step = (target > current) ? rate : -rate;
-      current += step;
-      if (abs(current - target) < rate) current = target;
-    }
+    if (current == target) return;
+    int step = (target > current) ? rate : -rate;
+    current += step;
+    if (abs(current - target) < rate) current = target;
     current = constrain(current, -255, 255);
   };
 
