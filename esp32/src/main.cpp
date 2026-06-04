@@ -1017,14 +1017,28 @@ void updateLED() {
 // BATTERY
 // =======================
 int batteryPercent(float v) {
-  if (v >= 8.20) return 100;
-  if (v >= 8.00) return 80 + (v - 8.00) / 0.20 * 20;
-  if (v >= 7.80) return 60 + (v - 7.80) / 0.20 * 20;
-  if (v >= 7.60) return 40 + (v - 7.60) / 0.20 * 20;
-  if (v >= 7.40) return 20 + (v - 7.40) / 0.20 * 20;
-  if (v >= 7.20) return 10 + (v - 7.20) / 0.20 * 10;
-  if (v >= 7.00) return 5  + (v - 7.00) / 0.20 * 5;
-  return 0;
+  static int lastPct = -1;
+  float lookup = v;
+  // hysteresis: kalo udah di threshold, jangan balik sampai beda 0.06V
+  if (lastPct >= 85 && lastPct < 100) lookup += 0.06;
+  if (lastPct >= 65 && lastPct < 85) lookup += 0.06;
+  if (lastPct >= 45 && lastPct < 65) lookup += 0.06;
+  if (lastPct >= 25 && lastPct < 45) lookup += 0.06;
+  if (lastPct >= 12 && lastPct < 25) lookup += 0.06;
+  if (lastPct >= 6 && lastPct < 12) lookup += 0.06;
+
+  int pct;
+  if (lookup >= 8.20) pct = 100;
+  else if (lookup >= 8.00) pct = 80 + (lookup - 8.00) / 0.20 * 20;
+  else if (lookup >= 7.80) pct = 60 + (lookup - 7.80) / 0.20 * 20;
+  else if (lookup >= 7.60) pct = 40 + (lookup - 7.60) / 0.20 * 20;
+  else if (lookup >= 7.40) pct = 20 + (lookup - 7.40) / 0.20 * 20;
+  else if (lookup >= 7.20) pct = 10 + (lookup - 7.20) / 0.20 * 10;
+  else if (lookup >= 7.00) pct = 5  + (lookup - 7.00) / 0.20 * 5;
+  else pct = 0;
+
+  lastPct = pct;
+  return pct;
 }
 
 // =======================
@@ -1042,11 +1056,13 @@ String buildTelemetryJson() {
     abs(currentRightSpeed)
   ) / 2;
 
-  // battery
+  // battery — multisampling 64× + EMA filter 0.95
   static float filteredV = 0;
-  float raw = analogRead(BATTERY_PIN) * 3.3 / 4095.0;
-  float v = raw * 3.0;
-  filteredV = filteredV * 0.85 + v * 0.15;
+  uint32_t sum = 0;
+  for (int i = 0; i < 64; i++) sum += analogRead(BATTERY_PIN);
+  float avg = sum / 64.0;
+  float v = avg * 3.3 / 4095.0 * 3.0;
+  filteredV = filteredV * 0.95 + v * 0.05;
   doc["batteryV"] = round(filteredV * 10) / 10;
   doc["batteryPct"] = batteryPercent(filteredV);
 
