@@ -60,6 +60,7 @@ export default function VisionPage() {
   const [mqttBroker, setMqttBroker] = useState(() => typeof window !== "undefined" ? localStorage.getItem("mqttBroker") || "" : "");
   const [mqttPort, setMqttPort] = useState(() => typeof window !== "undefined" ? Number(localStorage.getItem("mqttPort")) || 8884 : 8884);
   const [mqttEspPort, setMqttEspPort] = useState(() => typeof window !== "undefined" ? Number(localStorage.getItem("mqttEspPort")) || 8883 : 8883);
+  const [mqttTls, setMqttTls] = useState(() => typeof window !== "undefined" ? localStorage.getItem("mqttTls") !== "false" : true);
   const [mqttUser, setMqttUser] = useState(() => typeof window !== "undefined" ? localStorage.getItem("mqttUser") || "" : "");
   const [mqttPass, setMqttPass] = useState(() => typeof window !== "undefined" ? localStorage.getItem("mqttPass") || "" : "");
   const [mqttPrefix, setMqttPrefix] = useState(() => typeof window !== "undefined" ? localStorage.getItem("mqttPrefix") || "kei/robot" : "kei/robot");
@@ -522,6 +523,7 @@ const mqttDeviceIdRef = useRef("");
       mqttBroker: localStorage.getItem("mqttBroker") || "",
       mqttPort: Number(localStorage.getItem("mqttPort")) || 8884,
       mqttEspPort: Number(localStorage.getItem("mqttEspPort")) || 8883,
+      mqttTls: localStorage.getItem("mqttTls") !== "false",
       mqttUser: localStorage.getItem("mqttUser") || "",
       mqttPass: localStorage.getItem("mqttPass") || "",
       mqttPrefix: localStorage.getItem("mqttPrefix") || "kei/robot",
@@ -548,6 +550,7 @@ const mqttDeviceIdRef = useRef("");
         if (data.mqttBroker) { localStorage.setItem("mqttBroker", data.mqttBroker); setMqttBroker(data.mqttBroker); }
         if (data.mqttPort) { localStorage.setItem("mqttPort", String(data.mqttPort)); setMqttPort(data.mqttPort); }
         if (data.mqttEspPort) { localStorage.setItem("mqttEspPort", String(data.mqttEspPort)); setMqttEspPort(data.mqttEspPort); }
+        if (data.mqttTls !== undefined) { localStorage.setItem("mqttTls", String(data.mqttTls)); setMqttTls(data.mqttTls); }
         if (data.mqttUser !== undefined) { localStorage.setItem("mqttUser", data.mqttUser); setMqttUser(data.mqttUser); }
         if (data.mqttPass !== undefined) { localStorage.setItem("mqttPass", data.mqttPass); setMqttPass(data.mqttPass); }
         if (data.mqttPrefix) { localStorage.setItem("mqttPrefix", data.mqttPrefix); setMqttPrefix(data.mqttPrefix); }
@@ -2085,12 +2088,20 @@ const mqttDeviceIdRef = useRef("");
                   placeholder="kei/robot"
                   className="flex-1 min-w-0 px-2 py-1 rounded-full bg-zinc-800 border border-zinc-700 text-white text-[9px] font-mono placeholder-zinc-500 focus:outline-none focus:border-zinc-500" />
               </div>
+              <div className="flex items-center gap-2 px-1">
+                <label className="flex items-center gap-1 text-[8px] text-zinc-500 font-mono cursor-pointer select-none">
+                  <input type="checkbox" checked={mqttTls}
+                    onChange={e => setMqttTls(e.target.checked)}
+                    className="accent-emerald-500 size-2.5" />
+                  ESP TLS
+                </label>
+              </div>
               <div className="flex gap-1">
                 <button onClick={connectMQTT}
                   className="flex-1 px-2 py-1 rounded-full bg-emerald-600 text-white text-[9px] font-mono font-bold active:scale-90">
                   HUBUNGKAN
                 </button>
-                <button onClick={() => sendESP({ mqttBroker, mqttPort, mqttEspPort, mqttUser, mqttPass, mqttPrefix, mqttEnabled: true })}
+                <button onClick={() => sendESP({ mqttBroker, mqttPort, mqttEspPort, mqttTls, mqttUser, mqttPass, mqttPrefix, mqttEnabled: true })}
                   className="px-2 py-1 rounded-full bg-zinc-800 text-zinc-300 text-[9px] font-mono border border-zinc-700 active:scale-90">
                   KIRIM KE ESP
                 </button>

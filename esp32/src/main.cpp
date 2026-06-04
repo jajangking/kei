@@ -104,8 +104,9 @@ bool initialized = false;
 // =======================
 // MQTT
 // =======================
-WiFiClientSecure mqttWifiClient;
-PubSubClient mqttClient(mqttWifiClient);
+WiFiClient mqttPlainClient;
+WiFiClientSecure mqttSecureClient;
+PubSubClient mqttClient;
 
 String mqttBroker = "";
 int mqttPort = 8883;
@@ -114,6 +115,7 @@ String mqttPass = "";
 String mqttTopicPrefix = "kei/robot";
 
 bool mqttEnabled = false;
+bool mqttTls = true;
 
 String deviceName = "";
 bool deviceNameConfigured = false;
@@ -251,6 +253,7 @@ void loadMqttConfig() {
   mqttPass = prefs.getString("pass", "");
   mqttTopicPrefix = prefs.getString("prefix", "kei/robot");
   mqttEnabled = prefs.getBool("enabled", false);
+  mqttTls = prefs.getBool("tls", true);
   prefs.end();
 }
 
@@ -260,7 +263,8 @@ void saveMqttConfig(
   String user,
   String pass,
   String prefix,
-  bool enabled
+  bool enabled,
+  bool tls
 ) {
   Preferences prefs;
   prefs.begin("mqtt", false);
@@ -270,6 +274,7 @@ void saveMqttConfig(
   prefs.putString("pass", pass);
   prefs.putString("prefix", prefix);
   prefs.putBool("enabled", enabled);
+  prefs.putBool("tls", tls);
   prefs.end();
 
   mqttBroker = broker;
@@ -278,6 +283,7 @@ void saveMqttConfig(
   mqttPass = pass;
   mqttTopicPrefix = prefix;
   mqttEnabled = enabled;
+  mqttTls = tls;
 }
 
 // =======================
@@ -726,13 +732,15 @@ void handleMessage(String msg) {
   // MQTT CONFIG
   if (doc["mqttBroker"].is<String>()) {
     int port = doc["mqttEspPort"] | doc["mqttPort"] | 8883;
+    bool tls = doc["mqttTls"] | true;
     saveMqttConfig(  
       doc["mqttBroker"].as<String>(),  
       port,  
       doc["mqttUser"].as<String>(),  
       doc["mqttPass"].as<String>(),  
       doc["mqttPrefix"].as<String>(),  
-      doc["mqttEnabled"].as<bool>()  
+      doc["mqttEnabled"].as<bool>(),
+      tls
     );  
 
     mqttClient.disconnect();  
@@ -758,7 +766,8 @@ void handleMessage(String msg) {
       "",  
       "",  
       "kei/robot",  
-      false  
+      false,
+      true
     );  
 
     mqttEnabled = false;  
@@ -1122,6 +1131,7 @@ void sendConfigToClient(uint8_t clientNum) {
   doc["mqttPass"] = mqttPass;
   doc["mqttPrefix"] = mqttTopicPrefix;
   doc["mqttEnabled"] = mqttEnabled;
+  doc["mqttTls"] = mqttTls;
   doc["deviceName"] = deviceName;
   doc["fw"] = FW_VERSION;
   doc["emergency"] = emergencyStop;
@@ -1147,9 +1157,16 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 void connectMQTT() {
   if (!mqttEnabled || mqttBroker.length() == 0) return;
 
+  if (mqttTls) {
+    mqttClient.setClient(mqttSecureClient);
+    mqttSecureClient.setInsecure();
+    mqttSecureClient.setHandshakeTimeout(15000);
+  } else {
+    mqttClient.setClient(mqttPlainClient);
+  }
+
   mqttClient.setServer(mqttBroker.c_str(), mqttPort);
   mqttClient.setCallback(mqttCallback);
-  mqttWifiClient.setInsecure();
 
   String clientId = "kei-" + getDeviceId();
 
@@ -1163,7 +1180,8 @@ void connectMQTT() {
     mqttClient.subscribe(getCmdTopic().c_str());
     wsLog("MQTT connected: " + mqttBroker + ":" + String(mqttPort));
   } else {
-    wsLog("MQTT connect failed: " + mqttBroker);
+    int st = mqttClient.state();
+    wsLog("MQTT connect failed: " + mqttBroker + " (state=" + String(st) + ")");
   }
 }
 
