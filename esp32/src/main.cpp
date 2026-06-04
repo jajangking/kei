@@ -119,6 +119,7 @@ bool mqttTls = true;
 
 String deviceName = "";
 bool deviceNameConfigured = false;
+bool otaError = false;
 
 // =======================
 // DECLARATION
@@ -530,15 +531,24 @@ void handleWiFi() {
     }, []() {
       HTTPUpload& upload = httpServer.upload();
       if (upload.status == UPLOAD_FILE_START) {
+        otaError = false;
         stopMotors();
         if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
           Update.printError(Serial);
+          otaError = true;
         }
       } else if (upload.status == UPLOAD_FILE_WRITE) {
+        if (otaError) return;
         if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
           Update.printError(Serial);
+          otaError = true;
         }
       } else if (upload.status == UPLOAD_FILE_END) {
+        if (otaError) {
+          Update.end(false);
+          wsLog("OTA FAILED — flash not modified, try again");
+          return;
+        }
         if (Update.end(true)) {
           Serial.printf("OTA update success: %u bytes\n", upload.totalSize);
           wsLog("OTA update success: " + String(upload.totalSize) + " bytes");
