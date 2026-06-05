@@ -30,8 +30,8 @@ interface ChatMsg {
 function clampMotor(v: number): number {
   if (v === 0) return 0;
   const abs = Math.abs(v);
-  if (abs < 150) return v > 0 ? 150 : -150;
-  return v;
+  if (abs < 60) return v > 0 ? 60 : -60;
+  return Math.min(255, Math.max(-255, v));
 }
 
 const EDGE_VOICES = [
@@ -286,13 +286,11 @@ export default function VoiceGroq({
           for (const raw of cmds) {
             const cmd = raw.slice(1, -1);
             if (cmd.startsWith("motor:")) {
-              if (!autoRef.current) {
-                const parts = cmd.slice(6).split(",");
-                if (parts.length === 2) {
-                  const l = parseInt(parts[0]), r = parseInt(parts[1]);
-                  if (!isNaN(l) && !isNaN(r) && motorRef?.current) {
-                    motorRef.current.sendMotor(clampMotor(l), clampMotor(r));
-                  }
+              const parts = cmd.slice(6).split(",");
+              if (parts.length === 2) {
+                const l = parseInt(parts[0]), r = parseInt(parts[1]);
+                if (!isNaN(l) && !isNaN(r) && motorRef?.current) {
+                  motorRef.current.sendMotor(clampMotor(l), clampMotor(r));
                 }
               }
             } else if (cmd.startsWith("track:")) {

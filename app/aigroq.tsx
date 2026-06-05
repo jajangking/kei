@@ -29,8 +29,8 @@ interface ChatMsg {
 function clampMotor(v: number): number {
   if (v === 0) return 0;
   const abs = Math.abs(v);
-  if (abs < 150) return v > 0 ? 150 : -150;
-  return v;
+  if (abs < 60) return v > 0 ? 60 : -60;
+  return Math.min(255, Math.max(-255, v));
 }
 
 let speechRecogCtor: any = null;
@@ -267,15 +267,12 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
           for (const raw of cmds) {
             const cmd = raw.slice(1, -1);
             if (cmd.startsWith("motor:")) {
-              // Auto mode = tracking handles navigation; skip motor cmds
-              if (!autoRef.current) {
-                const parts = cmd.slice(6).split(",");
-                if (parts.length === 2) {
-                  const l = parseInt(parts[0]), r = parseInt(parts[1]);
-                  if (!isNaN(l) && !isNaN(r) && motorRef?.current) {
-                    motorRef.current.sendMotor(clampMotor(l), clampMotor(r));
-                    autoLastCmdRef.current = Date.now();
-                  }
+              const parts = cmd.slice(6).split(",");
+              if (parts.length === 2) {
+                const l = parseInt(parts[0]), r = parseInt(parts[1]);
+                if (!isNaN(l) && !isNaN(r) && motorRef?.current) {
+                  motorRef.current.sendMotor(clampMotor(l), clampMotor(r));
+                  autoLastCmdRef.current = Date.now();
                 }
               }
             } else if (cmd.startsWith("track:")) {

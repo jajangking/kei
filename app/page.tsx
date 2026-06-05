@@ -162,6 +162,7 @@ export default function VisionPage() {
   const pathHistoryRef = useRef<{ x: number; y: number; t: number }[]>([]);
   const loopDetectRef = useRef(false);
   const loopTimerRef = useRef(0);
+  const motorRunningRef = useRef(false);
   const pidErrorRef = useRef({ integral: 0, lastError: 0 });
   const goalRef = useRef<{ x: number; y: number; label: string } | null>(null);
   const aiActionRef = useRef("");
@@ -170,7 +171,7 @@ export default function VisionPage() {
   const stuckFramesRef = useRef(0);
   const stuckCooldownRef = useRef(0);
   const scanLevelRef = useRef(0);
-  const SPIRAL_MOVES = [0, 50, 80, 120, 180];
+  const SPIRAL_MOVES = [40, 50, 80, 120, 180];
   const SPIRAL_MAX = 4;
 
   const [debug, setDebug] = useState(false);
@@ -196,6 +197,7 @@ export default function VisionPage() {
       p.x += Math.sin(h) * avg * 1.5;
       p.y -= Math.cos(h) * avg * 1.5;
     }
+    motorRunningRef.current = l !== 0 || r !== 0;
     const ws = wsRef.current;
     if (ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ leftMotor: l, rightMotor: r }));
@@ -1157,7 +1159,7 @@ export default function VisionPage() {
     if (prev.length !== sig.length) return false;
     let diff = 0;
     for (let i = 0; i < sig.length; i++) diff += Math.abs(sig[i] - prev[i]);
-    return diff < 15;
+    return diff < 300;
   }
 
   function filterDetections(raw: Detection[]): Detection[] {
@@ -1216,7 +1218,7 @@ export default function VisionPage() {
     const vh = video.videoHeight || 480;
 
     const stableDetections = filterDetections(detections);
-    const motorRunning = leftMotor !== 0 || rightMotor !== 0;
+    const motorRunning = motorRunningRef.current;
 
     // Path memory — record position every 10 frames
     const pos = posRef.current;
@@ -1240,6 +1242,9 @@ export default function VisionPage() {
           const dir = Math.random() > 0.5 ? -200 : 200;
           setLeftMotor(-dir); setRightMotor(dir);
           sendMotor(-dir, dir);
+          loopTimerRef.current = 0;
+          loopDetectRef.current = false;
+          return;
         }
       } else {
         loopTimerRef.current = 0;
@@ -1249,7 +1254,7 @@ export default function VisionPage() {
 
     // Goal navigation
     const goal = goalRef.current;
-    if (goal && !trackTargetRef.current && motorRunning) {
+    if (goal && !trackTargetRef.current) {
       const dx = goal.x - pos.x;
       const dy = goal.y - pos.y;
       const dist = Math.hypot(dx, dy);
@@ -1268,7 +1273,7 @@ export default function VisionPage() {
         const absDiff = Math.abs(angleDiff);
         if (absDiff > 0.3) {
           // Turn toward goal
-          const dir = angleDiff > 0 ? -1 : 1;
+          const dir = angleDiff > 0 ? 1 : -1;
           setLeftMotor(dir * 150); setRightMotor(-dir * 150);
           sendMotor(dir * 150, -dir * 150);
           setTrackInfo(`📍 ${goal.label} ${(absDiff * 180 / Math.PI).toFixed(0)}°`);
@@ -1278,8 +1283,8 @@ export default function VisionPage() {
         const edges = edgeDensityRef.current;
         const edgeScore = (edges.left + edges.center + edges.right) / 3;
         if (edges.center < 5 && edges.left + edges.right > 0) {
-          // Blocked center, steer toward higher edge density
-          const steer = edges.left > edges.right ? -80 : 80;
+          // Blocked center, steer toward side with fewer edges (clearer path)
+          const steer = edges.left > edges.right ? 80 : -80;
           setLeftMotor(150 + steer); setRightMotor(150 - steer);
           sendMotor(150 + steer, 150 - steer);
           setTrackInfo(`📍 cari jalan`);
@@ -1357,14 +1362,14 @@ export default function VisionPage() {
           setTrackInfo('tembok!');
           if (w.timer > 5) { w.phase = 1; w.timer = 0; }
         } else if (w.phase === 1) {
-          // Back up — prefer direction with more edges (clear path)
-          const clearSide = edges.left > edges.right ? 1 : -1;
-          setLeftMotor(-180 * clearSide); setRightMotor(-180 * clearSide);
-          sendMotor(-180 * clearSide, -180 * clearSide);
+          // Back up + steer toward side with fewer edges (clearer path)
+          const steer = edges.left > edges.right ? 40 : -40;
+          setLeftMotor(-180 + steer); setRightMotor(-180 - steer);
+          sendMotor(-180 + steer, -180 - steer);
           if (w.timer > 12) { w.phase = 2; w.timer = 0; }
         } else {
-          // Turn toward the side with highest edge density (open path)
-          const steer = edges.right > edges.left ? 200 : -200;
+          // Turn toward the side with fewer edges (clearer path)
+          const steer = edges.right > edges.left ? -200 : 200;
           setLeftMotor(-steer); setRightMotor(steer);
           sendMotor(-steer, steer);
           if (w.timer > 15) {
