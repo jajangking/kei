@@ -65,6 +65,9 @@ export default function VisionPage() {
   const [mqttPass, setMqttPass] = useState(() => typeof window !== "undefined" ? localStorage.getItem("mqttPass") || "" : "");
   const [mqttPrefix, setMqttPrefix] = useState(() => typeof window !== "undefined" ? localStorage.getItem("mqttPrefix") || "kei/robot" : "kei/robot");
   const [showMqttInput, setShowMqttInput] = useState(false);
+  const [mqttDisplayDeviceId, setMqttDisplayDeviceId] = useState("");
+  const [mqttLastTelemetry, setMqttLastTelemetry] = useState(0);
+  const [mqttManualDeviceId, setMqttManualDeviceId] = useState("");
   const [scanning, setScanning] = useState(false);
   const [scanStatus, setScanStatus] = useState("");
   const [leftMotor, setLeftMotor] = useState(0);
@@ -121,6 +124,7 @@ export default function VisionPage() {
   const [aiLabel, setAiLabel] = useState("");
 
   useEffect(() => { if (espIp) localStorage.setItem("espIp", espIp); }, [espIp]);
+  useEffect(() => { if (mqttManualDeviceId) mqttDeviceIdRef.current = mqttManualDeviceId; }, [mqttManualDeviceId]);
   const trackTargetRef = useRef<{ label: string; lastSeen: number } | null>(null);
   const trackLabelRef = useRef<string | null>(null);
   const trackLostRef = useRef(0);
@@ -198,10 +202,11 @@ export default function VisionPage() {
     const mqtt = mqttClientRef.current;
     if (mqtt?.connected) {
       const deviceId = mqttDeviceIdRef.current;
-      if (deviceId) {
-        mqtt.publish(`${mqttPrefixRef.current}/${deviceId}/cmd`, JSON.stringify({ leftMotor: l, rightMotor: r }));
-        return;
-      }
+      const cmdTopic = deviceId
+        ? `${mqttPrefixRef.current}/${deviceId}/cmd`
+        : `${mqttPrefixRef.current}/broadcast/cmd`;
+      mqtt.publish(cmdTopic, JSON.stringify({ leftMotor: l, rightMotor: r }));
+      return;
     }
     const ip = espIpRef.current;
     if (ip) {
@@ -448,8 +453,11 @@ const mqttDeviceIdRef = useRef("");
           const data = JSON.parse(payload.toString());
           const parts = topic.split("/");
           if (parts.length >= 3) {
-            mqttDeviceIdRef.current = parts[parts.length - 2];
+            const did = parts[parts.length - 2];
+            mqttDeviceIdRef.current = did;
+            setMqttDisplayDeviceId(did);
           }
+          setMqttLastTelemetry(Date.now());
           if (data.ip && data.ip !== espIpRef.current) {
             setEspIp(data.ip);
           }
@@ -490,11 +498,11 @@ const mqttDeviceIdRef = useRef("");
     const mqtt = mqttClientRef.current;
     if (mqtt?.connected) {
       const deviceId = mqttDeviceIdRef.current;
-      if (deviceId) {
-        const cmdTopic = `${mqttPrefixRef.current}/${deviceId}/cmd`;
-        mqtt.publish(cmdTopic, JSON.stringify(data));
-        return;
-      }
+      const cmdTopic = deviceId
+        ? `${mqttPrefixRef.current}/${deviceId}/cmd`
+        : `${mqttPrefixRef.current}/broadcast/cmd`;
+      mqtt.publish(cmdTopic, JSON.stringify(data));
+      return;
     }
     const ip = espIpRef.current;
     if (ip) {
@@ -2011,8 +2019,12 @@ const mqttDeviceIdRef = useRef("");
           {/* baris 1: IP + HUBUNG + CARI + PING */}
           <div className="flex gap-1.5">
             <input value={espIp} onChange={(e) => setEspIp(e.target.value)}
-              placeholder="IP atau kei.local"
-              className="flex-1 min-w-0 px-3 py-1.5 rounded-full bg-zinc-900 border border-zinc-700 text-white text-xs placeholder-zinc-500 focus:outline-none focus:border-zinc-500" />
+              placeholder="192.168.1.100"
+              className={`flex-1 min-w-0 px-3 py-1.5 rounded-full bg-zinc-900 border text-white text-xs placeholder-zinc-500 focus:outline-none ${
+                espIp && (!/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(espIp) || espIp.split('.').some(o => +o > 255))
+                  ? 'border-red-500 focus:border-red-400'
+                  : 'border-zinc-700 focus:border-zinc-500'
+              }`} />
             <button onClick={wsConnected ? disconnectESP : connectESP}
               className="px-3 py-1.5 rounded-full bg-white text-black text-xs font-semibold flex-shrink-0">
               {wsConnected ? "PUTUS" : "HUBUNG"}
@@ -2087,6 +2099,19 @@ const mqttDeviceIdRef = useRef("");
                 <input value={mqttPrefix} onChange={e => setMqttPrefix(e.target.value)}
                   placeholder="kei/robot"
                   className="flex-1 min-w-0 px-2 py-1 rounded-full bg-zinc-800 border border-zinc-700 text-white text-[9px] font-mono placeholder-zinc-500 focus:outline-none focus:border-zinc-500" />
+              </div>
+              <div className="flex gap-1.5 items-center">
+                <span className="text-[8px] font-mono text-zinc-500 flex-1 truncate">
+                  {mqttDisplayDeviceId
+                    ? `ID: ${mqttDisplayDeviceId}${mqttLastTelemetry ? ` | tele: ${Math.floor((Date.now() - mqttLastTelemetry) / 1000)}s` : ''}`
+                    : 'ID: (menunggu telemetry...)'
+                  }
+                </span>
+                {!mqttDisplayDeviceId && (
+                  <input value={mqttManualDeviceId} onChange={e => setMqttManualDeviceId(e.target.value)}
+                    placeholder="deviceId manual"
+                    className="w-24 px-1.5 py-1 rounded-full bg-zinc-800 border border-zinc-700 text-white text-[8px] font-mono placeholder-zinc-500 focus:outline-none focus:border-zinc-500 text-center" />
+                )}
               </div>
               <div className="flex items-center gap-2 px-1">
                 <label className="flex items-center gap-1 text-[8px] text-zinc-500 font-mono cursor-pointer select-none">

@@ -1080,7 +1080,7 @@ String buildTelemetryJson() {
   uint32_t sum = 0;
   for (int i = 0; i < 64; i++) sum += analogRead(BATTERY_PIN);
   float avg = sum / 64.0;
-  float v = avg * 3.3 / 4095.0 * 3.0;
+  float v = avg * 3.3 / 4095.0 * 2.0;
   filteredV = filteredV * 0.95 + v * 0.05;
   doc["batteryV"] = round(filteredV * 10) / 10;
   doc["batteryPct"] = batteryPercent(filteredV);
@@ -1188,6 +1188,7 @@ void connectMQTT() {
 
   if (mqttClient.connected()) {
     mqttClient.subscribe(getCmdTopic().c_str());
+    mqttClient.subscribe((mqttTopicPrefix + "/broadcast/cmd").c_str());
     wsLog("MQTT connected: " + mqttBroker + ":" + String(mqttPort));
   } else {
     int st = mqttClient.state();
