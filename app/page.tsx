@@ -68,6 +68,7 @@ export default function VisionPage() {
   const [mqttDisplayDeviceId, setMqttDisplayDeviceId] = useState("");
   const [mqttLastTelemetry, setMqttLastTelemetry] = useState(0);
   const [mqttManualDeviceId, setMqttManualDeviceId] = useState("");
+  const [espIpFromMqtt, setEspIpFromMqtt] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [scanStatus, setScanStatus] = useState("");
   const [leftMotor, setLeftMotor] = useState(0);
@@ -460,6 +461,8 @@ const mqttDeviceIdRef = useRef("");
           setMqttLastTelemetry(Date.now());
           if (data.ip && data.ip !== espIpRef.current) {
             setEspIp(data.ip);
+            setEspIpFromMqtt(true);
+            connectESP();
           }
           lastTelemetryRef.current = Date.now();
           const { config: _cfg, ...rest } = data;
@@ -2018,11 +2021,12 @@ const mqttDeviceIdRef = useRef("");
         <div className="w-full max-w-sm flex flex-col gap-1.5">
           {/* baris 1: IP + HUBUNG + CARI + PING */}
           <div className="flex gap-1.5">
-            <input value={espIp} onChange={(e) => setEspIp(e.target.value)}
+            <input value={espIp} onChange={(e) => { setEspIp(e.target.value); setEspIpFromMqtt(false); }}
               placeholder="192.168.1.100"
               className={`flex-1 min-w-0 px-3 py-1.5 rounded-full bg-zinc-900 border text-white text-xs placeholder-zinc-500 focus:outline-none ${
                 espIp && (!/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(espIp) || espIp.split('.').some(o => +o > 255))
                   ? 'border-red-500 focus:border-red-400'
+                  : espIpFromMqtt ? 'border-emerald-600 focus:border-emerald-400'
                   : 'border-zinc-700 focus:border-zinc-500'
               }`} />
             <button onClick={wsConnected ? disconnectESP : connectESP}
@@ -2113,6 +2117,11 @@ const mqttDeviceIdRef = useRef("");
                     className="w-24 px-1.5 py-1 rounded-full bg-zinc-800 border border-zinc-700 text-white text-[8px] font-mono placeholder-zinc-500 focus:outline-none focus:border-zinc-500 text-center" />
                 )}
               </div>
+              {espIpFromMqtt && espIp && (
+                <div className="text-[8px] font-mono text-emerald-500 px-1">
+                  ESP IP: {espIp} (via MQTT)
+                </div>
+              )}
               <div className="flex items-center gap-2 px-1">
                 <label className="flex items-center gap-1 text-[8px] text-zinc-500 font-mono cursor-pointer select-none">
                   <input type="checkbox" checked={mqttTls}
