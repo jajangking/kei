@@ -68,6 +68,7 @@ export default function VisionPage() {
   const [mqttDisplayDeviceId, setMqttDisplayDeviceId] = useState("");
   const [mqttLastTelemetry, setMqttLastTelemetry] = useState(0);
   const [mqttManualDeviceId, setMqttManualDeviceId] = useState("");
+  const [mqttDeviceCount, setMqttDeviceCount] = useState(0);
   const [espIpFromMqtt, setEspIpFromMqtt] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [scanStatus, setScanStatus] = useState("");
@@ -410,9 +411,11 @@ export default function VisionPage() {
 
   // MQTT
   const mqttClientRef = useRef<any>(null);
-const mqttTeleTopicRef = useRef("");
-const mqttPrefixRef = useRef("kei/robot");
-const mqttDeviceIdRef = useRef("");
+  const mqttTeleTopicRef = useRef("");
+  const mqttPrefixRef = useRef("kei/robot");
+  const mqttDeviceIdRef = useRef("");
+  const mqttDeviceIdLockedRef = useRef(false);
+  const mqttDeviceListRef = useRef<Set<string>>(new Set());
   const mqttGenRef = useRef(0);
   const [mqttStatus, setMqttStatus] = useState("");
 
@@ -444,6 +447,11 @@ const mqttDeviceIdRef = useRef("");
         setMqttConnected(true);
         setMqttStatus("terhubung");
         mqttPrefixRef.current = mqttPrefix;
+        mqttDeviceIdLockedRef.current = false;
+        mqttDeviceListRef.current = new Set();
+        setMqttDeviceCount(0);
+        mqttDeviceIdRef.current = mqttManualDeviceId;
+        setMqttDisplayDeviceId(mqttManualDeviceId);
         const teleTopic = `${mqttPrefix}/+/telemetry`;
         mqttTeleTopicRef.current = teleTopic;
         client.subscribe(teleTopic);
@@ -453,20 +461,27 @@ const mqttDeviceIdRef = useRef("");
         try {
           const data = JSON.parse(payload.toString());
           const parts = topic.split("/");
-          if (parts.length >= 3) {
-            const did = parts[parts.length - 2];
-            mqttDeviceIdRef.current = did;
-            setMqttDisplayDeviceId(did);
+          const did = parts.length >= 3 ? parts[parts.length - 2] : "";
+          if (did) {
+            mqttDeviceListRef.current.add(did);
+            setMqttDeviceCount(mqttDeviceListRef.current.size);
+            if (!mqttDeviceIdLockedRef.current) {
+              mqttDeviceIdRef.current = did;
+              mqttDeviceIdLockedRef.current = true;
+              setMqttDisplayDeviceId(did);
+            }
           }
           setMqttLastTelemetry(Date.now());
-          if (data.ip && data.ip !== espIpRef.current) {
-            setEspIp(data.ip);
-            setEspIpFromMqtt(true);
-            connectESP();
+          if (did && did === mqttDeviceIdRef.current) {
+            if (data.ip && data.ip !== espIpRef.current) {
+              setEspIp(data.ip);
+              setEspIpFromMqtt(true);
+              connectESP();
+            }
+            lastTelemetryRef.current = Date.now();
+            const { config: _cfg, ...rest } = data;
+            setTelemetry(p => ({ ...p, ...rest }));
           }
-          lastTelemetryRef.current = Date.now();
-          const { config: _cfg, ...rest } = data;
-          setTelemetry(p => ({ ...p, ...rest }));
         } catch {}
       });
       client.on("close", () => {
@@ -2107,7 +2122,7 @@ const mqttDeviceIdRef = useRef("");
               <div className="flex gap-1.5 items-center">
                 <span className="text-[8px] font-mono text-zinc-500 flex-1 truncate">
                   {mqttDisplayDeviceId
-                    ? `ID: ${mqttDisplayDeviceId}${mqttLastTelemetry ? ` | tele: ${Math.floor((Date.now() - mqttLastTelemetry) / 1000)}s` : ''}`
+                    ? `ID: ${mqttDisplayDeviceId}${mqttDeviceCount > 1 ? ` +${mqttDeviceCount - 1}` : ''}${mqttLastTelemetry ? ` | ${Math.floor((Date.now() - mqttLastTelemetry) / 1000)}s` : ''}`
                     : 'ID: (menunggu telemetry...)'
                   }
                 </span>
