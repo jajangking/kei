@@ -6,7 +6,6 @@ interface AIGroqProps {
   recognizedFaceRef: React.MutableRefObject<{ name: string } | null>;
   detectionsRef: React.MutableRefObject<{ categories: { categoryName: string; score: number }[]; boundingBox?: { originX: number; originY: number; width: number; height: number } }[]>;
   trackInfoRef: React.MutableRefObject<string>;
-  scanStateRef: React.MutableRefObject<string>;
   aiBusyRef?: React.MutableRefObject<boolean>;
   headingRef?: React.MutableRefObject<number>;
   leftMotor?: number;
@@ -51,8 +50,7 @@ Lo BISA gerakin robot pake perintah di dalem kurung siku:
 [stop] — berhenti
 Contoh: "Ada mobil di kanan, gua follow. [track:mobil]"
 
-Kalo lagi mode autonomous, lo yang mutusin. Tapi aturan SAFETY:
-- Kalo gelap — JANGAN maju. MUNDUR atau muter.
+Aturan SAFETY:
 - Kalo ada objek gede di depan — minggir, jangan nayok.
 - Jangan monoton — kadang maju, kadang mundur, kadang puter.
 - Kalo liat objek menarik, tracking aja.
@@ -62,7 +60,6 @@ function buildContext(
   dets: AIGroqProps["detectionsRef"]["current"],
   face: { name: string } | null,
   trackInfo: string,
-  scanState: string,
   heading?: number,
   leftMotor?: number,
   rightMotor?: number,
@@ -76,7 +73,6 @@ function buildContext(
   }
   if (face) ctx += `ada ${face.name}. `;
   if (trackInfo) ctx += `lagi ${trackInfo}. `;
-  if (scanState !== "idle") ctx += `(state ${scanState}). `;
   if (heading !== undefined) ctx += `arah ${((heading * 180 / Math.PI) % 360).toFixed(0)}°. `;
   if (leftMotor !== undefined && rightMotor !== undefined) {
     if (leftMotor !== 0 || rightMotor !== 0) {
@@ -88,7 +84,7 @@ function buildContext(
   return ctx;
 }
 
-export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef, scanStateRef, aiBusyRef, headingRef, leftMotor, rightMotor, trackingRef, setTracking, motorRef }: AIGroqProps) {
+export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef, aiBusyRef, headingRef, leftMotor, rightMotor, trackingRef, setTracking, motorRef }: AIGroqProps) {
   const [msgs, setMsgs] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
   const [listening, setListening] = useState(false);
@@ -165,12 +161,10 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
 
   function updateMood() {
     const info = trackInfoRef.current;
-    const scan = scanStateRef.current;
     let m = "chill";
     if (info.includes("✅") || info.includes("🔒")) m = "excited";
-    else if (info.startsWith("cari") || scan === "scanning") m = "curious";
+    else if (info.startsWith("cari")) m = "curious";
     else if (info.startsWith("hindar") || info.includes("stuck")) m = "alert";
-    else if (info.includes("gelap")) m = "alert";
     else if (trackLostRef()) m = "confused";
     if (m !== moodRef.current) {
       moodRef.current = m;
@@ -226,7 +220,7 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
       tokenResetRef.current = Date.now();
     }
 
-    const ctx = buildContext(detectionsRef.current, recognizedFaceRef.current, trackInfoRef.current, scanStateRef.current);
+    const ctx = buildContext(detectionsRef.current, recognizedFaceRef.current, trackInfoRef.current);
     const systemMsg: ChatMsg = { role: "system", content: `${SYSTEM_PROMPT}\n\nKonteks saat ini: ${ctx}` };
 
     const history = msgsRef.current.filter(m => m.role !== "system");
@@ -326,7 +320,7 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
   // Auto context update + proactive chat
   useEffect(() => {
     contextIvRef.current = setInterval(() => {
-    const ctx = buildContext(detectionsRef.current, recognizedFaceRef.current, trackInfoRef.current, scanStateRef.current, undefined, leftMotor, rightMotor);
+    const ctx = buildContext(detectionsRef.current, recognizedFaceRef.current, trackInfoRef.current, undefined, leftMotor, rightMotor);
       if (ctx === lastContextRef.current) return;
       lastContextRef.current = ctx;
 
@@ -363,14 +357,12 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
       if (!apiKeyRef.current || speakingRef.current || convRef.current) return;
       updateMood();
       const trackInfo = trackInfoRef.current;
-      const scanState = scanStateRef.current;
       // Cuma lapor kalo ada perubahan penting
       const info = trackInfo;
       const isTracking = info.includes('✅') || info.includes('🔒');
       const isStuck = info.includes('stuck');
-      const isDark = info.includes('gelap');
       const isBlocked = info.startsWith('hindar');
-      const key = `${isTracking ? 'T' : ''}${isStuck ? '!':''}${isDark ? 'D':''}${isBlocked ? 'B':''}|${scanState}`;
+      const key = `${isTracking ? 'T' : ''}${isStuck ? '!':''}${isBlocked ? 'B':''}`;
       if (key === lastStatusRef.current) return;
       lastStatusRef.current = key;
       // Cooldown 30 detik
@@ -405,7 +397,6 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
         detectionsRef.current,
         recognizedFaceRef.current,
         trackInfoRef.current,
-        scanStateRef.current,
         headingRef?.current,
         leftMotor,
         rightMotor,
@@ -554,10 +545,6 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
               V
             </button>
           )}
-          <button onClick={() => { const nv = !autoRef.current; setAuto(nv); autoRef.current = nv; if (!nv) motorRef?.current?.sendMotor(0, 0); }}
-            className={`ml-1 size-4 rounded-full flex items-center justify-center text-[6px] font-mono font-bold border ${auto ? "bg-amber-500 border-amber-500 text-black animate-pulse" : "bg-transparent border-zinc-700 text-zinc-500"}`}>
-            A
-          </button>
         </div>
         <button onClick={() => setShowSettings(p => !p)}
           className="text-[9px] text-zinc-500 hover:text-zinc-300 font-mono">

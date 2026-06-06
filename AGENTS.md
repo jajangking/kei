@@ -1,0 +1,96 @@
+# Kei — robot vision + AI voice assistant
+
+Monorepo with two packages:
+- **`./`** — Next.js 16 (App Router) web frontend with computer vision, AI chat, voice control
+- **`./esp32/`** — PlatformIO (Arduino framework) firmware for an ESP32 motor-driven robot
+
+## Quick start
+
+```bash
+npm run dev          # dev server at http://0.0.0.0:3000 (all interfaces)
+npm run build        # production build
+npm run lint         # ESLint (only linter — no typecheck in scripts)
+pio run -d esp32     # build ESP32 firmware
+pio run -d esp32 -t upload && pio run -d esp32 -t monitor  # flash + serial
+```
+
+## Architecture
+
+### Web app (`app/`)
+
+| Page/Route | Purpose |
+|---|---|
+| `app/page.tsx` | Main dashboard — camera feed, object/face detection, motor control, simulation map, telemetry |
+| `app/aigroq.tsx` | AI chat component with wake word ("kei"), Groq LLM, browser TTS, motor commands |
+| `app/voicegroq.tsx` | Voice-first AI component — push-to-talk, streaming Groq, multi-TTS, goal navigation |
+| `app/xiaozhi/page.tsx` | Standalone voice chat test page (STT → Groq → TTS pipeline) |
+| `app/simulasi.tsx` | 2D robot simulation canvas (position, FOV, scan sectors, telemetry map) |
+| `app/facerecog.ts` | Face recognition using MediaPipe landmarks + pairwise distance comparison |
+| `app/api/tts/route.ts` | Google Translate TTS proxy (`GET /api/tts?text=...`) |
+| `app/api/edgetts/route.ts` | Edge TTS via `node-edge-tts` (`GET /api/edgetts?text=...&voice=...`) |
+| `app/api/groq/chat/route.ts` | Groq LLM proxy (streaming SSE, `POST /api/groq/chat`) |
+| `app/api/proxy/route.ts` | Generic MJPEG/image proxy (`GET /api/proxy?url=...`) |
+
+Key details:
+- **TTS fallback**: gTTS (default) → Edge TTS → browser native. Voice picker in `VoiceGroq` and `xiaozhi`.
+- **Groq API key**: stored in `localStorage("kei_groq_key")`. Can also set via server env `GROQ_API_KEY`.
+- **Vision models** served from `/public/` WASM path: `efficientdet_lite0.tflite`, `blaze_face_short_range.tflite`, MediaPipe WASM at `/wasm/`.
+- **Motor control** supports 3 transports: WebSocket → ESP, MQTT (WSS), or direct HTTP.
+- **Wake word** is "kei" / "kay" — triggers conversation mode with 30s timeout.
+- Language: Indonesian (`id-ID`) for speech recognition and TTS.
+
+### ESP32 firmware (`esp32/`)
+
+- Arduino framework, board `esp32dev`
+- WebSocket server on port 81, HTTP on port 80
+- Motor driver pins: PWMA=25, AIN1=26, AIN2=27, PWMB=13, BIN1=14, BIN2=33, STBY=32
+- Health endpoint `GET /` returns JSON with `{ name, ip, ... }`
+- Motor commands via WebSocket/HTTP/MQTT: `{ leftMotor: N, rightMotor: N }` (range -255..255)
+- Telemetry broadcast every 1s over WebSocket
+
+### CI
+
+`.github/workflows/build.yml` — on push to `main`, builds ESP32 firmware with PlatformIO, uploads binaries as artifacts, creates a GitHub release.
+
+## Commands & conventions
+
+- **No test framework configured** — `test/` dir is empty, no test scripts in `package.json`
+- **No typecheck script** — `tsc` must be run manually if needed
+- **Tailwind v4** — uses `@import "tailwindcss"` syntax (PostCSS via `@tailwindcss/postcss`)
+- **ESLint 9 flat config** — `eslint.config.mjs`
+- **`@/*` path alias** maps to root (e.g. `import x from "@/app/...`)
+- **Config persistence** — all settings (ESP IP, MQTT config, Groq key, face DB) stored in `localStorage`; export/import via JSON file
+- **`allowedDevOrigins: ["*"]`** in `next.config.ts` — dev server accepts all hosts
+
+## ESP32 discovery
+
+On the main page, "Cari" button probes subnets `192.168.42.x`, `192.168.1.x`, `192.168.0.x`, `10.0.2.x`, `10.223.x`, `172.20.10.x`, and `kei.local` via mDNS.
+
+## Next: Tahap 2 — Perception (`app/autonomy/perception.ts`)
+
+Layer persepsi di atas detection mentah — output scene understanding buat explore & navigasi.
+
+### TODO
+- [ ] **Semantic scene analysis**
+  - [ ] Classify path vs wall vs obstacle dari grid brightness + bounding boxes
+  - [ ] Output: `freeSectors: boolean[]` (8 sektor, mana yang aman dilewati)
+  - [ ] Output: `pathClear: bool` (apakah depan aman)
+- [ ] **Depth estimation**
+  - [ ] Dari bounding box size per label → perbaiki `scanner.ts` distance calc
+  - [ ] Kalibrasi: objek X px pada jarak Y cm → mapping table
+- [ ] **Object tracking stabil**
+  - [ ] Track object by position + label (bukan cuma label match kayak sekarang)
+  - [ ] Kalau object hilang 1-2 frame, tetap remember posisinya
+- [ ] **Scene memory**
+  - [ ] Peta 2D sederhana (grid occupancy) dari scan + detections
+  - [ ] Update pas explore jalan
+  - [ ] Bisa dipake buat return path yang lebih cerdas
+
+### Explore Stabil — Tuning Prioritas
+- [ ] **Edge threshold real test** — cari nilai optimal di hardware (lantai vs meja)
+- [ ] **Avoid sequence adaptive** — stop → mundur sampai edge/wall clear, baru belok
+- [ ] **Timeout safety** — kalau stuck di avoid > 5 detik → reset phase, coba arah lain
+- [ ] **Scan saat explore** — gak perlu stop-and-scan penuh, cukup scan 3 sektor depan
+- [ ] **Return path with heading** — simpan `{x, y, heading}` biar backtrack lebih akurat
+- [ ] **Goal navigation** — klik map → heading + distance → navigate
+- [ ] **Explore + Follow hybrid** — kalau detect object menarik, follow; after lost, resume explore

@@ -6,7 +6,6 @@ interface VoiceGroqProps {
   recognizedFaceRef: React.MutableRefObject<{ name: string } | null>;
   detectionsRef: React.MutableRefObject<{ categories: { categoryName: string; score: number }[]; boundingBox?: { originX: number; originY: number; width: number; height: number } }[]>;
   trackInfoRef: React.MutableRefObject<string>;
-  scanStateRef: React.MutableRefObject<string>;
   aiBusyRef?: React.MutableRefObject<boolean>;
   headingRef?: React.MutableRefObject<number>;
   leftMotor?: number;
@@ -18,7 +17,6 @@ interface VoiceGroqProps {
     trackTarget: { label: string; lastSeen: number } | null;
     setTrackTarget: (t: { label: string; lastSeen: number } | null) => void;
     aiMotor: { l: number; r: number } | null;
-    goalRef: React.MutableRefObject<{ x: number; y: number; label: string } | null>;
   }>;
 }
 
@@ -48,18 +46,10 @@ const SYSTEM_PROMPT = `Lo adalah Kei, robot pintar yang jelajah. Aturan:
 Navigasi:
 [motor:L,R] — gerak motor kiri=L kanan=R (-255 sd 255)
 [track:label] — kejar & follow objek
-[goal:x,y,label] — set waypoint/tujuan navigasi (koordinat grid)
 [stop] — berhenti
 Contoh: "Ada mobil di kanan, gua follow. [track:mobil]"
-Contoh goal: "Gua mau ke pojok kiri. [goal:50,200,pojok kiri]"
-
-Goal navigation:
-- Pakai [goal:x,y,label] untuk kasih tujuan. Robot auto navigasi ke situ.
-- Kalo butuh explore, set goal ke arah tertentu.
-- Goal bagus buat jelajah terarah: kasih goal ke pojok, ke tengah, dll.
 
 SAFETY (priority!):
-- Kalo gelap — MUNDUR atau muter, JANGAN maju.
 - Kalo ada TEMBOK di depan — MUNDUR, belok cari jalan lain (cek tepi kiri/kanan).
 - Kalo ada objek gede menghalang — minggir, jangan nayok.
 - Kalo nyangkut/gerak tapi pemandangan gak berubah — MUTER balik.
@@ -69,14 +59,12 @@ SAFETY (priority!):
 - Kalo ada wajah dikenal, sapa dan ngobrol.
 
 Lo suka eksplor dan selalu cari jalan. Sesuain gaya bicara sama situasi!
-Kalo auto mode nyala, lo jalan sendiri. Kita butuh variasi: kasih goal random biar explore.
-Contoh: gas ke pojok kanan, trus ke tengah, trus ke kiri. Explore terus!`;
+Kalo auto mode nyala, lo jalan sendiri.`;
 
 function buildContext(
   dets: VoiceGroqProps["detectionsRef"]["current"],
   face: { name: string } | null,
   trackInfo: string,
-  scanState: string,
   heading?: number,
   leftMotor?: number,
   rightMotor?: number,
@@ -90,7 +78,6 @@ function buildContext(
   }
   if (face) ctx += `ada ${face.name}. `;
   if (trackInfo) ctx += `lagi ${trackInfo}. `;
-  if (scanState !== "idle") ctx += `(state ${scanState}). `;
   if (heading !== undefined) ctx += `arah ${((heading * 180 / Math.PI) % 360).toFixed(0)}°. `;
   if (leftMotor !== undefined && rightMotor !== undefined) {
     if (leftMotor !== 0 || rightMotor !== 0) {
@@ -112,7 +99,7 @@ interface VoiceOption {
 }
 
 export default function VoiceGroq({
-  recognizedFaceRef, detectionsRef, trackInfoRef, scanStateRef, aiBusyRef,
+  recognizedFaceRef, detectionsRef, trackInfoRef, aiBusyRef,
   headingRef, leftMotor, rightMotor, trackingRef, setTracking, motorRef,
 }: VoiceGroqProps) {
   const [status, setStatus] = useState("idle");
@@ -231,7 +218,7 @@ export default function VoiceGroq({
     setLastLlm("");
     let fullText = "";
 
-    const ctx = buildContext(detectionsRef.current, recognizedFaceRef.current, trackInfoRef.current, scanStateRef.current, headingRef?.current, leftMotor, rightMotor);
+    const ctx = buildContext(detectionsRef.current, recognizedFaceRef.current, trackInfoRef.current, headingRef?.current, leftMotor, rightMotor);
     const systemMsg: ChatMsg = { role: "system", content: `${SYSTEM_PROMPT}\n\nKonteks saat ini: ${ctx}` };
     const history = chatHistoryRef.current.filter(m => m.role !== "system");
     const recent = history.slice(-10);
@@ -298,16 +285,6 @@ export default function VoiceGroq({
               if (label && motorRef?.current) {
                 if (motorRef.current.aiMotor) motorRef.current.aiMotor = null;
                 motorRef.current.setTrackTarget({ label, lastSeen: Date.now() });
-              }
-            } else if (cmd.startsWith("goal:")) {
-              const parts = cmd.slice(5).split(",");
-              if (parts.length >= 3 && motorRef?.current) {
-                const gx = parseInt(parts[0]), gy = parseInt(parts[1]);
-                const glabel = parts.slice(2).join(",").trim();
-                if (!isNaN(gx) && !isNaN(gy)) {
-                  motorRef.current.goalRef.current = { x: gx, y: gy, label: glabel || "tujuan" };
-                  if (motorRef.current.aiMotor) motorRef.current.aiMotor = null;
-                }
               }
             } else if (cmd === "stop") {
               if (autoRef.current) {
@@ -413,7 +390,7 @@ export default function VoiceGroq({
     contextIvRef.current = setInterval(() => {
       if (processingRef.current) return;
 
-      const ctx = buildContext(detectionsRef.current, recognizedFaceRef.current, trackInfoRef.current, scanStateRef.current, undefined, leftMotor, rightMotor);
+      const ctx = buildContext(detectionsRef.current, recognizedFaceRef.current, trackInfoRef.current, undefined, leftMotor, rightMotor);
       if (ctx === lastContextRef.current) return;
       lastContextRef.current = ctx;
 
@@ -442,12 +419,10 @@ export default function VoiceGroq({
     const tick = () => {
       if (speakingRef.current || !autoRef.current || processingRef.current) return;
       const trackInfo = trackInfoRef.current;
-      const scanState = scanStateRef.current;
       const isTracking = trackInfo.includes('✅') || trackInfo.includes('🔒');
       const isStuck = trackInfo.includes('stuck');
-      const isDark = trackInfo.includes('gelap');
       const isBlocked = trackInfo.startsWith('hindar');
-      const key = `${isTracking ? 'T' : ''}${isStuck ? '!':''}${isDark ? 'D':''}${isBlocked ? 'B':''}|${scanState}`;
+      const key = `${isTracking ? 'T' : ''}${isStuck ? '!':''}${isBlocked ? 'B':''}`;
       if (key === lastStatusRef.current) return;
       lastStatusRef.current = key;
       const now = Date.now();
@@ -567,10 +542,6 @@ export default function VoiceGroq({
           ) : ttsSource ? (
             <span className="text-[6px] text-zinc-600 font-mono">{ttsSource}</span>
           ) : null}
-          <button onClick={() => { const nv = !autoRef.current; setAuto(nv); autoRef.current = nv; if (!nv) motorRef?.current?.sendMotor(0, 0); }}
-            className={`ml-1 size-4 rounded-full flex items-center justify-center text-[6px] font-mono font-bold border ${auto ? "bg-amber-500 border-amber-500 text-black animate-pulse" : "bg-transparent border-zinc-700 text-zinc-500"}`}>
-            A
-          </button>
         </div>
         <div className="flex items-center gap-1">
           <select

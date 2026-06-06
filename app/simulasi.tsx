@@ -24,10 +24,6 @@ interface Props {
   headingRef: RefObject<number>;
   posRef: RefObject<{ x: number; y: number }>;
   telemetryMapRef: RefObject<TeleEntry[]>;
-  scanStateRef: RefObject<'idle' | 'scanning' | 'waiting' | 'moving'>;
-  scanMapRef: RefObject<Array<{ label: string; area: number }[]>>;
-  scanBestSecRef: RefObject<number>;
-  scanTargetSeeRef: RefObject<boolean>;
   trackLabelRef: RefObject<string | null>;
   trackTargetRef: RefObject<{ label: string; lastSeen: number } | null>;
   detectionsRef: RefObject<Detection[]>;
@@ -38,7 +34,6 @@ interface Props {
 
 export default function Simulasi({
   headingRef, posRef, telemetryMapRef,
-  scanStateRef, scanMapRef, scanBestSecRef, scanTargetSeeRef,
   trackLabelRef, trackTargetRef,
   detectionsRef, trackingRef, leftMotor, rightMotor,
 }: Props) {
@@ -106,10 +101,6 @@ export default function Simulasi({
 
       const h = headingRef.current;
       const p = posRef.current;
-      const state = scanStateRef.current;
-      const scanMap = scanMapRef.current;
-      const bestSec = scanBestSecRef.current;
-      const targetSee = scanTargetSeeRef.current;
       const trackLabel = trackLabelRef.current;
       const trackTarget = trackTargetRef.current;
       const detections = detectionsRef.current;
@@ -155,24 +146,7 @@ export default function Simulasi({
         }
       }
 
-      // ---- Scan sectors ----
-      if (scanMap.length === SECTOR_COUNT) {
-        for (let i = 0; i < SECTOR_COUNT; i++) {
-          const a0 = (i / SECTOR_COUNT) * Math.PI * 2 - Math.PI / 2;
-          const a1 = ((i + 1) / SECTOR_COUNT) * Math.PI * 2 - Math.PI / 2;
-          const data = scanMap[i] || [];
-          if (data.length > 0) {
-            ctx.fillStyle = `rgba(239, 68, 68, ${Math.min(data.length / 5, 1) * 0.35})`;
-            ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.arc(p.x, p.y, MAX_SENSE * 0.8, a0, a1); ctx.closePath(); ctx.fill();
-          }
-          if (i === bestSec) {
-            ctx.fillStyle = targetSee ? 'rgba(239, 68, 68, 0.35)' : 'rgba(34, 197, 94, 0.2)';
-            ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.arc(p.x, p.y, MAX_SENSE * 0.8, a0, a1); ctx.closePath(); ctx.fill();
-          }
-        }
-      }
-
-      // ---- Current detections ----
+      // ---- Trail ----
       ctx.font = '7px monospace';
       for (const d of detections) {
         const box = d.boundingBox!;
@@ -240,7 +214,7 @@ export default function Simulasi({
       }
 
       // ---- Robot ----
-      const rColor = isTracking ? '#ef4444' : state === 'moving' ? '#22c55e' : '#3b82f6';
+      const rColor = isTracking ? '#ef4444' : '#3b82f6';
       ctx.save();
       ctx.translate(p.x, p.y);
       ctx.rotate(h - Math.PI / 2);
@@ -260,9 +234,8 @@ export default function Simulasi({
 
       // State
       ctx.font = 'bold 9px monospace';
-      const labels: Record<string, string> = { scanning: 'SCAN', waiting: 'ANALISIS', moving: 'MAJU', idle: '-' };
       ctx.fillStyle = 'rgba(255,255,255,0.5)';
-      ctx.fillText(isTracking ? `LACAK ${trackLabel || ''}` : (labels[state] || state), p.x - 24, p.y - 28);
+      ctx.fillText(isTracking ? `LACAK ${trackLabel || ''}` : '-', p.x - 24, p.y - 28);
 
       if (isTracking) {
         ctx.fillStyle = 'rgba(239,68,68,0.1)';
