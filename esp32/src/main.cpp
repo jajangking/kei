@@ -631,21 +631,22 @@ void loop() {
   }
 
   // VL53L0X SAFETY — langsung force output PWM, target speeds tetap utuh
-  int obstacleDist = readDistance();
-  safetyActive = (!emergencyStop && obstacleDist > 0 && obstacleDist < 200);
+  // SAFETY OFF — for testing only
+  readDistance(); // keep polling for telemetry
+  // safetyActive = (!emergencyStop && obstacleDist > 0 && obstacleDist < 200);
 
   // RAMP
   if (!emergencyStop) {
     rampMotors();
   }
 
-  // Safety override pas setelah ramp — force output 0 tanpa merusak target
-  if (safetyActive) {
-    ledcWrite(CH_LEFT, 0);
-    ledcWrite(CH_RIGHT, 0);
-    currentLeftSpeed = 0;
-    currentRightSpeed = 0;
-  }
+  // Safety override — DISABLED for test
+  // if (safetyActive) {
+  //   ledcWrite(CH_LEFT, 0);
+  //   ledcWrite(CH_RIGHT, 0);
+  //   currentLeftSpeed = 0;
+  //   currentRightSpeed = 0;
+  // }
 
   // TELEMETRY
   if (
