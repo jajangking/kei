@@ -953,6 +953,8 @@ void rampMotors() {
   }
 }
 
+#define MIN_PWM 30  // minimum PWM to overcome dead zone
+
 // =======================
 // MOTOR A
 // =======================
@@ -960,10 +962,12 @@ void writeMotorA(int speed) {
   speed = constrain(speed, -255, 255);
 
   if (speed > 0) {
+    if (speed < MIN_PWM) { digitalWrite(AIN1, LOW); digitalWrite(AIN2, LOW); ledcWrite(CH_LEFT, 0); return; }
     digitalWrite(AIN1, HIGH);  
     digitalWrite(AIN2, LOW);  
     ledcWrite(CH_LEFT, speed);
   } else if (speed < 0) {
+    if (-speed < MIN_PWM) { digitalWrite(AIN1, LOW); digitalWrite(AIN2, LOW); ledcWrite(CH_LEFT, 0); return; }
     digitalWrite(AIN1, LOW);  
     digitalWrite(AIN2, HIGH);  
     ledcWrite(CH_LEFT, -speed);
@@ -981,10 +985,12 @@ void writeMotorB(int speed) {
   speed = constrain(speed, -255, 255);
 
   if (speed > 0) {
+    if (speed < MIN_PWM) { digitalWrite(BIN1, LOW); digitalWrite(BIN2, LOW); ledcWrite(CH_RIGHT, 0); return; }
     digitalWrite(BIN1, HIGH);  
     digitalWrite(BIN2, LOW);  
     ledcWrite(CH_RIGHT, speed);
   } else if (speed < 0) {
+    if (-speed < MIN_PWM) { digitalWrite(BIN1, LOW); digitalWrite(BIN2, LOW); ledcWrite(CH_RIGHT, 0); return; }
     digitalWrite(BIN1, LOW);  
     digitalWrite(BIN2, HIGH);  
     ledcWrite(CH_RIGHT, -speed);
