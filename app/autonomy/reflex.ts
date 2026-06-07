@@ -165,7 +165,7 @@ export class ReflexSystem {
         }
         const avg = sum / count;
         const varian = sumDiff / count;
-        if (varian < 8 && avg > 30 && avg < 230) {
+        if (varian < 5 && avg > 30 && avg < 230) {
           wallCells++;
           if (gx < 2) sideCount.left++;
           else if (gx >= 4) sideCount.right++;
@@ -175,10 +175,10 @@ export class ReflexSystem {
     }
     const total = GRID * GRID;
     return {
-      blocked: wallCells > total * 0.35,
-      left: sideCount.left > 3,
-      center: sideCount.center > 3,
-      right: sideCount.right > 3,
+      blocked: wallCells > total * 0.50,
+      left: sideCount.left > 4,
+      center: sideCount.center > 4,
+      right: sideCount.right > 4,
     };
   }
 

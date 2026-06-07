@@ -1365,13 +1365,13 @@ export default function VisionPage() {
             setTestResult(`explore wall!`);
           }
           const edge = r.detectEdges(source, video, streamImgRef.current, brightnessCanvasRef.current);
-          if (edge.left > 20 || edge.center > 20 || edge.right > 20) {
+          if (edge.left > 45 || edge.center > 45 || edge.right > 45) {
             es.phase = "avoid"; es.avoidStep = 0; es.avoidTimer = 0;
             r.reset(); sendMotor(0, 0);
             setTestResult(`explore edge!`);
           }
           const accel = accelRef.current;
-          if (Math.abs(accel.x || 0) > 12 || Math.abs(accel.y || 0) > 12) {
+          if (Math.abs(accel.x || 0) > 18 || Math.abs(accel.y || 0) > 18) {
             es.phase = "avoid"; es.avoidStep = 0; es.avoidTimer = 0;
             sendMotor(0, 0);
             setTestResult(`explore bump!`);
