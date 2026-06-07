@@ -697,7 +697,7 @@ void handleMessage(String msg) {
 
   // SAFETY DISTANCE THRESHOLD
   if (doc["safeDist"].is<int>()) {
-    setSafetyThreshold(constrain(doc["safeDist"].as<int>(), 50, 1000));
+    setSafetyThreshold(constrain(doc["safeDist"].as<int>(), 30, 2000));
     JSON_DOC(64) ack;
     ack["safeDist"] = getSafetyThreshold();
     String reply;
