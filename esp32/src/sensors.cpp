@@ -91,33 +91,40 @@ bool initVL53L0X() {
   }
 
   // Re-init Wire on default pins and try VL53L0X
+  Wire.end();
   Wire.begin(SENSOR_SDA, SENSOR_SCL);
   pinMode(SENSOR_SDA, INPUT_PULLUP);
   pinMode(SENSOR_SCL, INPUT_PULLUP);
   sensor.setTimeout(200);
+  delay(50);
 
-  // Try default address 0x29, then 0x30
-  if (sensor.init()) {
+  // Try default address 0x29 with 3.3V I/O mode
+  if (sensor.init(false)) {
     i2cLog += "\n[SENSOR] VL53L0X OK at 0x29";
   } else {
-    Wire.beginTransmission(0x30);
-    if (Wire.endTransmission() == 0) {
-      sensor.setAddress(0x30);
-      if (sensor.init()) {
-        i2cLog += "\n[SENSOR] VL53L0X OK at 0x30";
+    // Try with 2.8V I/O mode as fallback
+    if (sensor.init(true)) {
+      i2cLog += "\n[SENSOR] VL53L0X OK at 0x29 (2V8 I/O)";
+    } else {
+      Wire.beginTransmission(0x30);
+      if (Wire.endTransmission() == 0) {
+        sensor.setAddress(0x30);
+        if (sensor.init(false)) {
+          i2cLog += "\n[SENSOR] VL53L0X OK at 0x30";
+        } else {
+          i2cLog += "\n[SENSOR] Found at 0x30 but init failed";
+          sensorReady = false;
+          return false;
+        }
       } else {
-        i2cLog += "\n[SENSOR] Found at 0x30 but init failed";
+        i2cLog += "\n[SENSOR] Found 0x29 but init failed in both modes";
         sensorReady = false;
         return false;
       }
-    } else {
-      i2cLog += "\n[SENSOR] I2C device found but not VL53L0X (not 0x29 or 0x30)";
-      sensorReady = false;
-      return false;
     }
   }
 
-  sensor.setMeasurementTimingBudget(33000);
+  sensor.setMeasurementTimingBudget(50000);
   sensor.startContinuous(50);
 
   sensorReady = true;
