@@ -181,6 +181,19 @@ export default function VisionPage() {
     driveFwd: number;
   }
   const exploreBhvRef = useRef<ExploreBhv>({ phase: "drive", scanTimer: 0, chosenH: 0, avoidStep: 0, avoidTimer: 0, returnPath: [], returnIdx: 0, driveFwd: 180 });
+  const lastExplorePhaseRef = useRef("");
+  const pauseForFaceRef = useRef(false);
+  const faceGreetTimoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function speakSimple(text: string) {
+    if (aiBusyRef.current) return;
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = "id-ID";
+    u.rate = 0.9;
+    u.pitch = 0.85;
+    window.speechSynthesis.speak(u);
+  }
   const gyroRef = useRef(0);
   const useGyroRef = useRef(true);
   const [useGyro, setUseGyro] = useState(true);
@@ -850,6 +863,16 @@ export default function VisionPage() {
                   if (rec && rec.id === faceStableRef.current.id) {
                     faceStableRef.current.count++;
                     recognizedFaceRef.current = rec;
+                    if (faceStableRef.current.count === 5 && !aiBusyRef.current && !pauseForFaceRef.current) {
+                      pauseForFaceRef.current = true;
+                      if (behaviorRef.current) {
+                        behaviorRef.current = null;
+                        sendMotor(0, 0);
+                      }
+                      speakSimple(`Halo ${rec.name}`);
+                      if (faceGreetTimoutRef.current) clearTimeout(faceGreetTimoutRef.current);
+                      faceGreetTimoutRef.current = setTimeout(() => { pauseForFaceRef.current = false; }, 4000);
+                    }
                   } else if (rec) {
                     faceStableRef.current = { id: rec.id, count: 1 };
                     recognizedFaceRef.current = rec;
@@ -1034,6 +1057,8 @@ export default function VisionPage() {
         es.phase = "drive"; es.scanTimer = 0; es.avoidStep = 0; es.avoidTimer = 0;
         es.returnPath = []; es.returnIdx = 0; es.driveFwd = 180;
         setTestResult("explore start...");
+        lastExplorePhaseRef.current = "";
+        speakSimple("Mulai jelajah");
         if (trackingRef.current) { setTracking(false); trackingRef.current = false; trackTargetRef.current = null; }
         break;
       case "return":
@@ -1309,6 +1334,16 @@ export default function VisionPage() {
       } else if (bhv.mode === "explore" || bhv.mode === "return") {
         const es = exploreBhvRef.current;
         const s = scannerRef.current;
+        if (pauseForFaceRef.current) { sendMotor(0, 0); return; }
+        const ep = es.phase + (bhv.mode === "return" ? ":return" : "");
+        if (ep !== lastExplorePhaseRef.current) {
+          lastExplorePhaseRef.current = ep;
+          if (es.phase === "drive") speakSimple("Jelajah maju");
+          else if (es.phase === "avoid" && es.avoidStep === 0) speakSimple("Ada halangan");
+          else if (es.phase === "avoid" && es.avoidStep === 2) speakSimple("Minggir");
+          else if (es.phase === "scan") speakSimple("Scan");
+          else if (es.phase === "navturn" && bhv.mode === "return") speakSimple("Pulang");
+        }
         if (bhv.mode === "return" && es.phase !== "navturn" && es.phase !== "drive") {
           const rp = es.returnPath;
           if (rp.length > 0) {
@@ -1364,6 +1399,7 @@ export default function VisionPage() {
                 if (es.returnIdx < 0) {
                   behaviorRef.current = null; sendMotor(0, 0);
                   setTestResult(`pulang!`);
+                  speakSimple("Berhasil pulang");
                 } else {
                   const nt = rp[es.returnIdx];
                   es.chosenH = Math.atan2(nt.x - p.x, -(nt.y - p.y));
@@ -1435,7 +1471,9 @@ export default function VisionPage() {
           if (best !== null) {
             es.chosenH = best;
             es.phase = "navturn";
-            setTestResult(`explore pilih ${(best * 180 / Math.PI).toFixed(0)}°`);
+            const deg = (best * 180 / Math.PI).toFixed(0);
+            setTestResult(`explore pilih ${deg}°`);
+            speakSimple(`Belok ${deg} derajat`);
           } else {
             es.chosenH = headingRef.current;
             es.phase = "drive"; es.scanTimer = 0;
@@ -1454,6 +1492,7 @@ export default function VisionPage() {
               es.phase = "drive";
               es.scanTimer = 0;
               es.driveFwd = 200;
+              speakSimple("Lanjut pulang");
             } else {
               es.phase = "drive";
               es.scanTimer = 0;
@@ -1974,6 +2013,7 @@ export default function VisionPage() {
                   const m = motorRef2.current;
                   if (m) m.stop();
                   setTestResult(`explore stop`);
+                  speakSimple("Jelajah berhenti");
                 } else {
                   behaviorRef.current = { mode: "explore" };
                   const es = exploreBhvRef.current;
