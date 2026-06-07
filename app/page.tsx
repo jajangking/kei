@@ -9,6 +9,7 @@ import { Scanner } from "./autonomy/scan";
 import { ReflexSystem } from "./autonomy/reflex";
 import { MotorSystem } from "./autonomy/motor";
 import type { ScanSector } from "./autonomy/types";
+import type { SceneMessage } from "./lib/sceneTypes";
 interface Telemetry {
   speed?: number;
   mode?: string;
@@ -69,6 +70,9 @@ export default function VisionPage() {
   const [mqttPass, setMqttPass] = useState(() => typeof window !== "undefined" ? localStorage.getItem("mqttPass") || "" : "");
   const [mqttPrefix, setMqttPrefix] = useState(() => typeof window !== "undefined" ? localStorage.getItem("mqttPrefix") || "kei/robot" : "kei/robot");
   const [showMqttInput, setShowMqttInput] = useState(false);
+  const [videoRelay, setVideoRelay] = useState(false);
+  const videoRelayRef = useRef(false);
+  useEffect(() => { videoRelayRef.current = videoRelay; }, [videoRelay]);
   const [mqttDisplayDeviceId, setMqttDisplayDeviceId] = useState("");
   const [mqttLastTelemetry, setMqttLastTelemetry] = useState(0);
   const [mqttManualDeviceId, setMqttManualDeviceId] = useState("");
@@ -155,6 +159,7 @@ export default function VisionPage() {
   const debugRef = useRef(false);
   const detectTimeRef = useRef(0);
   const aiBusyRef = useRef(false);
+  const sceneTickRef = useRef(0);
   const motorRef = useRef({ sendMotor: (l: number, r: number) => {}, trackTarget: null as { label: string; lastSeen: number } | null, setTrackTarget: (t: { label: string; lastSeen: number } | null) => {}, aiMotor: null as { l: number; r: number } | null });
   const scannerRef = useRef(new Scanner());
   const reflexRef = useRef(new ReflexSystem());
@@ -469,6 +474,8 @@ export default function VisionPage() {
         const teleTopic = `${mqttPrefix}/+/telemetry`;
         mqttTeleTopicRef.current = teleTopic;
         client.subscribe(teleTopic);
+        const cmdTopic = `${mqttPrefix}/+/cmd`;
+        client.subscribe(cmdTopic);
       });
       client.on("message", (topic: string, payload: Buffer) => {
         if (mqttGenRef.current !== gen) return;
@@ -487,6 +494,18 @@ export default function VisionPage() {
           }
           setMqttLastTelemetry(Date.now());
           if (did && did === mqttDeviceIdRef.current) {
+            if (topic.endsWith("/cmd")) {
+              if (data.behavior) {
+                handleBehaviorCmd(data.behavior);
+              }
+              if (data.emergency !== undefined) {
+                sendESP({ emergency: data.emergency });
+              }
+              if (data.reboot) {
+                sendESP({ reboot: true });
+              }
+              return;
+            }
             if (data.ip && data.ip !== espIpRef.current) {
               setEspIp(data.ip);
               setEspIpFromMqtt(true);
@@ -863,6 +882,11 @@ export default function VisionPage() {
       setAccelDisp(`${(a.x || 0).toFixed(1)}/${(a.y || 0).toFixed(1)}/${(a.z || 0).toFixed(1)}`);
       gyroDispRef.current = gyroRef.current;
       if (!aiBusyRef.current) processTracking(detectionsRef.current);
+      sceneTickRef.current++;
+      if (sceneTickRef.current % 2 === 0) {
+        publishScene();
+        relayFrame();
+      }
       dynIntervalRef.current = (motorRunningRef.current || reflexRef.current.wallActive) ? 120 : 250;
       detectTimerRef.current = window.setTimeout(detectAndDraw, dynIntervalRef.current);
     };
@@ -923,6 +947,128 @@ export default function VisionPage() {
     }
 
     smoothRef.current = next;
+  }
+
+  const publishScene = useCallback(() => {
+    const mqtt = mqttClientRef.current;
+    if (!mqtt?.connected) return;
+    const deviceId = mqttDeviceIdRef.current;
+    if (!deviceId) return;
+    const dets = detectionsRef.current;
+    const now = Date.now();
+    const msg: SceneMessage = {
+      detections: dets.map(d => ({
+        label: d.categories[0]?.categoryName || "",
+        score: d.categories[0]?.score || 0,
+        x: d.boundingBox?.originX || 0,
+        y: d.boundingBox?.originY || 0,
+        width: d.boundingBox?.width || 0,
+        height: d.boundingBox?.height || 0,
+      })),
+      faces: recognizedFaceRef.current ? [{ name: recognizedFaceRef.current.name }] : [],
+      heading: headingRef.current,
+      position: { x: posRef.current.x, y: posRef.current.y },
+      freeSectors: [],
+      pathClear: !reflexRef.current.wallActive,
+      tracking: { active: trackingRef.current, target: trackLabelRef.current || undefined },
+      mode: behaviorRef.current?.mode || "idle",
+      battery: telemetry.batteryPct,
+      timestamp: now,
+    };
+    try {
+      const topic = `${mqttPrefixRef.current}/${deviceId}/scene`;
+      mqtt.publish(topic, JSON.stringify(msg), { qos: 0 });
+    } catch {}
+  }, []);
+
+  const relayFrame = useCallback(() => {
+    if (!videoRelayRef.current) return;
+    const video = videoRef.current;
+    if (!video || !video.videoWidth) return;
+    const c = document.createElement("canvas");
+    c.width = 320;
+    c.height = 240;
+    const ctx = c.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, 320, 240);
+    c.toBlob((blob) => {
+      if (!blob) return;
+      fetch("/api/frame", { method: "POST", body: blob }).catch(() => {});
+    }, "image/jpeg", 0.6);
+  }, []);
+
+  function handleBehaviorCmd(cmd: string) {
+    if (cmd === "edge") {
+      const r = reflexRef.current;
+      const e = r.detectEdges(source, videoRef.current, streamImgRef.current, brightnessCanvasRef.current);
+      setTestResult(`edge L:${e.left.toFixed(1)} C:${e.center.toFixed(1)} R:${e.right.toFixed(1)}`);
+      return;
+    }
+    sendMotor(0, 0);
+    const bhv = cmd;
+    switch (bhv) {
+      case "stop":
+        behaviorRef.current = null;
+        if (motorRef2.current) motorRef2.current.stop();
+        if (trackingRef.current) { setTracking(false); trackingRef.current = false; trackTargetRef.current = null; trackLabelRef.current = null; setTrackInfo(""); setPickerTargets([]); }
+        setTestResult("STOP");
+        break;
+      case "wall":
+        behaviorRef.current = { mode: "wall" };
+        setTestResult("wall behavior start...");
+        if (trackingRef.current) { setTracking(false); trackingRef.current = false; trackTargetRef.current = null; }
+        break;
+      case "drive":
+        behaviorRef.current = { mode: "drive" };
+        setTestResult("maju behavior start...");
+        if (trackingRef.current) { setTracking(false); trackingRef.current = false; trackTargetRef.current = null; }
+        break;
+      case "spin":
+        behaviorRef.current = { mode: "spin" };
+        setTestResult("spin behavior start...");
+        if (trackingRef.current) { setTracking(false); trackingRef.current = false; trackTargetRef.current = null; }
+        break;
+      case "explore":
+        behaviorRef.current = { mode: "explore" };
+        const es = exploreBhvRef.current;
+        es.phase = "drive"; es.scanTimer = 0; es.avoidStep = 0; es.avoidTimer = 0;
+        es.returnPath = []; es.returnIdx = 0; es.driveFwd = 180;
+        setTestResult("explore start...");
+        if (trackingRef.current) { setTracking(false); trackingRef.current = false; trackTargetRef.current = null; }
+        break;
+      case "return":
+        if (exploreBhvRef.current.returnPath.length === 0) { setTestResult("gak ada path!"); return; }
+        behaviorRef.current = { mode: "return" };
+        setTestResult("pulang...");
+        break;
+      case "scan":
+        const s = scannerRef.current;
+        if (behaviorRef.current?.mode === "scan") {
+          behaviorRef.current = null;
+          s.stop();
+          setScanState("idle");
+          if (motorRef2.current) motorRef2.current.stop();
+          setTestResult("scan dihentikan");
+        } else {
+          s.reset();
+          behaviorRef.current = { mode: "scan" };
+          setTestResult("scan...");
+        }
+        break;
+      case "follow":
+        if (tracking) {
+          setTracking(false); trackingRef.current = false; trackTargetRef.current = null; trackLabelRef.current = null; setTrackInfo(""); setPickerTargets([]);
+          setTestResult("follow OFF");
+        } else {
+          setTracking(true); trackingRef.current = true;
+          const labels = [...new Set(detectionsRef.current.map(d => d.categories[0].categoryName))];
+          if (labels.length === 0) { setTrackInfo("mencari..."); setTestResult("follow ON: mencari..."); } else if (labels.length === 1) {
+            trackTargetRef.current = { label: labels[0], lastSeen: Date.now() }; trackLabelRef.current = labels[0]; setTrackInfo(`🔒 ${labels[0]}`); setPickerTargets([]);
+            setTestResult("follow: " + labels[0]);
+          } else { setPickerTargets(labels); setTrackInfo("pilih objek"); setTestResult("follow: pilih objek"); }
+        }
+        break;
+    }
   }
 
   function drawOverlay() {
@@ -1604,6 +1750,13 @@ export default function VisionPage() {
 
           </div>
         )}
+        <a href="/remote"
+          className="absolute top-1.5 right-9 z-30 h-7 rounded-full bg-black/50 backdrop-blur-md border border-white/10 flex items-center gap-1 px-2 hover:bg-black/70 active:scale-90">
+          <svg className="size-2.5 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 8.25 21 12m0 0-3.75 3.75M21 12H3" />
+          </svg>
+          <span className="text-[6px] font-mono tracking-wider text-zinc-400">REMOTE</span>
+        </a>
         <button onClick={() => { if (source === "stream") { setSource("local"); setActive(false); } else { setSource("stream"); setActive(true); } }}
           className="absolute top-1.5 right-1.5 z-30 size-7 rounded-full bg-black/50 backdrop-blur-md border border-white/10 flex items-center justify-center hover:bg-black/70 active:scale-90">
           <svg className="size-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -2010,6 +2163,15 @@ export default function VisionPage() {
                   className="px-2 py-1 rounded-full bg-zinc-800 text-zinc-300 text-[9px] font-mono border border-zinc-700 active:scale-90">
                   KIRIM KE ESP
                 </button>
+              </div>
+              <div className="flex gap-1.5 items-center">
+                <button onClick={() => setVideoRelay(p => { videoRelayRef.current = !p; return !p; })}
+                  className={`px-2 py-1 rounded-full text-[9px] font-mono font-bold border active:scale-90 ${
+                    videoRelay ? "bg-emerald-600 border-emerald-600 text-white" : "bg-transparent border-zinc-700 text-zinc-400"
+                  }`}>
+                  RELAY {videoRelay ? "ON" : "OFF"}
+                </button>
+                <span className="text-[7px] font-mono text-zinc-600">kirim video ke remote</span>
               </div>
             </div>
           )}

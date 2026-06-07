@@ -19,8 +19,9 @@ pio run -d esp32 -t upload && pio run -d esp32 -t monitor  # flash + serial
 ### Web app (`app/`)
 
 | Page/Route | Purpose |
-|---|---|
-| `app/page.tsx` | Main dashboard — camera feed, object/face detection, motor control, simulation map, telemetry |
+|---|---|---|
+| `app/page.tsx` | Main dashboard (HP A / Otak) — camera feed, object/face detection, motor control, simulation map, telemetry. Publishes scene data via MQTT |
+| `app/remote/page.tsx` | Remote control (HP B) — joystick, simulasi 2D, telemetry, detection list, AI chat, video relay, emergency control. Subscribes to MQTT scene + telemetry |
 | `app/aigroq.tsx` | AI chat component with wake word ("kei"), Groq LLM, browser TTS, motor commands |
 | `app/voicegroq.tsx` | Voice-first AI component — push-to-talk, streaming Groq, multi-TTS, goal navigation |
 | `app/xiaozhi/page.tsx` | Standalone voice chat test page (STT → Groq → TTS pipeline) |
@@ -30,6 +31,22 @@ pio run -d esp32 -t upload && pio run -d esp32 -t monitor  # flash + serial
 | `app/api/edgetts/route.ts` | Edge TTS via `node-edge-tts` (`GET /api/edgetts?text=...&voice=...`) |
 | `app/api/groq/chat/route.ts` | Groq LLM proxy (streaming SSE, `POST /api/groq/chat`) |
 | `app/api/proxy/route.ts` | Generic MJPEG/image proxy (`GET /api/proxy?url=...`) |
+| `app/api/frame/route.ts` | Video relay — HP A POST frame JPEG, HP B GET polling (`/api/frame`) |
+| `app/api/signal/route.ts` | WebRTC signaling (SDP offer/answer exchange via POST/GET) |
+| `app/lib/sceneTypes.ts` | Shared types: `SceneMessage`, `SceneDetection`, `SceneFace` for MQTT scene data |
+
+### Remote Control (2-HP / MQTT Bridge)
+
+HP A (Otak, `/`) publishes scene understanding via MQTT topic `kei/robot/{id}/scene`. HP B (Remote, `/remote`) subscribes and shows:
+- Live video relay (frame JPEG via `/api/frame`)
+- 2D simulasi map + joystick control
+- Full telemetry (battery, rssi, heap, uptime, mode, ip, ssid)
+- Detection list with coordinates + face recognition results
+- Free sector indicators + path status
+- Emergency / restart buttons
+- AI Chat (VoiceGroq) — independent Groq + TTS on HP B
+
+Motor commands from HP B go directly to ESP32 via MQTT topic `kei/robot/{id}/cmd`.
 
 Key details:
 - **TTS fallback**: gTTS (default) → Edge TTS → browser native. Voice picker in `VoiceGroq` and `xiaozhi`.
