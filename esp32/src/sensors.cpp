@@ -87,3 +87,7 @@ int readDistance() {
   lastDistance = (int)mm;
   return lastDistance;
 }
+
+bool isSensorReady() {
+  return sensorReady;
+}

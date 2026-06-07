@@ -87,6 +87,7 @@ bool emergencyStop = false;
 bool wsConnected = false;
 
 bool safetyActive = false;
+bool sensorReported = false;
 
 // =======================
 // CONFIG
@@ -606,6 +607,16 @@ void loop() {
   if (wifiConnecting) {
     wifiConnecting = false;
     connectMQTT();
+  }
+
+  // Report sensor status once over WebSocket
+  if (initialized && !sensorReported) {
+    sensorReported = true;
+    if (isSensorReady()) {
+      wsLog("[SENSOR] VL53L0X OK — obstacle safety active");
+    } else {
+      wsLog("[SENSOR] VL53L0X not detected — safety disabled");
+    }
   }
 
   // TIMEOUT
@@ -1134,6 +1145,7 @@ String buildTelemetryJson() {
   doc["deviceName"] = deviceName;
   doc["fw"] = FW_VERSION;
   doc["distance"] = readDistance();
+  doc["sensor_ok"] = isSensorReady();
 
   String json;
   serializeJson(doc, json);
