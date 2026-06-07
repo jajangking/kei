@@ -631,22 +631,20 @@ void loop() {
   }
 
   // VL53L0X SAFETY — langsung force output PWM, target speeds tetap utuh
-  // SAFETY OFF — for testing only
-  readDistance(); // keep polling for telemetry
-  // safetyActive = (!emergencyStop && obstacleDist > 0 && obstacleDist < 200);
+  int obstacleDist = readDistance();
+  safetyActive = (!emergencyStop && obstacleDist > 0 && obstacleDist < getSafetyThreshold());
 
   // RAMP
   if (!emergencyStop) {
     rampMotors();
   }
 
-  // Safety override — DISABLED for test
-  // if (safetyActive) {
-  //   ledcWrite(CH_LEFT, 0);
-  //   ledcWrite(CH_RIGHT, 0);
-  //   currentLeftSpeed = 0;
-  //   currentRightSpeed = 0;
-  // }
+  if (safetyActive) {
+    ledcWrite(CH_LEFT, 0);
+    ledcWrite(CH_RIGHT, 0);
+    currentLeftSpeed = 0;
+    currentRightSpeed = 0;
+  }
 
   // TELEMETRY
   if (
@@ -695,6 +693,17 @@ void handleMessage(String msg) {
 
   if (doc["rightTrim"].is<int>()) {
     rightTrim = constrain(doc["rightTrim"].as<int>(), -100, 100);
+  }
+
+  // SAFETY DISTANCE THRESHOLD
+  if (doc["safeDist"].is<int>()) {
+    setSafetyThreshold(constrain(doc["safeDist"].as<int>(), 50, 1000));
+    JSON_DOC(64) ack;
+    ack["safeDist"] = getSafetyThreshold();
+    String reply;
+    serializeJson(ack, reply);
+    webSocket.broadcastTXT(reply);
+    return;
   }
 
   // CONFIG
@@ -1148,6 +1157,7 @@ String buildTelemetryJson() {
   doc["fw"] = FW_VERSION;
   doc["distance"] = readDistance();
   doc["sensor_ok"] = isSensorReady();
+  doc["safeDist"] = getSafetyThreshold();
 
   String json;
   serializeJson(doc, json);
@@ -1187,6 +1197,7 @@ void sendConfigToClient(uint8_t clientNum) {
   doc["deviceName"] = deviceName;
   doc["fw"] = FW_VERSION;
   doc["emergency"] = emergencyStop;
+  doc["safeDist"] = getSafetyThreshold();
   String json;
   serializeJson(doc, json);
   webSocket.sendTXT(clientNum, json);

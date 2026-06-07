@@ -1,12 +1,15 @@
 #include "sensors.h"
 #include <Wire.h>
 #include <VL53L0X.h>
+#include <algorithm>
 
 static VL53L0X sensor;
 static bool sensorReady = false;
 static unsigned long lastRead = 0;
 static int lastDistance = -1;
 static String i2cLog = "";
+
+static int safetyThreshold = 200; // mm
 
 void scanI2C() {
   i2cLog = "[I2C] Scanning...";
@@ -151,7 +154,10 @@ int readDistance() {
     return -1;
   }
 
-  lastDistance = (int)mm;
+  // Exponential moving average — smooth out noise
+  if (lastDistance < 0) lastDistance = (int)mm;
+  else lastDistance = (lastDistance * 2 + (int)mm) / 3;
+
   return lastDistance;
 }
 
@@ -161,4 +167,12 @@ bool isSensorReady() {
 
 String getSensorDiagnostic() {
   return i2cLog;
+}
+
+void setSafetyThreshold(int mm) {
+  safetyThreshold = mm;
+}
+
+int getSafetyThreshold() {
+  return safetyThreshold;
 }
