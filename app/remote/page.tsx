@@ -39,7 +39,8 @@ export default function RemotePage() {
   const [mqttPrefix, setMqttPrefix] = useState(() => typeof window !== "undefined" ? localStorage.getItem("mqttPrefix") || "kei/robot" : "kei/robot");
   const [mqttConnected, setMqttConnected] = useState(false);
   const [mqttStatus, setMqttStatus] = useState("");
-  const [deviceId, setDeviceId] = useState("");
+  const [deviceId, setDeviceId] = useState(() => typeof window !== "undefined" ? localStorage.getItem("mqttDeviceId") || "" : "");
+  const [manualDeviceId, setManualDeviceId] = useState("");
   const [scene, setScene] = useState<SceneMessage | null>(null);
   const [telemetry, setTelemetry] = useState<Telemetry>({});
   const [showVideo, setShowVideo] = useState(false);
@@ -64,7 +65,6 @@ export default function RemotePage() {
   const mqttGenRef = useRef(0);
   const mqttPrefixRef = useRef("kei/robot");
   const mqttDeviceIdRef = useRef("");
-
   // Refs for VoiceGroq
   const recognizedFaceRef = useRef<{ name: string } | null>(null);
   const trackInfoRef = useRef("");
@@ -123,11 +123,17 @@ export default function RemotePage() {
     aiMotor: null,
   };
 
+  const mqttStatusRef = useRef("");
+
   // Connect MQTT
   const connectMQTT = useCallback(async () => {
-    if (!mqttBroker) return;
+    if (!mqttBroker) {
+      setMqttStatus("isi broker dulu");
+      return;
+    }
     try {
       if (mqttClientRef.current) { mqttClientRef.current.end(true); mqttClientRef.current = null; }
+      mqttStatusRef.current = "menghubungkan...";
       setMqttStatus("menghubungkan...");
       const gen = ++mqttGenRef.current;
       const clientId = "kei-remote-" + Math.random().toString(36).slice(2, 8);
@@ -148,6 +154,7 @@ export default function RemotePage() {
       const client = mqttMod.default.connect(url, opts);
       client.on("connect", () => {
         if (mqttGenRef.current !== gen) { client.end(true); return; }
+        mqttStatusRef.current = "terhubung";
         setMqttConnected(true);
         setMqttStatus("terhubung");
         mqttPrefixRef.current = mqttPrefix;
@@ -179,19 +186,22 @@ export default function RemotePage() {
       client.on("close", () => {
         if (mqttGenRef.current !== gen) return;
         setMqttConnected(false);
-        setMqttStatus("putus");
+        if (!mqttStatusRef.current.startsWith("gagal")) {
+          setMqttStatus("putus");
+        }
       });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       client.on("error", (err: any) => {
         if (mqttGenRef.current !== gen) return;
+        mqttStatusRef.current = "gagal: " + (err?.message || "unknown");
         setMqttStatus("gagal: " + (err?.message || "unknown"));
-        client.end(true);
       });
       mqttClientRef.current = client;
       localStorage.setItem("mqttBroker", mqttBroker);
       localStorage.setItem("mqttPort", String(mqttPort));
       localStorage.setItem("mqttPrefix", mqttPrefix);
     } catch (e: unknown) {
+      mqttStatusRef.current = "gagal: " + ((e as Error)?.message || "unknown");
       setMqttConnected(false);
       setMqttStatus("gagal: " + ((e as Error)?.message || "unknown"));
     }
@@ -204,6 +214,22 @@ export default function RemotePage() {
     setMqttConnected(false);
     setMqttStatus("putus");
   }, []);
+
+  const autoConnectDoneRef = useRef(false);
+  useEffect(() => {
+    if (autoConnectDoneRef.current) return;
+    if (typeof window === "undefined") return;
+    const savedBroker = localStorage.getItem("mqttBroker");
+    const savedDeviceId = localStorage.getItem("mqttDeviceId");
+    if (savedDeviceId && !mqttDeviceIdRef.current) {
+      mqttDeviceIdRef.current = savedDeviceId;
+      setDeviceId(savedDeviceId);
+    }
+    if (savedBroker) {
+      autoConnectDoneRef.current = true;
+      connectMQTT();
+    }
+  }, [connectMQTT]);
 
   // Send ESP command (emergency, config)
   const sendESP = useCallback((data: object) => {
@@ -363,20 +389,37 @@ export default function RemotePage() {
               HUBUNG
             </button>
           </div>
-          {mqttStatus && <span className="text-[8px] font-mono text-zinc-500">{mqttStatus}</span>}
+          {mqttStatus && (
+            <span className={`text-[8px] font-mono ${mqttStatus.startsWith("gagal") || mqttStatus.startsWith("isi") ? "text-red-400" : mqttStatus === "terhubung" ? "text-emerald-400" : "text-zinc-500"}`}>
+              {mqttStatus}
+            </span>
+          )}
         </div>
       )}
 
       {/* CONNECTED BAR */}
       {mqttConnected && (
-        <div className="w-full max-w-sm flex gap-1.5 items-center">
-          <button onClick={disconnectMQTT}
-            className="px-2 py-1 rounded-full bg-zinc-800 text-zinc-300 text-[9px] font-mono border border-zinc-700 active:scale-90 flex-shrink-0">
-            PUTUS MQTT
-          </button>
-          <span className="text-[7px] font-mono text-emerald-500">{mqttStatus}</span>
-          <span className="flex-1" />
-          <span className="text-[7px] font-mono text-zinc-600">MQTT {telemetry.mqtt ? "ON" : "OFF"}</span>
+        <div className="w-full max-w-sm flex flex-col gap-1">
+          <div className="flex gap-1.5 items-center">
+            <button onClick={disconnectMQTT}
+              className="px-2 py-1 rounded-full bg-zinc-800 text-zinc-300 text-[9px] font-mono border border-zinc-700 active:scale-90 flex-shrink-0">
+              PUTUS MQTT
+            </button>
+            <span className="text-[7px] font-mono text-emerald-500">{mqttStatus}</span>
+            <span className="flex-1" />
+            <span className="text-[7px] font-mono text-zinc-600">MQTT {telemetry.mqtt ? "ON" : "OFF"}</span>
+          </div>
+          {!mqttDeviceIdRef.current && (
+            <div className="flex gap-1.5 items-center">
+              <input id="mqtt-device-id" value={manualDeviceId} onChange={e => setManualDeviceId(e.target.value)}
+                placeholder="isi device ID manual"
+                className="flex-1 min-w-0 px-2 py-1 rounded-full bg-zinc-800 border border-zinc-700 text-white text-[9px] font-mono placeholder-zinc-500 focus:outline-none" />
+              <button onClick={() => { if (manualDeviceId) { mqttDeviceIdRef.current = manualDeviceId; setDeviceId(manualDeviceId); localStorage.setItem("mqttDeviceId", manualDeviceId); } }}
+                className="px-2 py-1 rounded-full bg-emerald-600 text-white text-[9px] font-mono font-bold active:scale-90 flex-shrink-0">
+                SET
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -395,7 +438,7 @@ export default function RemotePage() {
                   <span className="text-[9px] font-mono">{frameStatus === "error" ? "gagal" : "menunggu..."}</span>
                 </div>
               )}
-              <img ref={imgRef} src={frameUrl} alt="live"
+              <img key={frameUrl} ref={imgRef} src={frameUrl} alt="live"
                 onLoad={() => setFrameStatus("ok")}
                 onError={() => setFrameStatus("error")}
                 className="absolute inset-0 h-full w-full object-contain"
