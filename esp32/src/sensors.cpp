@@ -33,31 +33,81 @@ void scanI2C() {
   else { char buf[32]; snprintf(buf, sizeof(buf), "\n[I2C] %d device(s)", nDevices); i2cLog += buf; Serial.printf("[I2C] %d device(s) found\n", nDevices); }
 }
 
-bool initVL53L0X() {
-  Wire.begin(SENSOR_SDA, SENSOR_SCL);
-  scanI2C();
+bool tryScan(int sda, int scl, const char* label) {
+  Wire.begin(sda, scl);
+  pinMode(sda, INPUT_PULLUP);
+  pinMode(scl, INPUT_PULLUP);
+  delay(100);
 
+  char line[64];
+  snprintf(line, sizeof(line), "[I2C] Trying %s (SDA=%d SCL=%d)", label, sda, scl);
+  i2cLog += "\n"; i2cLog += line;
+  Serial.println(line);
+
+  byte err, addr;
+  int nDevices = 0;
+  for (addr = 1; addr < 127; addr++) {
+    Wire.beginTransmission(addr);
+    err = Wire.endTransmission();
+    if (err == 0) {
+      char buf[48];
+      snprintf(buf, sizeof(buf), "[I2C] Found 0x%02X", addr);
+      i2cLog += "\n"; i2cLog += buf;
+      Serial.println(buf);
+      if (addr == 0x29) { i2cLog += " (VL53L0X)"; Serial.print(" (VL53L0X)"); }
+      else if (addr == 0x30) { i2cLog += " (VL53L0X alt)"; Serial.print(" (VL53L0X alt)"); }
+      Serial.println();
+      nDevices++;
+    }
+  }
+  if (nDevices == 0) {
+    i2cLog += "\n  -> no devices";
+    Serial.println("  -> no devices");
+  } else {
+    char buf[32];
+    snprintf(buf, sizeof(buf), "  -> %d device(s)", nDevices);
+    i2cLog += "\n"; i2cLog += buf;
+    Serial.println(buf);
+  }
+  return nDevices > 0;
+}
+
+bool initVL53L0X() {
+  i2cLog = "[SENSOR] init...";
+
+  // Try different I2C pin pairs
+  bool found = tryScan(SENSOR_SDA, SENSOR_SCL, "default");
+  if (!found) found = tryScan(ALT_SDA, ALT_SCL, "alt1");
+  if (!found) found = tryScan(18, 19, "alt2");
+
+  if (!found) {
+    i2cLog += "\n[SENSOR] No I2C devices found on any pin pair";
+    sensorReady = false;
+    return false;
+  }
+
+  // Re-init Wire on default pins and try VL53L0X
+  Wire.begin(SENSOR_SDA, SENSOR_SCL);
+  pinMode(SENSOR_SDA, INPUT_PULLUP);
+  pinMode(SENSOR_SCL, INPUT_PULLUP);
   sensor.setTimeout(200);
 
-  // Try default address 0x29
+  // Try default address 0x29, then 0x30
   if (sensor.init()) {
-    Serial.println("[SENSOR] VL53L0X found at 0x29");
+    i2cLog += "\n[SENSOR] VL53L0X OK at 0x29";
   } else {
-    // Probe alternative address 0x30
     Wire.beginTransmission(0x30);
     if (Wire.endTransmission() == 0) {
       sensor.setAddress(0x30);
       if (sensor.init()) {
-        Serial.println("[SENSOR] VL53L0X found at 0x30");
+        i2cLog += "\n[SENSOR] VL53L0X OK at 0x30";
       } else {
-        Serial.println("[SENSOR] VL53L0X at 0x30 but init failed");
+        i2cLog += "\n[SENSOR] Found at 0x30 but init failed";
         sensorReady = false;
         return false;
       }
     } else {
-      Serial.println("[SENSOR] VL53L0X not found at 0x29 or 0x30");
-      Serial.println("[SENSOR] Check wiring: SDA=GPIO21, SCL=GPIO22, VIN=3.3V, GND=GND");
-      Serial.println("[SENSOR] Also check XSHUT pin — must be pulled HIGH (3.3V)");
+      i2cLog += "\n[SENSOR] I2C device found but not VL53L0X (not 0x29 or 0x30)";
       sensorReady = false;
       return false;
     }
@@ -99,17 +149,5 @@ bool isSensorReady() {
 }
 
 String getSensorDiagnostic() {
-  String s = i2cLog;
-  s += "\n[SENSOR] status: ";
-  s += sensorReady ? "OK" : "FAIL";
-  if (!sensorReady) {
-    s += "\n[SENSOR] Check:";
-    s += "\n  - XSHUT pin -> 3.3V (HIGH)";
-    s += "\n  - SDA -> GPIO21";
-    s += "\n  - SCL -> GPIO22";
-    s += "\n  - VIN -> 3.3V";
-    s += "\n  - GND -> GND";
-    s += "\n  - Pull-up 4.7k on SDA/SCL?";
-  }
-  return s;
+  return i2cLog;
 }
