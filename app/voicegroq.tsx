@@ -301,21 +301,21 @@ export default function VoiceGroq({
         if (reply) {
           setTtsState("speaking");
           speakingRef.current = true;
-          if (aiBusyRef) aiBusyRef.current = true;
 
           const voiceOpt = voicesRef.current.find((v) => v.id === selectedVoiceRef.current);
-          if (voiceOpt?.type === "browser" && voiceOpt.voice) {
-            setTtsSource(voiceOpt.voice.name);
-            await speakBrowser(reply, voiceOpt.voice);
-          } else if (voiceOpt?.type === "edge") {
-            setTtsSource(voiceOpt.label);
-            await fetchEdgeTts(reply, voiceOpt.id.replace("edge:", ""));
-          } else {
-            setTtsSource("gTTS");
-            await fetchTts(reply);
-          }
+          try {
+            if (voiceOpt?.type === "browser" && voiceOpt.voice) {
+              setTtsSource(voiceOpt.voice.name);
+              await speakBrowser(reply, voiceOpt.voice);
+            } else if (voiceOpt?.type === "edge") {
+              setTtsSource(voiceOpt.label);
+              await fetchEdgeTts(reply, voiceOpt.id.replace("edge:", ""));
+            } else {
+              setTtsSource("gTTS");
+              await fetchTts(reply);
+            }
+          } catch {}
           speakingRef.current = false;
-          if (aiBusyRef) aiBusyRef.current = false;
           ttsEndRef.current = Date.now();
           setTtsState("idle");
         }
@@ -325,6 +325,7 @@ export default function VoiceGroq({
     }
 
     processingRef.current = false;
+    if (aiBusyRef) aiBusyRef.current = false;
     setStatus("idle");
     if (genRef.current === gen && !abortRef.current && !autoRef.current) {
       startListeningRef.current?.();
@@ -335,6 +336,11 @@ export default function VoiceGroq({
     if (abortRef.current || listeningRef.current || processingRef.current) return;
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) return;
+
+    if (recogRef.current) {
+      try { recogRef.current.abort(); } catch {}
+      recogRef.current = null;
+    }
 
     const now = Date.now();
     if (now - lastListenRef.current < 2000) return;
@@ -369,14 +375,16 @@ export default function VoiceGroq({
     recog.onerror = () => {
       if (listenGenRef.current !== sessionGen) return;
       listeningRef.current = false;
-      if (!abortRef.current) setTimeout(() => startListeningRef.current?.(), 1000);
+      if (recogRef.current === recog) recogRef.current = null;
+      if (!abortRef.current) setTimeout(() => startListeningRef.current?.(), 1500);
     };
 
     recog.onend = () => {
       if (listenGenRef.current !== sessionGen) return;
       listeningRef.current = false;
+      if (recogRef.current === recog) recogRef.current = null;
       if (!abortRef.current && !gotResult && !processingRef.current) {
-        setTimeout(() => startListeningRef.current?.(), 300);
+        setTimeout(() => startListeningRef.current?.(), 1500);
       }
     };
 

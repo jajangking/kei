@@ -226,6 +226,11 @@ export default function XiaozhiPage() {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) return;
 
+    if (recogRef.current) {
+      try { recogRef.current.abort(); } catch {}
+      recogRef.current = null;
+    }
+
     const now = Date.now();
     if (now - lastListenRef.current < 2000) return;
     if (now - lastListenRef.current < 10000) listenCountRef.current++;
@@ -258,13 +263,15 @@ export default function XiaozhiPage() {
 
     recog.onerror = () => {
       listeningRef.current = false;
-      if (!abortRef.current) setTimeout(() => startListeningRef.current?.(), 1000);
+      if (recogRef.current === recog) recogRef.current = null;
+      if (!abortRef.current) setTimeout(() => startListeningRef.current?.(), 1500);
     };
 
     recog.onend = () => {
       listeningRef.current = false;
+      if (recogRef.current === recog) recogRef.current = null;
       if (!abortRef.current && !gotResult && !processingRef.current) {
-        setTimeout(() => startListeningRef.current?.(), 300);
+        setTimeout(() => startListeningRef.current?.(), 1500);
       }
     };
 

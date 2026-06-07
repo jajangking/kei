@@ -450,6 +450,12 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
     const createWakeRec = () => {
       if (!wakeRef.current) return;
       restartWakeRef.current = createWakeRec;
+
+      if (wakeRecRef.current) {
+        try { wakeRecRef.current.abort(); } catch {}
+        wakeRecRef.current = null;
+      }
+
       const rec = new speechRecogCtor();
       rec.lang = "id-ID";
       rec.continuous = false;
@@ -502,10 +508,12 @@ export default function AIGroq({ recognizedFaceRef, detectionsRef, trackInfoRef,
         if (convTimerRef.current) clearTimeout(convTimerRef.current);
         convTimerRef.current = setTimeout(() => { convRef.current = false; setConvMode(false); setListening(false); }, 30000);
       };
-      rec.onerror = () => {};
+      rec.onerror = () => {
+        if (wakeRecRef.current === rec) wakeRecRef.current = null;
+      };
       rec.onend = () => {
-        // don't restart while TTS is playing; speak().onend will restart
-        if (wakeRef.current && !speakingRef.current) setTimeout(createWakeRec, 300);
+        if (wakeRecRef.current === rec) wakeRecRef.current = null;
+        if (wakeRef.current && !speakingRef.current) setTimeout(createWakeRec, 1500);
       };
       wakeRecRef.current = rec;
       rec.start();

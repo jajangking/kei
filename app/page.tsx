@@ -818,8 +818,9 @@ export default function VisionPage() {
         detectSource = detCanvas;
       } else return;
 
-      // Skip heavy inference while AI is busy
-      if (!aiBusyRef.current) {
+      // Run detection at reduced rate while AI is busy to keep bounding boxes alive
+      const runDetect = !aiBusyRef.current || (aiBusyRef.current && tickSkipRef.current % 3 === 0);
+      if (runDetect) {
         const t0 = performance.now();
         try {
           const results = det.detect(detectSource);
@@ -894,12 +895,7 @@ export default function VisionPage() {
           console.error("detect error:", err);
         }
       }
-
-      // Throttle overlay/tracking to every other tick to save CPU during AI chat
-      if (aiBusyRef.current) {
-        tickSkipRef.current++;
-        if (tickSkipRef.current % 2 !== 0) return;
-      }
+      tickSkipRef.current++;
       drawOverlay();
       const a = accelRef.current;
       setAccelDisp(`${(a.x || 0).toFixed(1)}/${(a.y || 0).toFixed(1)}/${(a.z || 0).toFixed(1)}`);
