@@ -73,6 +73,11 @@ export default function VisionPage() {
   const [videoRelay, setVideoRelay] = useState(false);
   const videoRelayRef = useRef(false);
   useEffect(() => { videoRelayRef.current = videoRelay; }, [videoRelay]);
+  useEffect(() => {
+    if (active && mqttConnected && !videoRelay) {
+      setVideoRelay(true);
+    }
+  }, [active, mqttConnected]);
   const [mqttDisplayDeviceId, setMqttDisplayDeviceId] = useState("");
   const [mqttLastTelemetry, setMqttLastTelemetry] = useState(0);
   const [mqttManualDeviceId, setMqttManualDeviceId] = useState("");
@@ -1786,12 +1791,21 @@ export default function VisionPage() {
           </div>
         )}
         <a href="/remote"
-          className="absolute top-1.5 right-9 z-30 h-7 rounded-full bg-black/50 backdrop-blur-md border border-white/10 flex items-center gap-1 px-2 hover:bg-black/70 active:scale-90">
+          className="absolute top-1.5 right-[72px] z-30 h-7 rounded-full bg-black/50 backdrop-blur-md border border-white/10 flex items-center gap-1 px-2 hover:bg-black/70 active:scale-90">
           <svg className="size-2.5 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 8.25 21 12m0 0-3.75 3.75M21 12H3" />
           </svg>
           <span className="text-[6px] font-mono tracking-wider text-zinc-400">REMOTE</span>
         </a>
+        <button onClick={() => setVideoRelay(p => { videoRelayRef.current = !p; return !p; })}
+          className={`absolute top-1.5 right-9 z-30 h-7 rounded-full bg-black/50 backdrop-blur-md border border-white/10 flex items-center gap-1 px-2 hover:bg-black/70 active:scale-90 ${
+            videoRelay ? "text-emerald-400 border-emerald-500/30" : "text-zinc-400"
+          }`}>
+          <svg className="size-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z" />
+          </svg>
+          <span className={`text-[6px] font-mono tracking-wider ${videoRelay ? "text-emerald-400" : "text-zinc-500"}`}>{videoRelay ? "RELAY" : "RELAY"}</span>
+        </button>
         <button onClick={() => { if (source === "stream") { setSource("local"); setActive(false); } else { setSource("stream"); setActive(true); } }}
           className="absolute top-1.5 right-1.5 z-30 size-7 rounded-full bg-black/50 backdrop-blur-md border border-white/10 flex items-center justify-center hover:bg-black/70 active:scale-90">
           <svg className="size-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -2200,15 +2214,7 @@ export default function VisionPage() {
                   KIRIM KE ESP
                 </button>
               </div>
-              <div className="flex gap-1.5 items-center">
-                <button onClick={() => setVideoRelay(p => { videoRelayRef.current = !p; return !p; })}
-                  className={`px-2 py-1 rounded-full text-[9px] font-mono font-bold border active:scale-90 ${
-                    videoRelay ? "bg-emerald-600 border-emerald-600 text-white" : "bg-transparent border-zinc-700 text-zinc-400"
-                  }`}>
-                  RELAY {videoRelay ? "ON" : "OFF"}
-                </button>
-                <span className="text-[7px] font-mono text-zinc-600">kirim video ke remote</span>
-              </div>
+
             </div>
           )}
           {/* baris 3: kontrol + telemetry */}

@@ -302,9 +302,11 @@ export default function RemotePage() {
 
   // Frame relay video polling
   const [frameUrl, setFrameUrl] = useState("");
+  const [frameStatus, setFrameStatus] = useState<"waiting" | "loading" | "ok" | "error">("waiting");
   const imgRef = useRef<HTMLImageElement>(null);
   useEffect(() => {
     if (!showVideo) return;
+    setFrameStatus("waiting");
     const timer = setInterval(() => {
       setFrameUrl(`/api/frame?t=${Date.now()}`);
     }, 500);
@@ -382,7 +384,23 @@ export default function RemotePage() {
       <div className="w-full max-w-sm grid grid-cols-3 gap-1.5">
         <div className="col-span-2 relative aspect-video rounded-xl overflow-hidden bg-zinc-900 ring-1 ring-white/10 flex-shrink-0">
           {showVideo && frameUrl ? (
-            <img ref={imgRef} src={frameUrl} alt="live" className="absolute inset-0 h-full w-full object-contain" />
+            <>
+              {frameStatus !== "ok" && (
+                <div className={`absolute inset-0 flex flex-col items-center justify-center gap-1 transition-opacity duration-200 ${
+                  frameStatus === "error" ? "text-red-500" : "text-zinc-600"
+                }`}>
+                  <svg className="size-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z" />
+                  </svg>
+                  <span className="text-[9px] font-mono">{frameStatus === "error" ? "gagal" : "menunggu..."}</span>
+                </div>
+              )}
+              <img ref={imgRef} src={frameUrl} alt="live"
+                onLoad={() => setFrameStatus("ok")}
+                onError={() => setFrameStatus("error")}
+                className="absolute inset-0 h-full w-full object-contain"
+                style={{ opacity: frameStatus === "ok" ? 1 : 0 }} />
+            </>
           ) : (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 text-zinc-600">
               <svg className="size-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
