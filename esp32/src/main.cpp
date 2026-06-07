@@ -87,7 +87,6 @@ bool emergencyStop = false;
 bool wsConnected = false;
 
 bool safetyActive = false;
-bool sensorReported = false;
 
 // =======================
 // CONFIG
@@ -442,11 +441,23 @@ void handleWiFi() {
     webSocket.onEvent(
       [](uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
         switch(type) {  
-          case WStype_CONNECTED:  
-            wsConnected = true;  
-            emergencyStop = false;  
-            sendConfigToClient(num);  
-            break;  
+          case WStype_CONNECTED:
+            wsConnected = true;
+            emergencyStop = false;
+            sendConfigToClient(num);
+            if (isSensorReady()) {
+              wsLog("[SENSOR] VL53L0X OK");
+            } else {
+              String diag = getSensorDiagnostic();
+              int idx = 0;
+              while (idx < (int)diag.length()) {
+                int nl = diag.indexOf('\n', idx);
+                if (nl < 0) nl = diag.length();
+                wsLog(diag.substring(idx, nl));
+                idx = nl + 1;
+              }
+            }
+            break;
 
           case WStype_DISCONNECTED:  
             wsConnected = false;  
@@ -607,16 +618,6 @@ void loop() {
   if (wifiConnecting) {
     wifiConnecting = false;
     connectMQTT();
-  }
-
-  // Report sensor status once over WebSocket
-  if (initialized && !sensorReported) {
-    sensorReported = true;
-    if (isSensorReady()) {
-      wsLog("[SENSOR] VL53L0X OK — obstacle safety active");
-    } else {
-      wsLog("[SENSOR] VL53L0X not detected — safety disabled");
-    }
   }
 
   // TIMEOUT

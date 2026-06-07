@@ -9,5 +9,6 @@
 bool initVL53L0X();
 int readDistance();
 bool isSensorReady();
+String getSensorDiagnostic();
 
 #endif
