@@ -25,11 +25,12 @@ export class Scanner {
       label: null,
       heading: 0,
       dist: 0,
+      sensorDist: 0,
     }));
     console.log(this.debugLog[0]);
   }
 
-  tick(heading: number, detections: Detection[], vw: number, vh: number) {
+  tick(heading: number, detections: Detection[], vw: number, vh: number, distance?: number) {
     if (this.state !== "spinning") return;
 
     this.frameCount++;
@@ -39,6 +40,11 @@ export class Scanner {
       Math.floor((totalSpin / (Math.PI * 2)) * SECTORS),
       SECTORS - 1
     );
+
+    // VL53L0X — real jarak buat sektor ini
+    if (distance != null && distance > 0) {
+      this.sectors[sector].sensorDist = distance;
+    }
 
     for (const d of detections) {
       const label = d.categories[0].categoryName;
@@ -50,7 +56,7 @@ export class Scanner {
       const existing = this.sectors[sector];
       if (score > 0.5 && area > 0.01) {
         if (!existing.label || area > (box.width / vw) * (box.height / vh)) {
-          this.sectors[sector] = { index: sector, label, heading: heading, dist };
+          this.sectors[sector] = { index: sector, label, heading: heading, dist, sensorDist: this.sectors[sector].sensorDist };
         }
       }
     }

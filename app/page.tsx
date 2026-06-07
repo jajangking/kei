@@ -35,6 +35,7 @@ interface Telemetry {
   deviceName?: string;
   batteryV?: number;
   batteryPct?: number;
+  distance?: number;
 }
 
 export default function VisionPage() {
@@ -151,6 +152,7 @@ export default function VisionPage() {
   const [pickerTargets, setPickerTargets] = useState<string[]>([]);
   const headingRef = useRef(0);
   const posRef = useRef({ x: 300, y: 300 });
+  const distanceRef = useRef<number>(-1);
   interface TeleEntry { label: string; x: number; y: number; score: number; lastSeen: number; area: number; }
   const telemetryMapRef = useRef<TeleEntry[]>([]);
   const brightnessCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -418,6 +420,7 @@ export default function VisionPage() {
         const { config: _cfg, ...rest } = d;
         lastTelemetryRef.current = Date.now();
         setTelemetry(p => ({ ...p, ...rest }));
+        if (d.distance != null) distanceRef.current = d.distance;
       } catch {}
     };
     ws.onclose = () => {
@@ -532,6 +535,7 @@ export default function VisionPage() {
             lastTelemetryRef.current = Date.now();
             const { config: _cfg, ...rest } = data;
             setTelemetry(p => ({ ...p, ...rest }));
+            if (data.distance != null) distanceRef.current = data.distance;
           }
         } catch {}
       });
@@ -1231,7 +1235,9 @@ export default function VisionPage() {
     let bestDist = -1;
     for (let i = 0; i < SECTORS; i++) {
       const found = results.find(r => r.index === i);
-      const dist = found ? found.dist : Infinity;
+      const camDist = found ? found.dist : Infinity;
+      const sensorDist = found ? found.sensorDist : 0;
+      const dist = sensorDist > 0 ? sensorDist / 10 : camDist;
       if (dist > bestDist) { bestDist = dist; best = i; }
     }
     if (bestDist <= 0) return null;
@@ -1253,7 +1259,7 @@ export default function VisionPage() {
       const r = reflexRef.current;
       const m = motorRef2.current;
       if (bhv.mode === "wall") {
-        const result = r.tick(true, headingRef.current, posRef.current, source, video, streamImgRef.current, brightnessCanvasRef.current);
+        const result = r.tick(true, headingRef.current, posRef.current, source, video, streamImgRef.current, brightnessCanvasRef.current, distanceRef.current);
         if (result && result.override) {
           setLeftMotor(result.command.l);
           setRightMotor(result.command.r);
@@ -1361,9 +1367,14 @@ export default function VisionPage() {
           }
           sendMotor(0, 0);
         }
-        if (es.phase === "drive") {
+          if (es.phase === "drive") {
           sendMotor(es.driveFwd, es.driveFwd);
           const wall = r.detectWall(source, video, streamImgRef.current, brightnessCanvasRef.current);
+          // VL53L0X override — obstacle terlalu dekat
+          if (distanceRef.current > 0 && distanceRef.current < 300) {
+            wall.blocked = true;
+            wall.center = true;
+          }
           if (wall.blocked) {
             es.phase = "avoid"; es.avoidStep = 0; es.avoidTimer = 0;
             r.reset(); sendMotor(0, 0);
@@ -1453,7 +1464,7 @@ export default function VisionPage() {
             }
           } else if (sc?.phase === "pause") {
             scanBhvRef.current = { ...sc, pauseTimer: sc.pauseTimer + 1 };
-            s.tick(headingRef.current, stableDetections, vw, vh);
+          s.tick(headingRef.current, stableDetections, vw, vh, distanceRef.current);
             if (sc.pauseTimer >= 3) {
               const next = sc.sector + 1;
               if (next >= 8) {
@@ -1517,7 +1528,7 @@ export default function VisionPage() {
       const wallPhase = reflexRef.current.wallActive?.phase;
       const loopAct = reflexRef.current.loopDetectedFlag;
       reflexLogRef.current = `motor=${motorRunning} wall=${wallPhase ?? '-'} loop=${loopAct}`;
-      const result = reflex.tick(motorRunning, headingRef.current, posRef.current, source, video, img, canvas);
+      const result = reflex.tick(motorRunning, headingRef.current, posRef.current, source, video, img, canvas, distanceRef.current);
       if (result && result.override) {
         setLeftMotor(result.command.l);
         setRightMotor(result.command.r);
@@ -1937,7 +1948,9 @@ export default function VisionPage() {
             {scanResults.length > 0 ? scanResults.map((r, i) => (
               <div key={i} className="truncate">
                 <span className="text-purple-400">{r.label}</span>
-                <span className="text-zinc-600"> {(r.heading * 180 / Math.PI).toFixed(0)}° jarak {r.dist.toFixed(0)}px</span>
+                <span className="text-zinc-600"> {(r.heading * 180 / Math.PI).toFixed(0)}°</span>
+                <span className="text-zinc-500"> jarak {r.dist.toFixed(0)}px</span>
+                {r.sensorDist > 0 && <span className="text-red-400"> VL={(r.sensorDist / 10).toFixed(0)}cm</span>}
               </div>
             )) : <span className="text-zinc-700 italic">-</span>}
           </div>
@@ -2315,6 +2328,7 @@ export default function VisionPage() {
                 </span>
                 <span className="text-zinc-500">heap <span className="text-fuchsia-400">{telemetry.heap ? `${(telemetry.heap / 1024).toFixed(0)}KB` : '-'}</span></span>
                 <span className="text-zinc-500">uptime <span className="text-white">{telemetry.uptime ? `${Math.floor(telemetry.uptime / 60)}m${telemetry.uptime % 60}s` : '-'}</span></span>
+                <span className="text-zinc-500">jarak <span className="text-red-400">{telemetry.distance != null ? `${(telemetry.distance / 10).toFixed(0)}cm` : '-'}</span></span>
                 <span className="text-zinc-500">{telemetry.ip ?? '-'}</span>
                 {telemetry.ssid && (
                   <span className="text-zinc-500 col-span-2">ssid <span className="text-cyan-400">{telemetry.ssid}</span></span>
@@ -2397,6 +2411,7 @@ export default function VisionPage() {
               trackingRef={trackingRef}
               leftMotor={leftMotor}
               rightMotor={rightMotor}
+              distanceRef={distanceRef}
             />
           ) : (
             <div className="absolute inset-0 flex items-center justify-center">

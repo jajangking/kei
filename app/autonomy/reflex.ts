@@ -33,6 +33,7 @@ export class ReflexSystem {
     video: HTMLVideoElement | null,
     streamImg: HTMLImageElement | null,
     canvas: HTMLCanvasElement | null,
+    distance?: number,
   ): BrainstemResult | null {
     this.frameCount++;
 
@@ -89,6 +90,12 @@ export class ReflexSystem {
     }
 
     const wall = this.detectWall(source, video, streamImg, canvas);
+
+    // VL53L0X — obstruksi jarak dekat
+    if (distance != null && distance > 0 && distance < 300) {
+      wall.blocked = true;
+      wall.center = true;
+    }
 
     // New wall detection
     if (wall.blocked) {

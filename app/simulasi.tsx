@@ -30,12 +30,14 @@ interface Props {
   trackingRef: RefObject<boolean>;
   leftMotor: number;
   rightMotor: number;
+  distanceRef?: RefObject<number>;
 }
 
 export default function Simulasi({
   headingRef, posRef, telemetryMapRef,
   trackLabelRef, trackTargetRef,
   detectionsRef, trackingRef, leftMotor, rightMotor,
+  distanceRef,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const trailRef = useRef<Array<{ x: number; y: number }>>([]);
@@ -211,6 +213,20 @@ export default function Simulasi({
         ctx.lineTo(ax - Math.sin(h + 0.5) * 8 * dir, ay + Math.cos(h + 0.5) * 8 * dir);
         ctx.lineTo(ax - Math.sin(h - 0.5) * 8 * dir, ay + Math.cos(h - 0.5) * 8 * dir);
         ctx.closePath(); ctx.fill();
+      }
+
+      // ---- VL53L0X laser ray ----
+      if (distanceRef && distanceRef.current != null && distanceRef.current > 0) {
+        const distCm = distanceRef.current / 10;
+        const rayLen = Math.min(distCm, MAX_SENSE * 0.6);
+        const rx = p.x + Math.sin(h) * rayLen;
+        const ry = p.y - Math.cos(h) * rayLen;
+        ctx.strokeStyle = 'rgba(239, 68, 68, 0.6)';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(rx, ry); ctx.stroke();
+        ctx.fillStyle = 'rgba(239, 68, 68, 0.4)';
+        ctx.font = '8px monospace';
+        ctx.fillText(`${distCm.toFixed(0)}cm`, rx + 4, ry);
       }
 
       // ---- Robot ----

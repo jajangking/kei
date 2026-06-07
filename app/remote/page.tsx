@@ -29,6 +29,7 @@ interface Telemetry {
   motorTimeout?: number;
   leftTrim?: number;
   rightTrim?: number;
+  distance?: number;
 }
 
 export default function RemotePage() {
@@ -49,6 +50,7 @@ export default function RemotePage() {
   // Refs for Simulasi
   const headingRef = useRef(0);
   const posRef = useRef({ x: 300, y: 300 });
+  const distanceRef = useRef<number>(-1);
   const detectionsRef = useRef<Detection[]>([]);
   const telemetryMapRef = useRef<{ label: string; x: number; y: number; score: number; lastSeen: number; area: number }[]>([]);
   const trackLabelRef = useRef<string | null>(null);
@@ -180,6 +182,7 @@ export default function RemotePage() {
           } else if (topic.endsWith("/telemetry")) {
             const { config: _cfg, ...rest } = data;
             setTelemetry(rest);
+            if (data.distance != null) distanceRef.current = data.distance;
           }
         } catch {}
       });
@@ -505,6 +508,7 @@ export default function RemotePage() {
             trackingRef={trackingRef}
             leftMotor={leftMotor}
             rightMotor={rightMotor}
+            distanceRef={distanceRef}
           />
           {scene && (
             <div className="absolute bottom-1.5 left-1.5 z-10 text-[6px] font-mono text-zinc-600">
@@ -544,6 +548,7 @@ export default function RemotePage() {
           <span className="text-zinc-500">uptime <span className="text-white">{telemetry.uptime ? `${Math.floor(telemetry.uptime / 60)}m${telemetry.uptime % 60}s` : "-"}</span></span>
           <span className="text-zinc-500">ip <span className="text-cyan-400">{telemetry.ip ?? "-"}</span></span>
           <span className="text-zinc-500">mqtt <span className={telemetry.mqtt ? "text-green-400" : "text-red-400"}>{telemetry.mqtt ? "ON" : "OFF"}</span></span>
+          <span className="text-zinc-500">jarak <span className="text-red-400">{telemetry.distance != null ? `${(telemetry.distance / 10).toFixed(0)}cm` : "-"}</span></span>
           {telemetry.ssid && (
             <span className="text-zinc-500 col-span-2">ssid <span className="text-cyan-400">{telemetry.ssid}</span></span>
           )}

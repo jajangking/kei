@@ -5,6 +5,7 @@ export interface ScanSector {
   label: string | null;
   heading: number;
   dist: number;
+  sensorDist: number;
 }
 
 export interface MotorCommand {

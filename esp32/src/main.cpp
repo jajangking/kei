@@ -9,6 +9,7 @@
 #include <WiFiClientSecure.h>
 #include <Update.h>
 #include <soc/rtc_cntl_reg.h>
+#include "sensors.h"
 
 // =======================
 // ARDUINOJSON COMPATIBILITY (v6 & v7)
@@ -59,6 +60,7 @@ WebServer httpServer(80);
 
 #define CH_LEFT 0
 #define CH_RIGHT 1
+#define CH_BUZZER 2
 
 // =======================
 // TELEMETRY
@@ -83,6 +85,8 @@ int currentRightSpeed = 0;
 bool ledState = false;
 bool emergencyStop = false;
 bool wsConnected = false;
+
+bool safetyActive = false;
 
 // =======================
 // CONFIG
@@ -165,6 +169,10 @@ void loadDeviceNameConfig();
 void applyPowerSave();
 void applyPowerSaveSafe();
 void sendConfigToClient(uint8_t clientNum);
+void buzzerOn(int freq);
+void buzzerOff();
+void playTone(int freq, int duration);
+void playStartupMelody();
 
 // =======================
 // SAVE CONFIG
@@ -405,14 +413,8 @@ void handleWiFi() {
     pinMode(STBY, OUTPUT);
     digitalWrite(STBY, LOW);
 
-    pinMode(BUZZER, OUTPUT);
-
     delay(500);
     digitalWrite(STBY, HIGH);
-
-    digitalWrite(BUZZER, HIGH);
-    delay(100);
-    digitalWrite(BUZZER, LOW);
 
     ledcSetup(CH_LEFT, 1000, 8);
     ledcAttachPin(PWMA, CH_LEFT);
@@ -616,9 +618,21 @@ void loop() {
     targetRightSpeed = 0;
   }
 
+  // VL53L0X SAFETY — langsung force output PWM, target speeds tetap utuh
+  int obstacleDist = readDistance();
+  safetyActive = (!emergencyStop && obstacleDist > 0 && obstacleDist < 200);
+
   // RAMP
   if (!emergencyStop) {
     rampMotors();
+  }
+
+  // Safety override pas setelah ramp — force output 0 tanpa merusak target
+  if (safetyActive) {
+    ledcWrite(CH_LEFT, 0);
+    ledcWrite(CH_RIGHT, 0);
+    currentLeftSpeed = 0;
+    currentRightSpeed = 0;
   }
 
   // TELEMETRY
@@ -976,6 +990,15 @@ void stopMotors() {
 // =======================
 // LED
 // =======================
+void buzzerOn(int freq) {
+  ledcSetup(CH_BUZZER, freq, 8);
+  ledcWrite(CH_BUZZER, 128);
+}
+
+void buzzerOff() {
+  ledcWrite(CH_BUZZER, 0);
+}
+
 void updateBuzzer() {
   static unsigned long lastToggle = 0;
   static bool state = false;
@@ -984,7 +1007,7 @@ void updateBuzzer() {
 
   if (!mundur) {
     if (state) {
-      digitalWrite(BUZZER, LOW);
+      buzzerOff();
       state = false;
     }
     return;
@@ -996,7 +1019,11 @@ void updateBuzzer() {
   if (now - lastToggle >= interval) {
     lastToggle = now;
     state = !state;
-    digitalWrite(BUZZER, state ? HIGH : LOW);
+    if (state) {
+      buzzerOn(440);
+    } else {
+      buzzerOff();
+    }
   }
 }
 
@@ -1106,6 +1133,7 @@ String buildTelemetryJson() {
   doc["mqtt"] = mqttEnabled && mqttClient.connected();
   doc["deviceName"] = deviceName;
   doc["fw"] = FW_VERSION;
+  doc["distance"] = readDistance();
 
   String json;
   serializeJson(doc, json);
@@ -1265,6 +1293,24 @@ void handleConfig() {
 // =======================
 // SETUP
 // =======================
+void playTone(int freq, int duration) {
+  if (freq > 0) {
+    ledcSetup(CH_BUZZER, freq, 8);
+    ledcWrite(CH_BUZZER, 128);
+  } else {
+    ledcWrite(CH_BUZZER, 0);
+  }
+  delay(duration);
+  ledcWrite(CH_BUZZER, 0);
+}
+
+void playStartupMelody() {
+  playTone(523, 150);
+  playTone(659, 150);
+  playTone(784, 150);
+  playTone(1047, 300);
+}
+
 void setup() {
   Serial.begin(115200);
   startTime = millis();
@@ -1272,9 +1318,15 @@ void setup() {
   delay(300);
 
   pinMode(LED_PIN, OUTPUT);
-  pinMode(BUZZER, OUTPUT);
   pinMode(BATTERY_PIN, INPUT);
   analogSetPinAttenuation(BATTERY_PIN, ADC_11db);
   digitalWrite(LED_PIN, LOW);
-  digitalWrite(BUZZER, LOW);
+
+  ledcSetup(CH_BUZZER, 0, 8);
+  ledcAttachPin(BUZZER, CH_BUZZER);
+  ledcWrite(CH_BUZZER, 0);
+
+  playStartupMelody();
+
+  initVL53L0X();
 }
