@@ -33,10 +33,11 @@ void scanI2C() {
   else { char buf[32]; snprintf(buf, sizeof(buf), "\n[I2C] %d device(s)", nDevices); i2cLog += buf; Serial.printf("[I2C] %d device(s) found\n", nDevices); }
 }
 
-bool tryScan(int sda, int scl, const char* label) {
+bool tryScan(int sda, int scl, const char* label, uint32_t clock=100000) {
   Wire.begin(sda, scl);
   pinMode(sda, INPUT_PULLUP);
   pinMode(scl, INPUT_PULLUP);
+  Wire.setClock(clock);
   delay(100);
 
   char line[64];
@@ -77,8 +78,11 @@ bool initVL53L0X() {
 
   // Try different I2C pin pairs
   bool found = tryScan(SENSOR_SDA, SENSOR_SCL, "default");
+  if (!found) found = tryScan(SENSOR_SCL, SENSOR_SDA, "swapped");     // SDA/SCL reversed
   if (!found) found = tryScan(ALT_SDA, ALT_SCL, "alt1");
   if (!found) found = tryScan(18, 19, "alt2");
+  // Last resort: slow clock (10kHz) on default pins
+  if (!found) found = tryScan(SENSOR_SDA, SENSOR_SCL, "slow10k", 10000);
 
   if (!found) {
     i2cLog += "\n[SENSOR] No I2C devices found on any pin pair";
