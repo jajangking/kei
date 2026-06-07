@@ -2328,7 +2328,7 @@ export default function VisionPage() {
                 </span>
                 <span className="text-zinc-500">heap <span className="text-fuchsia-400">{telemetry.heap ? `${(telemetry.heap / 1024).toFixed(0)}KB` : '-'}</span></span>
                 <span className="text-zinc-500">uptime <span className="text-white">{telemetry.uptime ? `${Math.floor(telemetry.uptime / 60)}m${telemetry.uptime % 60}s` : '-'}</span></span>
-                <span className="text-zinc-500">jarak <span className="text-red-400">{telemetry.distance != null ? `${(telemetry.distance / 10).toFixed(0)}cm` : '-'}</span></span>
+                <span className="text-zinc-500">jarak <span className="text-red-400">{telemetry.distance != null && telemetry.distance > 0 ? `${(telemetry.distance / 10).toFixed(0)}cm` : '-'}</span></span>
                 <span className="text-zinc-500">{telemetry.ip ?? '-'}</span>
                 {telemetry.ssid && (
                   <span className="text-zinc-500 col-span-2">ssid <span className="text-cyan-400">{telemetry.ssid}</span></span>
