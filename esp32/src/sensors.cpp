@@ -3,6 +3,11 @@
 #include <VL53L0X.h>
 #include <algorithm>
 
+// Auto-retry: coba init ulang setiap N ms kalo gagal
+#define SENSOR_RETRY_MS 10000
+static unsigned long lastRetry = 0;
+static bool initAttempted = false;
+
 static VL53L0X sensor;
 static bool sensorReady = false;
 static unsigned long lastRead = 0;
@@ -90,6 +95,7 @@ bool initVL53L0X() {
 
   if (!found) {
     i2cLog += "\n[SENSOR] No I2C devices found on any pin pair";
+    initAttempted = true;
     sensorReady = false;
     return false;
   }
@@ -132,6 +138,7 @@ bool initVL53L0X() {
   sensor.startContinuous(50);
 
   sensorReady = true;
+  initAttempted = true;
   Serial.println("[SENSOR] VL53L0X ready — continuous mode 50ms");
   return true;
 }
@@ -162,6 +169,21 @@ int readDistance() {
 
 bool isSensorReady() {
   return sensorReady;
+}
+
+void retrySensor() {
+  if (sensorReady) return;
+  unsigned long now = millis();
+  if (!initAttempted || now - lastRetry < SENSOR_RETRY_MS) return;
+  lastRetry = now;
+  Serial.println("[SENSOR] Auto-retry init...");
+  // Force fresh init
+  sensorReady = false;
+  if (initVL53L0X()) {
+    Serial.println("[SENSOR] Auto-retry SUCCESS!");
+  } else {
+    Serial.println("[SENSOR] Auto-retry failed, will retry later");
+  }
 }
 
 String getSensorDiagnostic() {

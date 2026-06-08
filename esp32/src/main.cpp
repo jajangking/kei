@@ -630,6 +630,9 @@ void loop() {
     targetRightSpeed = 0;
   }
 
+  // Auto-retry sensor kalo gagal init
+  retrySensor();
+
   // VL53L0X SAFETY — pake raw (tanpa filter), display pake filtered
   int obstacleDist = readDistanceRaw();
   safetyActive = (!emergencyStop && obstacleDist > 0 && obstacleDist < getSafetyThreshold());

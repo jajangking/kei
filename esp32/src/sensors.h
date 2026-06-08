@@ -16,5 +16,6 @@ bool isSensorReady();
 String getSensorDiagnostic();
 void setSafetyThreshold(int mm); // default 200
 int getSafetyThreshold();
+void retrySensor();
 
 #endif
