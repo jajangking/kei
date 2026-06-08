@@ -1,8 +1,8 @@
 #include "sensors.h"
 #include <Wire.h>
-#include <Adafruit_VL53L0X.h>
+#include <VL53L0X.h>
 
-static Adafruit_VL53L0X lox = Adafruit_VL53L0X();
+static VL53L0X sensor;
 static bool sensorReady = false;
 static int lastDistance = -1;
 static String i2cLog = "";
@@ -23,25 +23,40 @@ bool initVL53L0X() {
   Wire.setClock(100000);
   delay(100);
 
-  if (lox.begin()) {
-    Wire.setClock(100000); // paksa 100kHz biar stabil
-    i2cLog += "\n[SENSOR] VL53L0X OK via Adafruit";
+  sensor.setTimeout(500);
+
+  if (sensor.init(false)) {
+    Wire.setClock(100000);
+    sensor.setMeasurementTimingBudget(50000);
+    sensor.startContinuous(50);
+    i2cLog += "\n[SENSOR] VL53L0X OK at 0x29";
     sensorReady = true;
     initAttempted = true;
     return true;
   }
 
-  // Scan I2C untuk debug
+  // fallback 2.8V I/O
+  if (sensor.init(true)) {
+    Wire.setClock(100000);
+    sensor.setMeasurementTimingBudget(50000);
+    sensor.startContinuous(50);
+    i2cLog += "\n[SENSOR] VL53L0X OK at 0x29 (2V8)";
+    sensorReady = true;
+    initAttempted = true;
+    return true;
+  }
+
+  // Scan for debug
   i2cLog += "\n[I2C] Scanning...";
   for (byte a = 1; a < 127; a++) {
     Wire.beginTransmission(a);
     if (Wire.endTransmission() == 0) {
-      char buf[32];
+      char buf[48];
       snprintf(buf, sizeof(buf), "\n[I2C] Found 0x%02X", a);
       i2cLog += buf;
     }
   }
-  i2cLog += "\n[SENSOR] Adafruit init gagal";
+  i2cLog += "\n[SENSOR] init gagal";
   initAttempted = true;
   sensorReady = false;
   return false;
@@ -49,10 +64,9 @@ bool initVL53L0X() {
 
 int readDistanceRaw() {
   if (!sensorReady) return -1;
-  VL53L0X_RangingMeasurementData_t measure;
-  lox.rangingTest(&measure, false);
-  if (measure.RangeStatus == 4) return -1; // out of range
-  lastRaw = (int)measure.RangeMilliMeter;
+  uint16_t mm = sensor.readRangeContinuousMillimeters();
+  if (sensor.timeoutOccurred() || mm > 2000) return -1;
+  lastRaw = (int)mm;
   return lastRaw;
 }
 

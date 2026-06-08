@@ -1356,7 +1356,7 @@ void setup() {
   analogSetPinAttenuation(BATTERY_PIN, ADC_11db);
   digitalWrite(LED_PIN, LOW);
 
-  ledcSetup(CH_BUZZER, 0, 8);
+  ledcSetup(CH_BUZZER, 1, 8); // freq 0 invalid — pake 1Hz placeholder
   ledcAttachPin(BUZZER, CH_BUZZER);
   ledcWrite(CH_BUZZER, 0);
 
