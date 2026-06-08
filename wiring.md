@@ -1,53 +1,58 @@
-# WIRING KEi ROBOT
+# WIRING — Sambungin sesuai urutan baris biar kabel rapi
 
-## ESP32 → VL53L0X
+## 1. Power (sambungin ini DULUAN)
+
+| ESP32 | kabel | komponen |
+|---|---|---|
+| **5V** | merah | VIN VL53L0X |
+| **5V** | merah | VM TB6612 (power motor) |
+| **3.3V** | orange | VCC TB6612 |
+| **3.3V** | orange | STBY TB6612 |
+| **3.3V** | orange | XSHUT VL53L0X |
+| **3.3V** | orange | VCC Buzzer |
+| **GND** | hitam | GND VL53L0X |
+| **GND** | hitam | GND TB6612 |
+| **GND** | hitam | GND Buzzer |
+| **GND** | hitam | GND Batere (-) |
+
+## 2. I2C Sensor
+
+| ESP32 | kabel | VL53L0X |
+|---|---|---|
+| **GPIO21** | hijau | SDA |
+| **GPIO22** | kuning | SCL |
+
+## 3. Motor Driver
+
+| ESP32 | kabel | TB6612 |
+|---|---|---|
+| **GPIO25** | biru | PWMA |
+| **GPIO26** | putih | AIN1 |
+| **GPIO27** | coklat | AIN2 |
+| **GPIO13** | biru | PWMB |
+| **GPIO14** | putih | BIN1 |
+| **GPIO33** | coklat | BIN2 |
+
+## 4. Motor DC
+
+| TB6612 | kabel | Motor |
+|---|---|---|
+| **A01** | abu | Kiri (+) |
+| **A02** | abu | Kiri (-) |
+| **B01** | abu | Kanan (+) |
+| **B02** | abu | Kanan (-) |
+
+## 5. Buzzer
+
+| ESP32 | kabel | Buzzer |
+|---|---|---|
+| **GPIO4** | ungu | I/O |
+| *udah di power section di atas* | | |
+
+## 6. Voltage Divider (ukur tegangan batere)
+
 ```
-ESP32            VL53L0X
-5V  ───────────  VIN
-3.3V ─────────── XSHUT
-GND ───────────  GND
-GPIO21 ────────  SDA
-GPIO22 ────────  SCL
+Batere (+) ── R1 (220Ω) ── GPIO34 ── R2 (2×220Ω seri = 440Ω) ── GND
 ```
 
-## ESP32 → TB6612 (Motor Driver)
-```
-ESP32            TB6612
-3.3V ─────────── VCC
-3.3V ─────────── STBY
-GND ───────────  GND
-GPIO25 ────────  PWMA
-GPIO26 ────────  AIN1
-GPIO27 ────────  AIN2
-GPIO13 ────────  PWMB
-GPIO14 ────────  BIN1
-GPIO33 ────────  BIN2
-```
-
-## TB6612 → Motor DC
-```
-TB6612           MOTOR
-A01 ───────────  Kiri (+)
-A02 ───────────  Kiri (-)
-B01 ───────────  Kanan (+)
-B02 ───────────  Kanan (-)
-```
-
-## TB6612 → Batere
-```
-TB6612           BATERE (+)
-VM ───────────── Pin (+) baterai
-```
-
-## ESP32 → Buzzer
-```
-ESP32            BUZZER
-GPIO4 ────────── I/O
-3.3V ─────────── VCC
-GND ───────────  GND
-```
-
-## Batere → Voltage Divider (ukur tegangan di dashboard)
-```
-BATERE (+) ── R1 (2×220Ω seri = 440Ω) ── GPIO34 ── R2 (220Ω) ── GND
-```
+Cara bikin R2: sambungin 2 resistor 220Ω secara seri (berantai). GPIO34 kebaca 2.6V (aman).
