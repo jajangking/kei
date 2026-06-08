@@ -1356,7 +1356,7 @@ void setup() {
   analogSetPinAttenuation(BATTERY_PIN, ADC_11db);
   digitalWrite(LED_PIN, LOW);
 
-  ledcSetup(CH_BUZZER, 1, 8); // freq 0 invalid — pake 1Hz placeholder
+  ledcSetup(CH_BUZZER, 1000, 8); // placeholder, buzzerOn() nanti override
   ledcAttachPin(BUZZER, CH_BUZZER);
   ledcWrite(CH_BUZZER, 0);
 
