@@ -20,9 +20,11 @@ bool initVL53L0X() {
   Wire.begin(SENSOR_SDA, SENSOR_SCL);
   pinMode(SENSOR_SDA, INPUT_PULLUP);
   pinMode(SENSOR_SCL, INPUT_PULLUP);
+  Wire.setClock(100000);
   delay(100);
 
   if (lox.begin()) {
+    Wire.setClock(100000); // paksa 100kHz biar stabil
     i2cLog += "\n[SENSOR] VL53L0X OK via Adafruit";
     sensorReady = true;
     initAttempted = true;
