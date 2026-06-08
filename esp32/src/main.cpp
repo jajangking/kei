@@ -630,8 +630,8 @@ void loop() {
     targetRightSpeed = 0;
   }
 
-  // VL53L0X SAFETY — langsung force output PWM, target speeds tetap utuh
-  int obstacleDist = readDistance();
+  // VL53L0X SAFETY — pake raw (tanpa filter), display pake filtered
+  int obstacleDist = readDistanceRaw();
   safetyActive = (!emergencyStop && obstacleDist > 0 && obstacleDist < getSafetyThreshold());
 
   // RAMP

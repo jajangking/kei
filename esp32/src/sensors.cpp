@@ -10,6 +10,7 @@ static int lastDistance = -1;
 static String i2cLog = "";
 
 static int safetyThreshold = 200; // mm
+static int lastRaw = -1;
 
 void scanI2C() {
   i2cLog = "[I2C] Scanning...";
@@ -135,28 +136,26 @@ bool initVL53L0X() {
   return true;
 }
 
+int readDistanceRaw() {
+  if (!sensorReady) return -1;
+  uint16_t mm = sensor.readRangeContinuousMillimeters();
+  if (sensor.timeoutOccurred() || mm > 2000) return -1;
+  lastRaw = (int)mm;
+  return lastRaw;
+}
+
 int readDistance() {
   if (!sensorReady) return -1;
 
-  unsigned long now = millis();
-  if (now - lastRead < 50) return lastDistance;
-
-  lastRead = now;
-  uint16_t mm = sensor.readRangeContinuousMillimeters();
-
-  if (sensor.timeoutOccurred()) {
-    lastDistance = -1;
-    return -1;
-  }
-
-  if (mm > 2000) {
+  int raw = readDistanceRaw();
+  if (raw < 0) {
     lastDistance = -1;
     return -1;
   }
 
   // Exponential moving average — smooth out noise
-  if (lastDistance < 0) lastDistance = (int)mm;
-  else lastDistance = (lastDistance * 2 + (int)mm) / 3;
+  if (lastDistance < 0) lastDistance = raw;
+  else lastDistance = (lastDistance * 2 + raw) / 3;
 
   return lastDistance;
 }

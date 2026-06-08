@@ -11,6 +11,7 @@
 
 bool initVL53L0X();
 int readDistance();
+int readDistanceRaw();
 bool isSensorReady();
 String getSensorDiagnostic();
 void setSafetyThreshold(int mm); // default 200
