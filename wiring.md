@@ -52,7 +52,7 @@
 ## 6. Voltage Divider (ukur tegangan batere)
 
 ```
-Batere (+) ── R1 (220Ω) ── GPIO34 ── R2 (2×220Ω seri = 440Ω) ── GND
+Batere (+) ── R1 (2×220Ω seri = 440Ω) ── GPIO34 ── R2 (220Ω) ── GND
 ```
 
-Cara bikin R2: sambungin 2 resistor 220Ω secara seri (berantai). GPIO34 kebaca 2.6V (aman).
+Cara bikin R1: sambungin 2 resistor 220Ω secara seri (berantai). GPIO34 kebaca 2.6V di batere 7.4V (aman).
