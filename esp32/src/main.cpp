@@ -798,8 +798,12 @@ void handleDiag() {
     + "  wifi: " + cachedIP
     + "  rssi: " + String(cachedRssi) + "dBm"
     + "  safeDist: " + String(getSafetyThreshold()) + "mm</div></div>"
-    "<div class=lk><a href='/'>⇐ Back</a></div>"
-    "</body></html>";
+    + "<div style='text-align:center;margin:12px 0'>"
+    + "<button onclick=\"fetch('/cmd',{method:'POST',body:JSON.stringify({retrySensor:true})}).then(function(){location.reload()})\" "
+    "style='background:#2980b9;color:#fff;border:none;padding:10px 24px;border-radius:8px;font-size:13px;cursor:pointer'>"
+    "⟳ Retry VL53L0X</button></div>"
+    + "<div class=lk><a href='/'>⇐ Back</a></div>"
+    + "</body></html>";
   httpServer.send(200, "text/html", html);
 }
 
