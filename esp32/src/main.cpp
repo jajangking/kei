@@ -594,14 +594,12 @@ void loop() {
 
   // MQTT
   if (mqttEnabled) {
-    if (  
-      !mqttClient.connected() &&  
-      millis() - lastMqttAttempt > 5000  
-    ) {  
-      lastMqttAttempt = millis();  
-      connectMQTT();  
-    }  
-    mqttClient.loop();
+    if (mqttClient.connected()) {
+      mqttClient.loop();
+    } else if (millis() - lastMqttAttempt > 30000) {
+      lastMqttAttempt = millis();
+      connectMQTT();
+    }
   }
 
   updateLED();
@@ -639,10 +637,10 @@ void loop() {
     }
   }
 
-  // I2C reads sequential — VL53L0X dulu, baru MPU (biar gak tabrakan bus)
-  int obstacleDist = readDistanceRaw();
-  readMPU6050();
+  // I2C reads — readDistance() aman karena reuse cache dari tickAutonomy
+  int obstacleDist = readDistance();
   safetyActive = (!emergencyStop && obstacleDist > 0 && obstacleDist < getSafetyThreshold());
+  readMPU6050();
 
   // RAMP
   if (!emergencyStop) {
@@ -1197,8 +1195,8 @@ void connectMQTT() {
   if (mqttTls) {
     mqttClient.setClient(mqttSecureClient);
     mqttSecureClient.setInsecure();
-    mqttSecureClient.setHandshakeTimeout(3000);
-    mqttSecureClient.setTimeout(2000);
+    mqttSecureClient.setHandshakeTimeout(1000);
+    mqttSecureClient.setTimeout(1000);
   } else {
     mqttClient.setClient(mqttPlainClient);
     mqttPlainClient.setTimeout(2000);
@@ -1319,7 +1317,7 @@ void setup() {
   playStartupMelody();
 
   Wire.begin(SENSOR_SDA, SENSOR_SCL);
-  Wire.setClock(100000);
+  Wire.setClock(400000);
   Wire.setTimeout(50);
 
   initVL53L0X();

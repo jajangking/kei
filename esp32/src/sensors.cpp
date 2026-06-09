@@ -14,7 +14,7 @@ static int safetyThresh = 200;
 static bool sensorDead = false; // skip all I2C kalo mati
 
 // Rate-limiter
-#define VL_READ_INTERVAL 100
+#define VL_READ_INTERVAL 200
 #define VL_FAIL_BACKOFF  1000
 static unsigned long lastVLRead = 0;
 static int vlFailCount = 0;
@@ -32,7 +32,7 @@ bool initVL53L0X() {
   }
 
   if (lox.begin()) {
-    Wire.setClock(100000);
+    Wire.setClock(400000);
     diagLog += "\n[VL53L0X] OK";
     vlReady = true;
     return true;
