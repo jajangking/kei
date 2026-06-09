@@ -21,14 +21,23 @@ static int vlFailCount = 0;
 
 bool initVL53L0X() {
   diagLog = "[VL53L0X] init...";
-  Wire.setTimeout(50); // timeout cepet biar gak nge-block
+  Wire.setTimeout(10); // timeout super cepet
+
+  // Probe I2C address 0x29 dulu — kalo gak ada, skip begin()
+  Wire.beginTransmission(0x29);
+  if (Wire.endTransmission() != 0) {
+    diagLog += "\n[VL53L0X] not found on I2C bus — skip";
+    sensorDead = true;
+    return false;
+  }
+
   if (lox.begin()) {
     Wire.setClock(100000);
     diagLog += "\n[VL53L0X] OK";
     vlReady = true;
     return true;
   }
-  diagLog += "\n[VL53L0X] gagal — skip forever";
+  diagLog += "\n[VL53L0X] begin() gagal — skip forever";
   sensorDead = true;
   return false;
 }
