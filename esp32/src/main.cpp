@@ -598,6 +598,7 @@ void handleMessage(String msg) {
 
   if (doc["deviceName"].is<String>()) { saveDeviceNameConfig(doc["deviceName"].as<String>()); return; }
   if (doc["reboot"] == true) { delay(100); ESP.restart(); return; }
+  if (doc["retrySensor"] == true) { retrySensor(); return; }
 
   if (doc["factoryReset"] == true) {
     Preferences prefs;

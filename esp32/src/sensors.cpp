@@ -19,21 +19,35 @@ static bool sensorDead = false; // skip all I2C kalo mati
 static unsigned long lastVLRead = 0;
 static int vlFailCount = 0;
 
+static bool probeAddress(byte addr) {
+  for (int r = 0; r < 3; r++) {
+    Wire.beginTransmission(addr);
+    if (Wire.endTransmission() == 0) return true;
+    delay(50);
+  }
+  return false;
+}
+
 bool initVL53L0X() {
   diagLog = "[VL53L0X] init...";
-  Wire.setTimeout(10); // timeout super cepet
 
-  // Probe I2C address 0x29 dulu — kalo gak ada, skip begin()
-  Wire.beginTransmission(0x29);
-  if (Wire.endTransmission() != 0) {
-    diagLog += "\n[VL53L0X] not found on I2C bus — skip";
+  // Try address 0x29 (default), then 0x30 (alternative)
+  byte addrs[] = {0x29, 0x30};
+  byte foundAddr = 0;
+  for (int i = 0; i < 2; i++) {
+    if (probeAddress(addrs[i])) { foundAddr = addrs[i]; break; }
+  }
+
+  if (foundAddr == 0) {
+    diagLog += "\n[VL53L0X] not found on I2C (tried 0x29, 0x30) — skip";
     sensorDead = true;
     return false;
   }
+  diagLog += "\n[VL53L0X] found at 0x" + String(foundAddr, HEX);
 
   if (lox.begin()) {
     Wire.setClock(400000);
-    diagLog += "\n[VL53L0X] OK";
+    diagLog += " — OK";
     vlReady = true;
     return true;
   }
@@ -75,7 +89,13 @@ String getSensorDiagnostic() { return diagLog; }
 void setSafetyThreshold(int mm) { safetyThresh = mm; }
 int getSafetyThreshold() { return safetyThresh; }
 
-void retrySensor() {} // no-op: once dead, stay dead sampai restart
+void retrySensor() {
+  if (vlReady) return;
+  sensorDead = false;
+  vlReady = false;
+  vlFailCount = 0;
+  initVL53L0X();
+}
 
 // ============================================================
 // MPU6050
