@@ -28,7 +28,7 @@ int getServoAngle() { return servoAngle; }
 #define REV_MS         400
 
 // Continuous sweep — always updating sectors while driving
-#define SWEEP_MS    150
+#define SWEEP_MS    200
 static const int sweepPath[] = {90, 60, 30, 60, 90, 120, 150, 120};
 #define SWEEP_LEN (sizeof(sweepPath)/sizeof(sweepPath[0]))
 static int sweepIdx = 0;
@@ -50,7 +50,7 @@ static void doSweep(unsigned long now) {
   int a = sweepPath[sweepIdx];
   sweepIdx = (sweepIdx + 1) % SWEEP_LEN;
   setServoAngle(a);
-  int d = readDistance();
+  int d = readDistanceRaw(); // raw, no smoothing — avoids angle contamination
   if (a <= 30)       sectorDist[2] = d; // right
   else if (a >= 150) sectorDist[0] = d; // left
   else               sectorDist[1] = d; // front
