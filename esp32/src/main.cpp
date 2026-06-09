@@ -95,7 +95,9 @@ h1{font-size:14px;color:#e94560;text-align:center;flex-shrink:0;padding:2px 0;le
 .jb{width:130px;height:130px;border-radius:50%;background:#1a1a3e;position:relative;box-shadow:inset 0 0 20px rgba(0,0,0,.5)}
 .jn{width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#e94560,#b02040);position:absolute;top:42px;left:42px;box-shadow:0 0 15px rgba(233,69,96,.25);pointer-events:none;transition:none}
 .tl{width:120px;flex-shrink:0;background:#11112a;border-radius:10px;padding:8px;font-size:10px;display:flex;flex-direction:column;gap:2px;overflow-y:auto}
-.tl .l{color:#555;display:inline-block;width:32px}.tl .v{color:#ddd}
+.tl .l{color:#555;display:inline-block;width:36px}.tl .v{color:#ddd}
+.sc{display:flex;gap:2px;margin:2px 0}
+.sct{flex:1;text-align:center;font-size:8px;font-weight:700;padding:2px 0;border-radius:3px;line-height:1.2}
 .btn{display:block;padding:8px 4px;border:none;border-radius:7px;font-size:11px;font-weight:600;cursor:pointer;text-align:center;transition:opacity .1s;flex:1;line-height:1.2}
 .btn:active{opacity:.5}
 .br{background:#b0302a;color:#fff}.bg{background:#27ae60;color:#fff}.bb{background:#2980b9;color:#fff}
@@ -123,7 +125,8 @@ h1{font-size:14px;color:#e94560;text-align:center;flex-shrink:0;padding:2px 0;le
   <div class=tl id=tl>
     <div><span class=l>Mode</span><span class=v id=mode>...</span></div>
     <div><span class=l>Speed</span><span class=v id=speed>0</span></div>
-    <div><span class=l>Jarak</span><span class=v id=dist>---</span></div>
+    <div><span class=l>Depan</span><span class=v id=dist>---</span></div>
+    <div class=sc><span class=sct id=sctL>←<br><b id=sl>---</b></span><span class=sct id=sctF>↑<br><b id=sf>---</b></span><span class=sct id=sctR>→<br><b id=sr>---</b></span></div>
     <div><span class=l>Yaw</span><span class=v id=yaw>0.0</span></div>
     <div><span class=l>Servo</span><span class=v id=servo>90</span></div>
     <div><span class=l>RSSI</span><span class=v id=rssi2>--</span></div>
@@ -228,14 +231,32 @@ $('btnServoL').addEventListener('click',function(){cmd({servo:0});});
 $('btnServoR').addEventListener('click',function(){cmd({servo:180});});
 $('btnYawReset').addEventListener('click',function(){cmd({headingReset:true});});
 
+// Sector color helper
+function sc(el,val,thr){
+  if(val<0){el.style.background='#222';el.style.color='#555';return;}
+  var c='#1a4a1a',t='#4caf50';
+  if(val<100){c='#4a1a1a';t='#f44336';}
+  else if(val<thr){c='#4a3a0a';t='#ffeb3b';}
+  el.style.background=c;el.style.color=t;
+}
+
 // Telemetry poll
 function poll(){
   fetch('/telemetry').then(function(r){return r.json()}).then(function(d){
     $('ip').textContent=d.ip;$('rssi').textContent=d.rssi;$('ver').textContent=d.fw;
-    $('mode').textContent=d.mode+(d.behavior!='stop'?' ('+d.behavior+')':'');
-    $('speed').textContent=d.speed;$('dist').textContent=d.distance+' mm';
+    var md=d.mode+(d.behavior!='stop'?' ('+d.behavior+')':'');
+    $('mode').textContent=md;$('speed').textContent=d.speed;
+    $('dist').textContent=d.distance+' mm';
     $('yaw').textContent=d.yaw.toFixed(1)+'\u00b0';
     $('servo').textContent=d.servo+'/';$('rssi2').textContent=d.rssi+' dBm';
+    // Sectors
+    var s=d.sectors,th=d.safeDist||200;
+    if(s&&s.length==3){
+      $('sl').textContent=s[0]<0?'---':s[0]+'mm';
+      $('sf').textContent=s[1]<0?'---':s[1]+'mm';
+      $('sr').textContent=s[2]<0?'---':s[2]+'mm';
+      sc($('sctL'),s[0],th);sc($('sctF'),s[1],th);sc($('sctR'),s[2],th);
+    }
     // Emergency toggle
     if(d.emergency!==lastEmerg){
       lastEmerg=d.emergency;

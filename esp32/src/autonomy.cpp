@@ -26,7 +26,13 @@ int getServoAngle() { return servoAngle; }
 #define TURN_SPEED     100
 #define REV_SPEED     -80
 #define REV_MS         400
-#define SCAN_WAIT      250
+
+// Continuous sweep — always updating sectors while driving
+#define SWEEP_MS    150
+static const int sweepPath[] = {90, 60, 30, 60, 90, 120, 150, 120};
+#define SWEEP_LEN (sizeof(sweepPath)/sizeof(sweepPath[0]))
+static int sweepIdx = 0;
+static unsigned long lastSweep = 0;
 
 static String behavior = "stop";
 static String phase = "idle";
@@ -35,10 +41,29 @@ static bool turnRight = true;
 static int stuckCount = 0;
 static bool safetyOverride = false;
 
-// Scan state
-static int scanStep = 0;
-static unsigned long scanStepTime = 0;
-static int sectorDist[3] = {-1, -1, -1}; // 0=left(180°), 1=front(90°), 2=right(0°)
+// Sector distances: 0=left(180°), 1=front(90°), 2=right(0°)
+static int sectorDist[3] = {-1, -1, -1};
+
+static void doSweep(unsigned long now) {
+  if (now - lastSweep < SWEEP_MS) return;
+  lastSweep = now;
+  int a = sweepPath[sweepIdx];
+  sweepIdx = (sweepIdx + 1) % SWEEP_LEN;
+  setServoAngle(a);
+  int d = readDistance();
+  if (a <= 30)       sectorDist[2] = d; // right
+  else if (a >= 150) sectorDist[0] = d; // left
+  else               sectorDist[1] = d; // front
+}
+
+static void pickTurn() {
+  int le = sectorDist[0], ri = sectorDist[2];
+  if (le > 0 && ri > 0)          turnRight = (ri >= le);
+  else if (le > 0)               turnRight = false;
+  else if (ri > 0)               turnRight = true;
+  // else keep current (alternating default)
+  Serial.printf("[AUTO] pickTurn L=%d R=%d -> %s\n", le, ri, turnRight?"R":"L");
+}
 
 void initAutonomy() {
   ledcSetup(SERVO_CH, SERVO_FREQ, SERVO_RES);
@@ -54,7 +79,6 @@ void setBehavior(const String &b) {
   phase = "idle";
   stuckCount = 0;
   safetyOverride = false;
-  scanStep = 0;
   Serial.printf("[AUTO] behavior=%s\n", b.c_str());
 }
 
@@ -69,28 +93,28 @@ void tickAutonomy(int *outLeft, int *outRight) {
 
   if (behavior == "stop") return;
 
-  int dist = readDistance();
-  bool blocked = (dist > 0 && dist < getSafetyThreshold());
+  int frontDist = sectorDist[1];
+  bool blocked = (frontDist > 0 && frontDist < getSafetyThreshold());
   unsigned long now = millis();
 
   if (behavior == "explore") {
     if (phase == "idle") {
       phase = "fwd";
       phaseStart = now;
-      sectorDist[1] = dist;
+      sectorDist[1] = readDistance();
       *outLeft = EXPLORE_SPEED;
       *outRight = EXPLORE_SPEED;
       return;
     }
 
     if (phase == "fwd") {
-      sectorDist[1] = dist;
+      doSweep(now);
       if (blocked) {
         stuckCount++;
-        Serial.printf("[AUTO] blocked %d dist=%d\n", stuckCount, dist);
+        Serial.printf("[AUTO] blocked %d front=%d\n", stuckCount, frontDist);
+        pickTurn();
         phase = "rev";
         phaseStart = now;
-        turnRight = (stuckCount % 2 == 0);
         *outLeft = REV_SPEED;
         *outRight = REV_SPEED;
         return;
@@ -102,52 +126,17 @@ void tickAutonomy(int *outLeft, int *outRight) {
 
     if (phase == "rev") {
       if (now - phaseStart >= REV_MS) {
-        phase = "scan";
-        scanStep = 1;
-        scanStepTime = now;
-        setServoAngle(0); // look right
-        sectorDist[0] = -1; sectorDist[2] = -1;
+        phase = "turn";
+        phaseStart = now;
+        setServoAngle(90); // center servo during turn
       }
       *outLeft = REV_SPEED;
       *outRight = REV_SPEED;
       return;
     }
 
-    if (phase == "scan") {
-      if (scanStep == 1) {
-        if (now - scanStepTime >= SCAN_WAIT) {
-          sectorDist[2] = readDistance();
-          scanStep = 2;
-          scanStepTime = now;
-          setServoAngle(180); // look left
-        }
-      } else if (scanStep == 2) {
-        if (now - scanStepTime >= SCAN_WAIT) {
-          sectorDist[0] = readDistance();
-          scanStep = 3;
-          scanStepTime = now;
-          setServoAngle(90); // back to center
-        }
-      } else if (scanStep == 3) {
-        if (now - scanStepTime >= SCAN_WAIT) {
-          int ri = sectorDist[2], le = sectorDist[0];
-          if (le > 0 && ri > 0)          turnRight = (ri >= le);
-          else if (le > 0)               turnRight = false;
-          else if (ri > 0)               turnRight = true;
-          // else: stick with current turnRight (alternating)
-          Serial.printf("[AUTO] scan L=%d R=%d turn=%s\n", le, ri, turnRight?"R":"L");
-          scanStep = 0;
-          phase = "turn";
-          phaseStart = now;
-        }
-      }
-      *outLeft = 0;
-      *outRight = 0;
-      return;
-    }
-
     if (phase == "turn") {
-      sectorDist[1] = dist;
+      sectorDist[1] = readDistance();
       if (!blocked) {
         phase = "fwd";
         *outLeft = EXPLORE_SPEED;
