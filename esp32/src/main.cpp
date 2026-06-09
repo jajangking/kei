@@ -67,6 +67,8 @@ WebServer httpServer(80);
 // TELEMETRY
 // =======================
 #define TELEMETRY_INTERVAL 1000
+static String cachedIP = "";
+static int cachedRssi = 0;
 
 // =======================
 // STATE
@@ -1094,8 +1096,6 @@ void updateLED() {
 // =======================
 // TELEMETRY (JSON manual — lebih cepat dari ArduinoJson)
 // =======================
-static String cachedIP = "";
-static int cachedRssi = 0;
 String buildTelemetryJson() {
   String mode = emergencyStop
     ? "emergency"
