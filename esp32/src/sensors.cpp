@@ -7,14 +7,20 @@
 // ============================================================
 static Adafruit_VL53L0X lox;
 static bool vlReady = false;
-static int lastDist = -1;
-static int lastRaw = -1;
+static int lastGoodDist = -1;
+static int lastGoodRaw = -1;
 static String diagLog = "";
 static int safetyThresh = 200;
 
 #define RETRY_MS 10000
 static unsigned long lastRetry = 0;
 static bool initDone = false;
+
+// Rate-limiter + consecutive-failure backoff
+#define VL_READ_INTERVAL 100    // normal: 10 reads/sec
+#define VL_FAIL_BACKOFF  1000   // setelah error: 1 read/sec
+static unsigned long lastVLRead = 0;
+static int vlFailCount = 0;
 
 bool initVL53L0X() {
   diagLog = "[VL53L0X] init...";
@@ -23,6 +29,7 @@ bool initVL53L0X() {
     diagLog += "\n[VL53L0X] OK";
     vlReady = true;
     initDone = true;
+    vlFailCount = 0;
     return true;
   }
   diagLog += "\n[VL53L0X] gagal";
@@ -33,20 +40,30 @@ bool initVL53L0X() {
 
 int readDistanceRaw() {
   if (!vlReady) return -1;
+
+  unsigned long now = millis();
+  int interval = (vlFailCount >= 3) ? VL_FAIL_BACKOFF : VL_READ_INTERVAL;
+  if (now - lastVLRead < interval) return lastGoodRaw;
+  lastVLRead = now;
+
   VL53L0X_RangingMeasurementData_t m;
   lox.rangingTest(&m, false);
-  if (m.RangeStatus == 4) return -1;
-  lastRaw = (int)m.RangeMilliMeter;
-  return lastRaw;
+  if (m.RangeStatus == 4) {
+    vlFailCount++;
+    return -1;
+  }
+  vlFailCount = 0;
+  lastGoodRaw = (int)m.RangeMilliMeter;
+  return lastGoodRaw;
 }
 
 int readDistance() {
   if (!vlReady) return -1;
   int r = readDistanceRaw();
-  if (r < 0) { lastDist = -1; return -1; }
-  if (lastDist < 0) lastDist = r;
-  else lastDist = (lastDist * 2 + r) / 3;
-  return lastDist;
+  if (r < 0) { lastGoodDist = -1; return -1; }
+  if (lastGoodDist < 0) lastGoodDist = r;
+  else lastGoodDist = (lastGoodDist * 2 + r) / 3;
+  return lastGoodDist;
 }
 
 bool isSensorReady() { return vlReady; }
@@ -61,8 +78,12 @@ void retrySensor() {
   lastRetry = now;
   Serial.println("[VL53L0X] auto-retry...");
   vlReady = false;
-  if (initVL53L0X()) Serial.println("[VL53L0X] OK");
-  else Serial.println("[VL53L0X] gagal");
+  if (initVL53L0X()) {
+    Serial.println("[VL53L0X] OK");
+    vlFailCount = 0;
+  } else {
+    Serial.println("[VL53L0X] gagal");
+  }
 }
 
 // ============================================================
