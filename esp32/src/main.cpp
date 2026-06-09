@@ -163,6 +163,7 @@ h1{font-size:14px;color:#e94560;text-align:center;flex-shrink:0;padding:2px 0;le
 
 <div class=lk>
   <a href=/config>⚙ Config</a>
+  <a href=/diag>🔍 Diagnostik</a>
   <a href=/update>⬆ OTA</a>
 </div>
 
@@ -272,6 +273,7 @@ setInterval(poll,1000);poll();
 </html>
 )rawliteral";
 void handleConfig();
+void handleDiag();
 void saveRuntimeConfig();
 void loadRuntimeConfig();
 void savePowerSaveConfig();
@@ -430,6 +432,7 @@ void handleWiFi() {
 
   httpServer.on("/", handleRoot);
   httpServer.on("/config", handleConfig);
+  httpServer.on("/diag", handleDiag);
   httpServer.on("/version", []() {
     httpServer.send(200, "application/json", "{\"fw\":\"" + String(FW_VERSION) + "\"}");
   });
@@ -766,6 +769,36 @@ void handleConfig() {
     "document.getElementById('speedLimitEnabled').checked=d.speedLimitEnabled;"
     "document.getElementById('speedLimit').value=d.speedLimit;"
     "})</script></body></html>";
+  httpServer.send(200, "text/html", html);
+}
+
+void handleDiag() {
+  String i2c = scanI2C();
+  String vl = getSensorDiagnostic();
+  String mpu = getMPUDiagnostic();
+  String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+    "<title>Kei Diagnostics</title>"
+    "<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:monospace;background:#0a0a1a;color:#eee;padding:16px;font-size:13px}"
+    "h1{font-size:18px;color:#e94560;margin-bottom:12px;text-align:center}"
+    "h2{font-size:14px;color:#e94560;margin:12px 0 6px}"
+    ".sec{background:#11112a;border-radius:8px;padding:12px;margin-bottom:8px}"
+    ".pre{white-space:pre-wrap;color:#aaa;line-height:1.4}"
+    ".ok{color:#4caf50}.err{color:#f44336}.warn{color:#ffeb3b}"
+    ".lk{text-align:center;font-size:11px;margin-top:16px}"
+    ".lk a{color:#e94560;text-decoration:none}"
+    "</style></head><body>"
+    "<h1>Sensor Diagnostics</h1>"
+    "<div class=sec><h2>I2C Bus</h2><div class=pre>" + i2c + "</div></div>"
+    "<div class=sec><h2>VL53L0X</h2><div class=pre>" + vl + "</div></div>"
+    "<div class=sec><h2>MPU6050</h2><div class=pre>" + mpu + "</div></div>"
+    "<div class=sec><h2>System</h2>"
+    "<div class=pre>uptime: " + String((millis()-startTime)/1000) + "s"
+    "  heap: " + String(ESP.getFreeHeap()) + "B"
+    "  wifi: " + cachedIP
+    "  rssi: " + String(cachedRssi) + "dBm"
+    "  safeDist: " + String(getSafetyThreshold()) + "mm</div></div>"
+    "<div class=lk><a href='/'>⇐ Back</a></div>"
+    "</body></html>";
   httpServer.send(200, "text/html", html);
 }
 

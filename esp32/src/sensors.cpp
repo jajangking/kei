@@ -194,3 +194,32 @@ float getPitch() { return pitch; }
 float getYaw() { return yaw; }
 float getGyroZ() { return gyroZ; }
 void resetYaw() { yaw = 0; }
+
+String getMPUDiagnostic() {
+  String s; s.reserve(256);
+  s = "[MPU] ready=" + String(mpuReady ? "true" : "false");
+  s += " cal=" + String(calInProgress ? "busy" : "done");
+  if (calInProgress) s += " " + String(calSampleCount) + "/" + String(CAL_SAMPLES);
+  s += " offsetZ=" + String(gzOffset, 2);
+  s += " ax=" + String(ax) + " ay=" + String(ay) + " az=" + String(az);
+  s += " gx=" + String(gx) + " gy=" + String(gy) + " gz=" + String(gz);
+  return s;
+}
+
+String scanI2C() {
+  String s; s.reserve(256);
+  s = "[I2C] scan...\n";
+  byte err, addr;
+  int n = 0;
+  for (addr = 1; addr < 127; addr++) {
+    Wire.beginTransmission(addr);
+    err = Wire.endTransmission();
+    if (err == 0) {
+      s += " 0x" + String(addr, HEX);
+      n++;
+    }
+  }
+  if (n == 0) s += " none found";
+  s += "\n[I2C] " + String(n) + " device(s)";
+  return s;
+}

@@ -25,6 +25,10 @@ float getPitch();
 float getYaw();
 float getGyroZ();
 void resetYaw();
+String getMPUDiagnostic();
+
+// I2C scan
+String scanI2C();
 
 // Servo
 #define SERVO_PIN 5
