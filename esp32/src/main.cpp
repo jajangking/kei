@@ -661,7 +661,7 @@ void updateLED() {
 String buildTelemetryJson() {
   String mode = emergencyStop ? "emergency" : (getBehavior() != "stop" ? "auto" : "manual");
   int avgSpeed = (abs(currentLeftSpeed) + abs(currentRightSpeed)) / 2;
-  String j; j.reserve(512);
+  String j; j.reserve(600);
   j = "{\"mode\":\"" + mode + "\"";
   j += ",\"speed\":" + String(avgSpeed);
   j += ",\"left\":" + String(currentLeftSpeed);
@@ -689,6 +689,7 @@ String buildTelemetryJson() {
   j += ",\"gyroZ\":" + String(round(getGyroZ() * 10) / 10);
   j += ",\"servo\":" + String(getServoAngle());
   j += ",\"behavior\":\"" + getBehavior() + "\"";
+  j += ",\"sectors\":[" + String(getSector(0)) + "," + String(getSector(1)) + "," + String(getSector(2)) + "]";
   j += ",\"rssi\":" + String(cachedRssi);
   j += ",\"heap\":" + String(ESP.getFreeHeap());
   j += ",\"uptime\":" + String((millis() - startTime) / 1000);

@@ -15,4 +15,7 @@ bool getSafetyOverride();
 void setServoAngle(int deg);
 int getServoAngle();
 
+// Sector data
+int getSector(int index); // 0=left(180°), 1=front(90°), 2=right(0°)
+
 #endif
