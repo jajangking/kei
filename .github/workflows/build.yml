@@ -52,8 +52,8 @@ jobs:
         if: success() && github.ref == 'refs/heads/main'
         run: |
           gh release create "build-${{ github.run_number }}" \
-            /tmp/release/firmware-ws-mqtt.bin \
             /tmp/release/firmware-http.bin \
+            /tmp/release/firmware-full.bin \
             --repo "${{ github.repository }}" \
             --title "Firmware Build #${{ github.run_number }}" \
             --notes "**firmware-http.bin** — HTTP-only version (default, ringan)\\n**firmware-full.bin** — WebSocket + MQTT version (full feature)"
