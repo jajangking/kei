@@ -632,8 +632,8 @@ void loop() {
     targetRightSpeed = 0;
   }
 
-  // Auto-retry sensor kalo gagal init
-  retrySensor();
+  // I2C timeout cepet biar gak nge-block loop
+  Wire.setTimeout(50);
 
   // Autonomy tick — bisa override target speeds
   if (!emergencyStop) {

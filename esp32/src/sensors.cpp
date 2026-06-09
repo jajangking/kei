@@ -11,33 +11,25 @@ static int lastGoodDist = -1;
 static int lastGoodRaw = -1;
 static String diagLog = "";
 static int safetyThresh = 200;
+static bool sensorDead = false; // skip all I2C kalo mati
 
-#define RETRY_MS 10000
-#define MAX_RETRIES 3
-static unsigned long lastRetry = 0;
-static bool initDone = false;
-static int retryCount = 0;
-static bool sensorDead = false; // give up after max retries
-
-// Rate-limiter + consecutive-failure backoff
-#define VL_READ_INTERVAL 100    // normal: 10 reads/sec
-#define VL_FAIL_BACKOFF  1000   // setelah error: 1 read/sec
+// Rate-limiter
+#define VL_READ_INTERVAL 100
+#define VL_FAIL_BACKOFF  1000
 static unsigned long lastVLRead = 0;
 static int vlFailCount = 0;
 
 bool initVL53L0X() {
   diagLog = "[VL53L0X] init...";
+  Wire.setTimeout(50); // timeout cepet biar gak nge-block
   if (lox.begin()) {
     Wire.setClock(100000);
     diagLog += "\n[VL53L0X] OK";
     vlReady = true;
-    initDone = true;
-    vlFailCount = 0;
     return true;
   }
-  diagLog += "\n[VL53L0X] gagal";
-  initDone = true;
-  vlReady = false;
+  diagLog += "\n[VL53L0X] gagal — skip forever";
+  sensorDead = true;
   return false;
 }
 
@@ -74,27 +66,7 @@ String getSensorDiagnostic() { return diagLog; }
 void setSafetyThreshold(int mm) { safetyThresh = mm; }
 int getSafetyThreshold() { return safetyThresh; }
 
-void retrySensor() {
-  if (vlReady || !initDone || sensorDead) return;
-  unsigned long now = millis();
-  if (now - lastRetry < RETRY_MS) return;
-  lastRetry = now;
-  retryCount++;
-  if (retryCount > MAX_RETRIES) {
-    sensorDead = true;
-    Serial.println("[VL53L0X] max retries — sensor dianggap mati");
-    return;
-  }
-  Serial.printf("[VL53L0X] auto-retry %d/%d...\n", retryCount, MAX_RETRIES);
-  vlReady = false;
-  if (initVL53L0X()) {
-    Serial.println("[VL53L0X] OK");
-    vlFailCount = 0;
-    retryCount = 0;
-  } else {
-    Serial.printf("[VL53L0X] gagal (%d/3)\n", retryCount);
-  }
-}
+void retrySensor() {} // no-op: once dead, stay dead sampai restart
 
 // ============================================================
 // MPU6050
@@ -123,7 +95,9 @@ static void readMPURaw(byte reg, byte* buf, int len) {
   Wire.write(reg);
   Wire.endTransmission(false);
   Wire.requestFrom(MPU_ADDR, len);
-  for (int i = 0; i < len && Wire.available(); i++) buf[i] = Wire.read();
+  int n = Wire.available();
+  for (int i = 0; i < len && i < n; i++) buf[i] = Wire.read();
+  // kalo I2C error, biarin buf berisi 0 (default-nya 0 via zero-initialized caller)
 }
 
 static int16_t read16(byte reg) {
