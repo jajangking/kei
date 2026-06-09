@@ -7,8 +7,6 @@ import type { SceneMessage, SceneDetection } from "../lib/sceneTypes";
 import type { Detection } from "@mediapipe/tasks-vision";
 
 interface Telemetry {
-  batteryPct?: number;
-  batteryV?: number;
   rssi?: number;
   heap?: number;
   uptime?: number;
@@ -484,16 +482,7 @@ export default function RemotePage() {
               <span className="text-[6px] font-mono text-blue-400 truncate max-w-full">{scene.tracking.target}</span>
             )}
           </div>
-          {/* BATTERY */}
-          <div className="flex-1 rounded-xl bg-zinc-900/80 ring-1 ring-white/10 px-2 py-1 flex flex-col items-center justify-center">
-            <span className="text-[6px] font-mono text-zinc-600">BATERAI</span>
-            <span className={`text-[11px] font-mono font-bold ${telemetry.batteryPct != null ? (telemetry.batteryPct > 60 ? "text-green-400" : telemetry.batteryPct > 20 ? "text-yellow-400" : "text-red-400") : "text-zinc-600"}`}>
-              {telemetry.batteryPct != null ? `${telemetry.batteryPct}%` : "?"}
-            </span>
-            {telemetry.batteryV != null && (
-              <span className="text-[6px] font-mono text-zinc-600">{telemetry.batteryV}V</span>
-            )}
-          </div>
+
           {/* RSSI */}
           <div className="flex-1 rounded-xl bg-zinc-900/80 ring-1 ring-white/10 px-2 py-1 flex flex-col items-center justify-center">
             <span className="text-[6px] font-mono text-zinc-600">SINYAL</span>

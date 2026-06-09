@@ -146,7 +146,7 @@ bool isMPUReady() { return mpuReady; }
 void readMPU6050() {
   if (!mpuReady) return;
   unsigned long now = millis();
-  if (now - lastMPU < 10) return; // rate limit 10ms biar gak tabrakan I2C
+  if (now - lastMPU < 30) return; // rate limit 30ms
   if (now - lastMPU > 500) lastMPU = now - 10; // clamp dt kalo lama
 
   byte buf[14];

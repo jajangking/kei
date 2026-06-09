@@ -27,7 +27,6 @@
 // PINS
 // =======================
 #define LED_PIN 2
-#define BATTERY_PIN 34
 
 // =======================
 // WIFI
@@ -138,12 +137,7 @@ void rampMotors();
 void sendTelemetry();
 
 void wsLog(String msg) {
-  JSON_DOC(128) doc;
-  doc["type"] = "log";
-  doc["msg"] = msg;
-  String json;
-  serializeJson(doc, json);
-  webSocket.broadcastTXT(json);
+  webSocket.broadcastTXT("{\"type\":\"log\",\"msg\":\"" + msg + "\"}");
   Serial.println(msg);
 }
 String buildTelemetryJson();
@@ -153,7 +147,6 @@ void mqttCallback(char* topic, byte* payload, unsigned int length);
 void connectWiFi();
 void handleWiFi();
 void connectMQTT();
-void mqttPublishTelemetry();
 void handleRoot();
 void handleConfig();
 void saveRuntimeConfig();
@@ -384,7 +377,8 @@ void handleWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
     if (wifiConnecting) {
       wifiConnecting = false;
-      wsLog("WiFi connected: " + WiFi.localIP().toString() + " (" + String(WiFi.RSSI()) + " dBm)");
+      cachedIP = WiFi.localIP().toString();
+      wsLog("WiFi connected: " + cachedIP + " (" + String(WiFi.RSSI()) + " dBm)");
     }
     initialized = true;
     return;
@@ -632,9 +626,6 @@ void loop() {
     targetRightSpeed = 0;
   }
 
-  // I2C timeout cepet biar gak nge-block loop
-  Wire.setTimeout(50);
-
   // Autonomy tick — bisa override target speeds
   if (!emergencyStop) {
     int autoL = 0, autoR = 0;
@@ -695,11 +686,7 @@ void handleMessage(String msg) {
 
   // PING
   if (doc["ping"] == true) {
-    JSON_DOC(64) pong;  
-    pong["pong"] = true;  
-    String reply;  
-    serializeJson(pong, reply);  
-    webSocket.broadcastTXT(reply);  
+    webSocket.broadcastTXT("{\"pong\":true}");
     return;
   }
 
@@ -715,11 +702,7 @@ void handleMessage(String msg) {
   // SAFETY DISTANCE THRESHOLD
   if (doc["safeDist"].is<int>()) {
     setSafetyThreshold(constrain(doc["safeDist"].as<int>(), 30, 2000));
-    JSON_DOC(64) ack;
-    ack["safeDist"] = getSafetyThreshold();
-    String reply;
-    serializeJson(ack, reply);
-    webSocket.broadcastTXT(reply);
+    webSocket.broadcastTXT("{\"safeDist\":" + String(getSafetyThreshold()) + "}");
     return;
   }
 
@@ -776,19 +759,16 @@ void handleMessage(String msg) {
     saveRuntimeConfig();  
     saveSpeedLimitConfig();  
 
-    JSON_DOC(256) conf;  
-    conf["config"] = true;  
-    conf["maxSpeed"] = maxSpeed;  
-    conf["rampRate"] = rampRate;  
-    conf["motorTimeout"] = motorTimeout;  
-    conf["powerSave"] = powerSave;  
-    conf["speedLimitEnabled"] = speedLimitEnabled;  
-    conf["speedLimit"] = speedLimit;  
-    conf["leftTrim"] = leftTrim;  
-    conf["rightTrim"] = rightTrim;  
-
-    String reply;  
-    serializeJson(conf, reply);  
+    String reply = "{\"config\":true";
+    reply += ",\"maxSpeed\":" + String(maxSpeed);
+    reply += ",\"rampRate\":" + String(rampRate);
+    reply += ",\"motorTimeout\":" + String(motorTimeout);
+    reply += ",\"powerSave\":" + String(powerSave ? "true" : "false");
+    reply += ",\"speedLimitEnabled\":" + String(speedLimitEnabled ? "true" : "false");
+    reply += ",\"speedLimit\":" + String(speedLimit);
+    reply += ",\"leftTrim\":" + String(leftTrim);
+    reply += ",\"rightTrim\":" + String(rightTrim);
+    reply += "}";
     webSocket.broadcastTXT(reply);
   }
 
@@ -809,12 +789,7 @@ void handleMessage(String msg) {
     mqttClient.disconnect();  
     connectMQTT();  
 
-    JSON_DOC(128) ack;  
-    ack["mqttConfig"] = true;  
-
-    String reply;  
-    serializeJson(ack, reply);  
-    webSocket.broadcastTXT(reply);  
+    webSocket.broadcastTXT("{\"mqttConfig\":true}");
     return;
   }
 
@@ -836,12 +811,7 @@ void handleMessage(String msg) {
     mqttEnabled = false;  
     mqttClient.disconnect();  
 
-    JSON_DOC(64) ack;  
-    ack["mqttConfig"] = false;  
-
-    String reply;  
-    serializeJson(ack, reply);  
-    webSocket.broadcastTXT(reply);  
+    webSocket.broadcastTXT("{\"mqttConfig\":false}");
     return;
   }
 
@@ -855,13 +825,7 @@ void handleMessage(String msg) {
       doc["password"].as<String>()  
     );  
 
-    JSON_DOC(128) ack;  
-    ack["wifiConfig"] = true;  
-    ack["ssid"] = doc["ssid"];  
-
-    String reply;  
-    serializeJson(ack, reply);  
-    webSocket.broadcastTXT(reply);  
+    webSocket.broadcastTXT("{\"wifiConfig\":true,\"ssid\":\"" + doc["ssid"].as<String>() + "\"}"); 
 
     delay(100);
     ESP.restart();
@@ -892,22 +856,13 @@ void handleMessage(String msg) {
   // DEVICE NAME
   if (doc["deviceName"].is<String>()) {
     saveDeviceNameConfig(doc["deviceName"].as<String>());
-
-    JSON_DOC(64) ack;
-    ack["deviceName"] = deviceName;
-    String reply;
-    serializeJson(ack, reply);
-    webSocket.broadcastTXT(reply);
+    webSocket.broadcastTXT("{\"deviceName\":\"" + deviceName + "\"}");
     return;
   }
 
   // REBOOT
   if (doc["reboot"] == true) {
-    JSON_DOC(64) ack;
-    ack["reboot"] = true;
-    String reply;
-    serializeJson(ack, reply);
-    webSocket.broadcastTXT(reply);
+    webSocket.broadcastTXT("{\"reboot\":true}");
     delay(100);
     ESP.restart();
     return;
@@ -915,11 +870,7 @@ void handleMessage(String msg) {
 
   // FACTORY RESET
   if (doc["factoryReset"] == true) {
-    JSON_DOC(64) ack;
-    ack["factoryReset"] = true;
-    String reply;
-    serializeJson(ack, reply);
-    webSocket.broadcastTXT(reply);
+    webSocket.broadcastTXT("{\"factoryReset\":true}");
 
     Preferences prefs;
     prefs.begin("runtime", false);
@@ -1137,133 +1088,88 @@ void updateLED() {
   }
 }
 
-// =======================
-// BATTERY
-// =======================
-int batteryPercent(float v) {
-  static int lastPct = -1;
-  float lookup = v;
-  // hysteresis: kalo udah di threshold, jangan balik sampai beda 0.06V
-  if (lastPct >= 85 && lastPct < 100) lookup += 0.06;
-  if (lastPct >= 65 && lastPct < 85) lookup += 0.06;
-  if (lastPct >= 45 && lastPct < 65) lookup += 0.06;
-  if (lastPct >= 25 && lastPct < 45) lookup += 0.06;
-  if (lastPct >= 12 && lastPct < 25) lookup += 0.06;
-  if (lastPct >= 6 && lastPct < 12) lookup += 0.06;
 
-  int pct;
-  if (lookup >= 8.20) pct = 100;
-  else if (lookup >= 8.00) pct = 80 + (lookup - 8.00) / 0.20 * 20;
-  else if (lookup >= 7.80) pct = 60 + (lookup - 7.80) / 0.20 * 20;
-  else if (lookup >= 7.60) pct = 40 + (lookup - 7.60) / 0.20 * 20;
-  else if (lookup >= 7.40) pct = 20 + (lookup - 7.40) / 0.20 * 20;
-  else if (lookup >= 7.20) pct = 10 + (lookup - 7.20) / 0.20 * 10;
-  else if (lookup >= 7.00) pct = 5  + (lookup - 7.00) / 0.20 * 5;
-  else pct = 0;
-
-  lastPct = pct;
-  return pct;
-}
 
 // =======================
-// TELEMETRY
+// TELEMETRY (JSON manual — lebih cepat dari ArduinoJson)
 // =======================
+static String cachedIP = "";
 String buildTelemetryJson() {
-  JSON_DOC(512) doc;
-
   String mode = emergencyStop
     ? "emergency"
     : (getBehavior() != "stop" ? "auto" : "manual");
+  int avgSpeed = (abs(currentLeftSpeed) + abs(currentRightSpeed)) / 2;
 
-  int avgSpeed = (
-    abs(currentLeftSpeed) +
-    abs(currentRightSpeed)
-  ) / 2;
-
-  // battery — multisampling 64× + EMA filter 0.95
-  static float filteredV = 0;
-  uint32_t sum = 0;
-  for (int i = 0; i < 64; i++) sum += analogRead(BATTERY_PIN);
-  float avg = sum / 64.0;
-  float v = avg * 3.3 / 4095.0 * 3.0;
-  filteredV = filteredV * 0.95 + v * 0.05;
-  doc["batteryV"] = round(filteredV * 10) / 10;
-  doc["batteryPct"] = batteryPercent(filteredV);
-
-  doc["rssi"] = WiFi.RSSI();
-  doc["heap"] = ESP.getFreeHeap();
-  doc["uptime"] = (millis() - startTime) / 1000;
-  doc["speed"] = avgSpeed;
-  doc["mode"] = mode;
-  doc["left"] = currentLeftSpeed;
-  doc["right"] = currentRightSpeed;
-  doc["leftTrim"] = leftTrim;
-  doc["rightTrim"] = rightTrim;
-  doc["powerSave"] = powerSave;
-  doc["emergency"] = emergencyStop;
-  doc["rampRate"] = rampRate;
-  doc["speedLimitEnabled"] = speedLimitEnabled;
-  doc["speedLimit"] = speedLimit;
-  doc["maxSpeed"] = maxSpeed;
-  doc["motorTimeout"] = motorTimeout;
-  doc["ip"] = WiFi.localIP().toString();
-  doc["ssid"] = wifiSsid;
-  doc["mqtt"] = mqttEnabled && mqttClient.connected();
-  doc["deviceName"] = deviceName;
-  doc["fw"] = FW_VERSION;
-  doc["distance"] = readDistance();
-  doc["sensor_ok"] = isSensorReady();
-  doc["safeDist"] = getSafetyThreshold();
-  doc["mpu_ok"] = isMPUReady();
-  doc["roll"] = round(getRoll() * 10) / 10;
-  doc["pitch"] = round(getPitch() * 10) / 10;
-  doc["yaw"] = round(getYaw() * 10) / 10;
-  doc["gyroZ"] = round(getGyroZ() * 10) / 10;
-  doc["servo"] = getServoAngle();
-  doc["behavior"] = getBehavior();
-
-  String json;
-  serializeJson(doc, json);
-
-  return json;
+  String j = "{\"mode\":\"" + mode + "\"";
+  j += ",\"speed\":" + String(avgSpeed);
+  j += ",\"left\":" + String(currentLeftSpeed);
+  j += ",\"right\":" + String(currentRightSpeed);
+  j += ",\"leftTrim\":" + String(leftTrim);
+  j += ",\"rightTrim\":" + String(rightTrim);
+  j += ",\"powerSave\":" + String(powerSave ? "true" : "false");
+  j += ",\"emergency\":" + String(emergencyStop ? "true" : "false");
+  j += ",\"rampRate\":" + String(rampRate);
+  j += ",\"speedLimitEnabled\":" + String(speedLimitEnabled ? "true" : "false");
+  j += ",\"speedLimit\":" + String(speedLimit);
+  j += ",\"maxSpeed\":" + String(maxSpeed);
+  j += ",\"motorTimeout\":" + String(motorTimeout);
+  j += ",\"ip\":\"" + cachedIP + "\"";
+  j += ",\"ssid\":\"" + wifiSsid + "\"";
+  j += ",\"mqtt\":" + String((mqttEnabled && mqttClient.connected()) ? "true" : "false");
+  j += ",\"deviceName\":\"" + deviceName + "\"";
+  j += ",\"fw\":\"" + String(FW_VERSION) + "\"";
+  j += ",\"distance\":" + String(readDistance());
+  j += ",\"sensor_ok\":" + String(isSensorReady() ? "true" : "false");
+  j += ",\"safeDist\":" + String(getSafetyThreshold());
+  j += ",\"mpu_ok\":" + String(isMPUReady() ? "true" : "false");
+  j += ",\"roll\":" + String(round(getRoll() * 10) / 10);
+  j += ",\"pitch\":" + String(round(getPitch() * 10) / 10);
+  j += ",\"yaw\":" + String(round(getYaw() * 10) / 10);
+  j += ",\"gyroZ\":" + String(round(getGyroZ() * 10) / 10);
+  j += ",\"servo\":" + String(getServoAngle());
+  j += ",\"behavior\":\"" + getBehavior() + "\"";
+  j += ",\"rssi\":" + String(WiFi.RSSI());
+  j += ",\"heap\":" + String(ESP.getFreeHeap());
+  j += ",\"uptime\":" + String((millis() - startTime) / 1000);
+  j += "}";
+  return j;
 }
 
 void sendTelemetry() {
   String json = buildTelemetryJson();
   webSocket.broadcastTXT(json);
-  mqttPublishTelemetry();
+  if (mqttEnabled && mqttClient.connected())
+    mqttClient.publish(getTeleTopic().c_str(), json.c_str());
 }
 
 // =======================
 // PUSH CONFIG TO CLIENT
 // =======================
 void sendConfigToClient(uint8_t clientNum) {
-  JSON_DOC(512) doc;
-  doc["config"] = true;
-  doc["maxSpeed"] = maxSpeed;
-  doc["rampRate"] = rampRate;
-  doc["motorTimeout"] = motorTimeout;
-  doc["powerSave"] = powerSave;
-  doc["speedLimitEnabled"] = speedLimitEnabled;
-  doc["speedLimit"] = speedLimit;
-  doc["leftTrim"] = leftTrim;
-  doc["rightTrim"] = rightTrim;
-  doc["ssid"] = wifiSsid;
-  doc["mqttBroker"] = mqttBroker;
-  doc["mqttPort"] = mqttPort;
-  doc["mqttEspPort"] = mqttPort;
-  doc["mqttUser"] = mqttUser;
-  doc["mqttPass"] = mqttPass;
-  doc["mqttPrefix"] = mqttTopicPrefix;
-  doc["mqttEnabled"] = mqttEnabled;
-  doc["mqttTls"] = mqttTls;
-  doc["deviceName"] = deviceName;
-  doc["fw"] = FW_VERSION;
-  doc["emergency"] = emergencyStop;
-  doc["safeDist"] = getSafetyThreshold();
-  String json;
-  serializeJson(doc, json);
-  webSocket.sendTXT(clientNum, json);
+  String j = "{\"config\":true";
+  j += ",\"maxSpeed\":" + String(maxSpeed);
+  j += ",\"rampRate\":" + String(rampRate);
+  j += ",\"motorTimeout\":" + String(motorTimeout);
+  j += ",\"powerSave\":" + String(powerSave ? "true" : "false");
+  j += ",\"speedLimitEnabled\":" + String(speedLimitEnabled ? "true" : "false");
+  j += ",\"speedLimit\":" + String(speedLimit);
+  j += ",\"leftTrim\":" + String(leftTrim);
+  j += ",\"rightTrim\":" + String(rightTrim);
+  j += ",\"ssid\":\"" + wifiSsid + "\"";
+  j += ",\"mqttBroker\":\"" + mqttBroker + "\"";
+  j += ",\"mqttPort\":" + String(mqttPort);
+  j += ",\"mqttEspPort\":" + String(mqttPort);
+  j += ",\"mqttUser\":\"" + mqttUser + "\"";
+  j += ",\"mqttPass\":\"" + mqttPass + "\"";
+  j += ",\"mqttPrefix\":\"" + mqttTopicPrefix + "\"";
+  j += ",\"mqttEnabled\":" + String(mqttEnabled ? "true" : "false");
+  j += ",\"mqttTls\":" + String(mqttTls ? "true" : "false");
+  j += ",\"deviceName\":\"" + deviceName + "\"";
+  j += ",\"fw\":\"" + String(FW_VERSION) + "\"";
+  j += ",\"emergency\":" + String(emergencyStop ? "true" : "false");
+  j += ",\"safeDist\":" + String(getSafetyThreshold());
+  j += "}";
+  webSocket.sendTXT(clientNum, j);
 }
 
 // =======================
@@ -1310,16 +1216,6 @@ void connectMQTT() {
     int st = mqttClient.state();
     wsLog("MQTT connect failed: " + mqttBroker + " (state=" + String(st) + ")");
   }
-}
-
-// =======================
-// MQTT PUBLISH TELEMETRY
-// =======================
-void mqttPublishTelemetry() {
-  if (!mqttEnabled || !mqttClient.connected()) return;
-
-  String json = buildTelemetryJson();
-  mqttClient.publish(getTeleTopic().c_str(), json.c_str());
 }
 
 // =======================
@@ -1403,11 +1299,9 @@ void setup() {
   Serial.begin(115200);
   startTime = millis();
 
-  delay(300);
+  delay(100);
 
   pinMode(LED_PIN, OUTPUT);
-  pinMode(BATTERY_PIN, INPUT);
-  analogSetPinAttenuation(BATTERY_PIN, ADC_11db);
   digitalWrite(LED_PIN, LOW);
 
   ledcSetup(CH_BUZZER, 1000, 8); // placeholder, buzzerOn() nanti override
@@ -1418,6 +1312,7 @@ void setup() {
 
   Wire.begin(SENSOR_SDA, SENSOR_SCL);
   Wire.setClock(100000);
+  Wire.setTimeout(50);
 
   initVL53L0X();
   initMPU6050();
