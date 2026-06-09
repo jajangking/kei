@@ -9,6 +9,7 @@
 #include <WiFiClientSecure.h>
 #include <Update.h>
 #include <soc/rtc_cntl_reg.h>
+#include <Wire.h>
 #include "sensors.h"
 #include "autonomy.h"
 
