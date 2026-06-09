@@ -56,3 +56,25 @@ Batere (+) ── R1 (2×220Ω seri = 440Ω) ── GPIO34 ── R2 (220Ω) ─
 ```
 
 Cara bikin R1: sambungin 2 resistor 220Ω secara seri (berantai). GPIO34 kebaca 2.6V di batere 7.4V (aman).
+
+## 7. Servo SG90
+
+| ESP32 | kabel | Servo |
+|---|---|---|
+| **GPIO5** | kuning | Signal |
+| **5V** | merah | VCC |
+| **GND** | coklat/hitam | GND |
+
+## 8. MPU6050 (gyro + accelerometer, 6-axis)
+
+Bagikan bus I2C sama VL53L0X.
+
+| ESP32 | kabel | MPU6050 |
+|---|---|---|
+| **GPIO21** | hijau | SDA |
+| **GPIO22** | kuning | SCL |
+| **3.3V** | orange | VCC |
+| **GND** | hitam | GND |
+| **GND** | hitam | AD0 (set address 0x68) |
+
+AD0 langsung ke GND (pilih I2C address 0x68). Jangan di-fly. Jangan pake 5V — MPU6050 cuma toleran 3.3V.

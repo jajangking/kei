@@ -10,6 +10,7 @@
 #include <Update.h>
 #include <soc/rtc_cntl_reg.h>
 #include "sensors.h"
+#include "autonomy.h"
 
 // =======================
 // ARDUINOJSON COMPATIBILITY (v6 & v7)
@@ -633,6 +634,19 @@ void loop() {
   // Auto-retry sensor kalo gagal init
   retrySensor();
 
+  // MPU6050 — baca tiap loop
+  readMPU6050();
+
+  // Autonomy tick — bisa override target speeds
+  if (!emergencyStop) {
+    int autoL = 0, autoR = 0;
+    tickAutonomy(&autoL, &autoR);
+    if (getBehavior() != "stop") {
+      targetLeftSpeed = autoL;
+      targetRightSpeed = autoR;
+    }
+  }
+
   // VL53L0X SAFETY — pake raw (tanpa filter), display pake filtered
   int obstacleDist = readDistanceRaw();
   safetyActive = (!emergencyStop && obstacleDist > 0 && obstacleDist < getSafetyThreshold());
@@ -674,8 +688,9 @@ void handleMessage(String msg) {
   if (doc["emergency"].is<bool>()) {
     emergencyStop = doc["emergency"].as<bool>();  
     if (emergencyStop) {  
-      stopMotors();  
-    }  
+      stopMotors();
+      if (getBehavior() != "stop") setBehavior("stop");
+    }
     return;
   }
 
@@ -854,6 +869,27 @@ void handleMessage(String msg) {
     return;
   }
 
+  // BEHAVIOR / AUTONOMY
+  if (doc["behavior"].is<String>()) {
+    String b = doc["behavior"].as<String>();
+    if (b == "explore" || b == "stop") {
+      setBehavior(b);
+    }
+    return;
+  }
+
+  // RESET YAW MPU6050
+  if (doc["headingReset"] == true) {
+    resetYaw();
+    return;
+  }
+
+  // SERVO
+  if (doc["servo"].is<int>()) {
+    setServoAngle(constrain(doc["servo"].as<int>(), 0, 180));
+    return;
+  }
+
   // DEVICE NAME
   if (doc["deviceName"].is<String>()) {
     saveDeviceNameConfig(doc["deviceName"].as<String>());
@@ -911,13 +947,16 @@ void handleMessage(String msg) {
     return;
   }
 
-  // MOTOR
+  // MOTOR — manual command overrides autonomy
   if (
     doc["leftMotor"].is<int>() ||
     doc["rightMotor"].is<int>()
   ) {
     if (emergencyStop)  
       return;  
+
+    // Manual motor command → stop autonomy
+    if (getBehavior() != "stop") setBehavior("stop");
 
     int cap = speedLimitEnabled  
       ? speedLimit  
@@ -1126,7 +1165,7 @@ String buildTelemetryJson() {
 
   String mode = emergencyStop
     ? "emergency"
-    : "manual";
+    : (getBehavior() != "stop" ? "auto" : "manual");
 
   int avgSpeed = (
     abs(currentLeftSpeed) +
@@ -1167,6 +1206,13 @@ String buildTelemetryJson() {
   doc["distance"] = readDistance();
   doc["sensor_ok"] = isSensorReady();
   doc["safeDist"] = getSafetyThreshold();
+  doc["mpu_ok"] = isMPUReady();
+  doc["roll"] = round(getRoll() * 10) / 10;
+  doc["pitch"] = round(getPitch() * 10) / 10;
+  doc["yaw"] = round(getYaw() * 10) / 10;
+  doc["gyroZ"] = round(getGyroZ() * 10) / 10;
+  doc["servo"] = getServoAngle();
+  doc["behavior"] = getBehavior();
 
   String json;
   serializeJson(doc, json);
@@ -1362,5 +1408,10 @@ void setup() {
 
   playStartupMelody();
 
+  Wire.begin(SENSOR_SDA, SENSOR_SCL);
+  Wire.setClock(100000);
+
   initVL53L0X();
+  initMPU6050();
+  initAutonomy();
 }

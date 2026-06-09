@@ -2,65 +2,164 @@
 #include <Wire.h>
 #include <Adafruit_VL53L0X.h>
 
+// ============================================================
+// VL53L0X
+// ============================================================
 static Adafruit_VL53L0X lox;
-static bool sensorReady = false;
-static int lastDistance = -1;
-static String i2cLog = "";
-static int safetyThreshold = 200;
+static bool vlReady = false;
+static int lastDist = -1;
 static int lastRaw = -1;
+static String diagLog = "";
+static int safetyThresh = 200;
 
-#define SENSOR_RETRY_MS 10000
+#define RETRY_MS 10000
 static unsigned long lastRetry = 0;
-static bool initAttempted = false;
+static bool initDone = false;
 
 bool initVL53L0X() {
-  i2cLog = "[SENSOR] init...";
-
-  // Sama persis kayak test sketch user — biarkan lox.begin() handle Wire
+  diagLog = "[VL53L0X] init...";
   if (lox.begin()) {
     Wire.setClock(100000);
-    i2cLog += "\n[SENSOR] VL53L0X OK";
-    sensorReady = true;
-    initAttempted = true;
+    diagLog += "\n[VL53L0X] OK";
+    vlReady = true;
+    initDone = true;
     return true;
   }
-
-  i2cLog += "\n[SENSOR] init gagal";
-  initAttempted = true;
-  sensorReady = false;
+  diagLog += "\n[VL53L0X] gagal";
+  initDone = true;
+  vlReady = false;
   return false;
 }
 
 int readDistanceRaw() {
-  if (!sensorReady) return -1;
-  VL53L0X_RangingMeasurementData_t measure;
-  lox.rangingTest(&measure, false);
-  if (measure.RangeStatus == 4) return -1;
-  lastRaw = (int)measure.RangeMilliMeter;
+  if (!vlReady) return -1;
+  VL53L0X_RangingMeasurementData_t m;
+  lox.rangingTest(&m, false);
+  if (m.RangeStatus == 4) return -1;
+  lastRaw = (int)m.RangeMilliMeter;
   return lastRaw;
 }
 
 int readDistance() {
-  if (!sensorReady) return -1;
-  int raw = readDistanceRaw();
-  if (raw < 0) { lastDistance = -1; return -1; }
-  if (lastDistance < 0) lastDistance = raw;
-  else lastDistance = (lastDistance * 2 + raw) / 3;
-  return lastDistance;
+  if (!vlReady) return -1;
+  int r = readDistanceRaw();
+  if (r < 0) { lastDist = -1; return -1; }
+  if (lastDist < 0) lastDist = r;
+  else lastDist = (lastDist * 2 + r) / 3;
+  return lastDist;
 }
 
-bool isSensorReady() { return sensorReady; }
-String getSensorDiagnostic() { return i2cLog; }
-void setSafetyThreshold(int mm) { safetyThreshold = mm; }
-int getSafetyThreshold() { return safetyThreshold; }
+bool isSensorReady() { return vlReady; }
+String getSensorDiagnostic() { return diagLog; }
+void setSafetyThreshold(int mm) { safetyThresh = mm; }
+int getSafetyThreshold() { return safetyThresh; }
 
 void retrySensor() {
-  if (sensorReady) return;
+  if (vlReady || !initDone) return;
   unsigned long now = millis();
-  if (!initAttempted || now - lastRetry < SENSOR_RETRY_MS) return;
+  if (now - lastRetry < RETRY_MS) return;
   lastRetry = now;
-  Serial.println("[SENSOR] Auto-retry init...");
-  sensorReady = false;
-  if (initVL53L0X()) Serial.println("[SENSOR] Auto-retry SUCCESS!");
-  else Serial.println("[SENSOR] Auto-retry failed");
+  Serial.println("[VL53L0X] auto-retry...");
+  vlReady = false;
+  if (initVL53L0X()) Serial.println("[VL53L0X] OK");
+  else Serial.println("[VL53L0X] gagal");
 }
+
+// ============================================================
+// MPU6050
+// ============================================================
+#define MPU_ADDR 0x68
+#define MPU_PWR1 0x6B
+#define MPU_ACCEL 0x3B
+#define MPU_GYRO 0x43
+
+static bool mpuReady = false;
+static int16_t ax, ay, az, gx, gy, gz;
+static float roll = 0, pitch = 0, yaw = 0;
+static float gyroZ = 0;
+static unsigned long lastMPU = 0;
+static float gzOffset = 0;
+#define CAL_SAMPLES 200
+
+static void writeMPU(byte reg, byte val) {
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(reg); Wire.write(val);
+  Wire.endTransmission();
+}
+
+static void readMPURaw(byte reg, byte* buf, int len) {
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(reg);
+  Wire.endTransmission(false);
+  Wire.requestFrom(MPU_ADDR, len);
+  for (int i = 0; i < len && Wire.available(); i++) buf[i] = Wire.read();
+}
+
+static int16_t read16(byte reg) {
+  byte buf[2];
+  readMPURaw(reg, buf, 2);
+  return (buf[0] << 8) | buf[1];
+}
+
+bool initMPU6050() {
+  Wire.beginTransmission(MPU_ADDR);
+  if (Wire.endTransmission() != 0) {
+    Serial.println("[MPU] not found");
+    mpuReady = false;
+    return false;
+  }
+
+  writeMPU(MPU_PWR1, 0);
+  delay(100);
+
+  Serial.println("[MPU] calibrate gyro Z...");
+  float sum = 0;
+  for (int i = 0; i < CAL_SAMPLES; i++) {
+    sum += read16(MPU_GYRO + 2) / 131.0;
+    delay(5);
+  }
+  gzOffset = sum / CAL_SAMPLES;
+  Serial.printf("[MPU] gyroZ offset: %.2f\n", gzOffset);
+
+  mpuReady = true;
+  lastMPU = millis();
+  Serial.println("[MPU] OK");
+  return true;
+}
+
+bool isMPUReady() { return mpuReady; }
+
+void readMPU6050() {
+  if (!mpuReady) return;
+
+  byte buf[14];
+  readMPURaw(MPU_ACCEL, buf, 14);
+
+  ax = (buf[0] << 8) | buf[1];
+  ay = (buf[2] << 8) | buf[3];
+  az = (buf[4] << 8) | buf[5];
+  gx = (buf[8] << 8) | buf[9];
+  gy = (buf[10] << 8) | buf[11];
+  gz = (buf[12] << 8) | buf[13];
+
+  float accX = ax / 16384.0;
+  float accY = ay / 16384.0;
+  float accZ = az / 16384.0;
+
+  roll  = atan2(accY, accZ) * 180 / PI;
+  pitch = atan2(-accX, sqrt(accY * accY + accZ * accZ)) * 180 / PI;
+
+  unsigned long now = millis();
+  float dt = (now - lastMPU) / 1000.0;
+  if (dt > 0.1) dt = 0.01;
+  lastMPU = now;
+
+  gyroZ = gz / 131.0 - gzOffset;
+  yaw += gyroZ * dt;
+}
+
+float getRoll() { return roll; }
+float getPitch() { return pitch; }
+float getYaw() { return yaw; }
+float getGyroZ() { return gyroZ; }
+void resetYaw() { yaw = 0; }

@@ -32,6 +32,13 @@ interface Telemetry {
   distance?: number;
   sensor_ok?: boolean;
   safeDist?: number;
+  mpu_ok?: boolean;
+  roll?: number;
+  pitch?: number;
+  yaw?: number;
+  gyroZ?: number;
+  servo?: number;
+  behavior?: string;
 }
 
 export default function RemotePage() {
@@ -558,11 +565,28 @@ export default function RemotePage() {
               className="w-16 h-1 accent-red-500" />
             <span className="text-red-400 text-[7px] font-mono w-6 text-right">{(telemetry.safeDist ?? 200) / 10}cm</span>
           </span>
+          {telemetry.yaw != null && (
+            <span className="text-zinc-500 col-span-2">yaw <span className="text-orange-400">{telemetry.yaw.toFixed(0)}°</span> roll <span className="text-cyan-400">{telemetry.roll?.toFixed(1)}°</span></span>
+          )}
+          {telemetry.behavior && telemetry.behavior !== "stop" && (
+            <span className="text-zinc-500 col-span-4 text-center text-[9px]">
+              behavior: <span className="text-emerald-400 font-bold uppercase">{telemetry.behavior}</span>
+            </span>
+          )}
           {telemetry.ssid && (
             <span className="text-zinc-500 col-span-2">ssid <span className="text-cyan-400">{telemetry.ssid}</span></span>
           )}
           {telemetry.deviceName && (
             <span className="text-zinc-500 col-span-2">nama <span className="text-fuchsia-400">{telemetry.deviceName}</span></span>
+          )}
+          {telemetry.servo != null && (
+            <span className="text-zinc-500 col-span-4 flex items-center gap-2">
+              servo <input type="range" min="0" max="180" step="1"
+                value={telemetry.servo}
+                onChange={(e) => sendESP({ servo: parseInt(e.target.value) })}
+                className="w-20 h-1 accent-amber-500" />
+              <span className="text-amber-400 w-6 text-right">{telemetry.servo}°</span>
+            </span>
           )}
         </div>
       </div>

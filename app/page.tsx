@@ -38,6 +38,13 @@ interface Telemetry {
   distance?: number;
   sensor_ok?: boolean;
   safeDist?: number;
+  mpu_ok?: boolean;
+  roll?: number;
+  pitch?: number;
+  yaw?: number;
+  gyroZ?: number;
+  servo?: number;
+  behavior?: string;
 }
 
 export default function VisionPage() {
@@ -1039,6 +1046,7 @@ export default function VisionPage() {
     switch (bhv) {
       case "stop":
         behaviorRef.current = null;
+        sendESP({ behavior: "stop" });
         if (motorRef2.current) motorRef2.current.stop();
         if (trackingRef.current) { setTracking(false); trackingRef.current = false; trackTargetRef.current = null; trackLabelRef.current = null; setTrackInfo(""); setPickerTargets([]); }
         setTestResult("STOP");
@@ -1059,12 +1067,9 @@ export default function VisionPage() {
         if (trackingRef.current) { setTracking(false); trackingRef.current = false; trackTargetRef.current = null; }
         break;
       case "explore":
-        behaviorRef.current = { mode: "explore" };
-        const es = exploreBhvRef.current;
-        es.phase = "drive"; es.scanTimer = 0; es.avoidStep = 0; es.avoidTimer = 0;
-        es.returnPath = []; es.returnIdx = 0; es.driveFwd = 180;
-        setTestResult("explore start...");
-        lastExplorePhaseRef.current = "";
+        behaviorRef.current = null;
+        sendESP({ behavior: "explore" });
+        setTestResult("explore (ESP32 mode)...");
         speakSimple("Mulai jelajah");
         if (trackingRef.current) { setTracking(false); trackingRef.current = false; trackTargetRef.current = null; }
         break;
@@ -2339,6 +2344,13 @@ export default function VisionPage() {
                   <span className="text-red-400 text-[7px] font-mono w-6 text-right">{(telemetry.safeDist ?? 200) / 10}cm</span>
                 </span>
                 <span className="text-zinc-500">{telemetry.ip ?? '-'}</span>
+                <span className="text-zinc-500">yaw <span className="text-orange-400">{telemetry.yaw != null ? `${telemetry.yaw.toFixed(0)}°` : '-'}</span></span>
+                <span className="text-zinc-500">roll <span className="text-cyan-400">{telemetry.roll != null ? `${telemetry.roll.toFixed(1)}°` : '-'}</span>{' '}pitch <span className="text-cyan-400">{telemetry.pitch != null ? `${telemetry.pitch.toFixed(1)}°` : '-'}</span></span>
+                {telemetry.behavior && telemetry.behavior !== "stop" && (
+                  <span className="text-zinc-500 col-span-3 text-center text-[9px]">
+                    behavior: <span className="text-emerald-400 font-bold uppercase">{telemetry.behavior}</span>
+                  </span>
+                )}
                 {telemetry.ssid && (
                   <span className="text-zinc-500 col-span-2">ssid <span className="text-cyan-400">{telemetry.ssid}</span></span>
                 )}
@@ -2353,6 +2365,23 @@ export default function VisionPage() {
                   <span className="text-zinc-500 col-span-2">nama <span className="text-fuchsia-400">{telemetry.deviceName}</span></span>
                 )}
               </div>
+              {/* servo + heading controls */}
+              {telemetry.servo != null && (
+                <div className="flex items-center gap-2 px-3 py-1">
+                  <span className="text-zinc-500 text-[8px] font-mono w-8">servo</span>
+                  <input type="range" min="0" max="180" step="1"
+                    value={telemetry.servo}
+                    onChange={(e) => sendESP({ servo: parseInt(e.target.value) })}
+                    className="w-20 h-1 accent-amber-500" />
+                  <span className="text-amber-400 text-[8px] font-mono w-6 text-right">{telemetry.servo}°</span>
+                </div>
+              )}
+              {telemetry.mpu_ok && (
+                <button onClick={() => sendESP({ headingReset: true })}
+                  className="px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400 text-[7px] font-mono border border-zinc-700 active:scale-90">
+                  RESET HEADING
+                </button>
+              )}
               {/* wifi config */}
               {showWifiConfig && (
                 <div className="flex gap-1.5">
