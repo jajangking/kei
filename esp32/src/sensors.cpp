@@ -13,8 +13,11 @@ static String diagLog = "";
 static int safetyThresh = 200;
 
 #define RETRY_MS 10000
+#define MAX_RETRIES 3
 static unsigned long lastRetry = 0;
 static bool initDone = false;
+static int retryCount = 0;
+static bool sensorDead = false; // give up after max retries
 
 // Rate-limiter + consecutive-failure backoff
 #define VL_READ_INTERVAL 100    // normal: 10 reads/sec
@@ -72,17 +75,24 @@ void setSafetyThreshold(int mm) { safetyThresh = mm; }
 int getSafetyThreshold() { return safetyThresh; }
 
 void retrySensor() {
-  if (vlReady || !initDone) return;
+  if (vlReady || !initDone || sensorDead) return;
   unsigned long now = millis();
   if (now - lastRetry < RETRY_MS) return;
   lastRetry = now;
-  Serial.println("[VL53L0X] auto-retry...");
+  retryCount++;
+  if (retryCount > MAX_RETRIES) {
+    sensorDead = true;
+    Serial.println("[VL53L0X] max retries — sensor dianggap mati");
+    return;
+  }
+  Serial.printf("[VL53L0X] auto-retry %d/%d...\n", retryCount, MAX_RETRIES);
   vlReady = false;
   if (initVL53L0X()) {
     Serial.println("[VL53L0X] OK");
     vlFailCount = 0;
+    retryCount = 0;
   } else {
-    Serial.println("[VL53L0X] gagal");
+    Serial.printf("[VL53L0X] gagal (%d/3)\n", retryCount);
   }
 }
 
