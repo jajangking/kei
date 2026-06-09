@@ -635,9 +635,6 @@ void loop() {
   // Auto-retry sensor kalo gagal init
   retrySensor();
 
-  // MPU6050 — baca tiap loop
-  readMPU6050();
-
   // Autonomy tick — bisa override target speeds
   if (!emergencyStop) {
     int autoL = 0, autoR = 0;
@@ -648,8 +645,9 @@ void loop() {
     }
   }
 
-  // VL53L0X SAFETY — pake raw (tanpa filter), display pake filtered
+  // I2C reads sequential — VL53L0X dulu, baru MPU (biar gak tabrakan bus)
   int obstacleDist = readDistanceRaw();
+  readMPU6050();
   safetyActive = (!emergencyStop && obstacleDist > 0 && obstacleDist < getSafetyThreshold());
 
   // RAMP

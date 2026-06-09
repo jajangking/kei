@@ -131,6 +131,9 @@ bool isMPUReady() { return mpuReady; }
 
 void readMPU6050() {
   if (!mpuReady) return;
+  unsigned long now = millis();
+  if (now - lastMPU < 10) return; // rate limit 10ms biar gak tabrakan I2C
+  if (now - lastMPU > 500) lastMPU = now - 10; // clamp dt kalo lama
 
   byte buf[14];
   readMPURaw(MPU_ACCEL, buf, 14);
@@ -149,9 +152,8 @@ void readMPU6050() {
   roll  = atan2(accY, accZ) * 180 / PI;
   pitch = atan2(-accX, sqrt(accY * accY + accZ * accZ)) * 180 / PI;
 
-  unsigned long now = millis();
   float dt = (now - lastMPU) / 1000.0;
-  if (dt > 0.1) dt = 0.01;
+  if (dt < 0.001) dt = 0.001;
   lastMPU = now;
 
   gyroZ = gz / 131.0 - gzOffset;
