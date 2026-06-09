@@ -37,8 +37,8 @@ jobs:
         if: success()
         run: |
           mkdir -p /tmp/release
-          cp esp32/.pio/build/esp32dev/firmware.bin /tmp/release/firmware-ws-mqtt.bin
-          cp esp32/.pio/build/esp32dev-http/firmware.bin /tmp/release/firmware-http.bin
+          cp esp32/.pio/build/esp32dev/firmware.bin /tmp/release/firmware-http.bin
+          cp esp32/.pio/build/esp32dev-full/firmware.bin /tmp/release/firmware-full.bin
           ls -la /tmp/release/
 
       - name: Upload all binaries
@@ -56,6 +56,6 @@ jobs:
             /tmp/release/firmware-http.bin \
             --repo "${{ github.repository }}" \
             --title "Firmware Build #${{ github.run_number }}" \
-            --notes "**firmware-ws-mqtt.bin** — WebSocket + MQTT version (full feature)\\n**firmware-http.bin** — HTTP-only version (ringan, no freeze)"
+            --notes "**firmware-http.bin** — HTTP-only version (default, ringan)\\n**firmware-full.bin** — WebSocket + MQTT version (full feature)"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

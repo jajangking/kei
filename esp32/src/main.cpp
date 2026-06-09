@@ -1,154 +1,81 @@
 #include <WiFi.h>
-#include <WebSocketsServer.h>
 #include <WebServer.h>
 #include <ArduinoJson.h>
 #include <ESPmDNS.h>
 #include <ArduinoOTA.h>
 #include <Preferences.h>
-#include <PubSubClient.h>
-#include <WiFiClientSecure.h>
 #include <Update.h>
-#include <soc/rtc_cntl_reg.h>
 #include <Wire.h>
 #include "sensors.h"
 #include "autonomy.h"
 
-// =======================
-// ARDUINOJSON COMPATIBILITY (v6 & v7)
-// =======================
 #define JSON_DOC(x) JsonDocument
 
-// =======================
-// VERSION
-// =======================
-#define FW_VERSION "1.0.0 - " __DATE__ " " __TIME__
+#define FW_VERSION "1.0.0-http - " __DATE__ " " __TIME__
 
-// =======================
-// PINS
-// =======================
 #define LED_PIN 2
 
-// =======================
-// WIFI
-// =======================
 String wifiSsid = "STARLINK";
 String wifiPass = "12345678910";
-#define WIFI_TIMEOUT 15000
 
 bool wifiConnecting = false;
 unsigned long wifiConnectStart = 0;
 unsigned long lastWifiAttempt = 0;
 
-// =======================
-// SERVER
-// =======================
-WebSocketsServer webSocket(81);
 WebServer httpServer(80);
 
-// =======================
-// MOTOR PINS
-// =======================
 #define PWMA 25
 #define AIN1 26
 #define AIN2 27
-
 #define PWMB 13
 #define BIN1 14
 #define BIN2 33
-
 #define STBY 32
 #define BUZZER 4
-
 #define CH_LEFT 0
 #define CH_RIGHT 1
 #define CH_BUZZER 2
 
-// =======================
-// TELEMETRY
-// =======================
 #define TELEMETRY_INTERVAL 1000
 static String cachedIP = "";
 static int cachedRssi = 0;
 
-// =======================
-// STATE
-// =======================
 unsigned long startTime = 0;
 unsigned long lastTelemetry = 0;
 unsigned long lastCommandTime = 0;
 unsigned long lastLedToggle = 0;
-unsigned long lastMqttAttempt = 0;
 
 int targetLeftSpeed = 0;
 int targetRightSpeed = 0;
-
 int currentLeftSpeed = 0;
 int currentRightSpeed = 0;
 
 bool ledState = false;
 bool emergencyStop = false;
-bool wsConnected = false;
-
 bool safetyActive = false;
 
-// =======================
-// CONFIG
-// =======================
 int maxSpeed = 255;
-int rampRate = 255;     // instant — no ramp
-int motorTimeout = 300;  // stop 300ms after joystick released
-
+int rampRate = 255;
+int motorTimeout = 300;
 bool powerSave = false;
-
 bool speedLimitEnabled = false;
 int speedLimit = 100;
-
 int leftTrim = 0;
 int rightTrim = 0;
-
 bool initialized = false;
-
-// =======================
-// MQTT
-// =======================
-WiFiClient mqttPlainClient;
-WiFiClientSecure mqttSecureClient;
-PubSubClient mqttClient(mqttSecureClient);
-
-String mqttBroker = "";
-int mqttPort = 8883;
-String mqttUser = "";
-String mqttPass = "";
-String mqttTopicPrefix = "kei/robot";
-
-bool mqttEnabled = false;
-bool mqttTls = true;
-
 String deviceName = "";
 bool deviceNameConfigured = false;
 bool otaError = false;
 
-// =======================
-// DECLARATION
-// =======================
 void handleMessage(String msg);
 void stopMotors();
 void writeMotorA(int speed);
 void writeMotorB(int speed);
 void rampMotors();
-void sendTelemetry();
-
-void wsLog(String msg) {
-  webSocket.broadcastTXT("{\"type\":\"log\",\"msg\":\"" + msg + "\"}");
-  Serial.println(msg);
-}
 String buildTelemetryJson();
 void updateLED();
-void updateBuzzer();
-void mqttCallback(char* topic, byte* payload, unsigned int length);
 void connectWiFi();
 void handleWiFi();
-void connectMQTT();
 void handleRoot();
 void handleConfig();
 void saveRuntimeConfig();
@@ -159,21 +86,12 @@ void saveSpeedLimitConfig();
 void loadSpeedLimitConfig();
 void saveWiFiConfig(String ssid, String pass);
 void loadWiFiConfig();
-void saveMqttConfig(String broker, int port, String user, String pass, String prefix, bool enabled);
-void loadMqttConfig();
 void saveDeviceNameConfig(String name);
 void loadDeviceNameConfig();
 void applyPowerSave();
 void applyPowerSaveSafe();
-void sendConfigToClient(uint8_t clientNum);
-void buzzerOn(int freq);
-void buzzerOff();
-void playTone(int freq, int duration);
 void playStartupMelody();
 
-// =======================
-// SAVE CONFIG
-// =======================
 void saveRuntimeConfig() {
   Preferences prefs;
   prefs.begin("runtime", false);
@@ -232,11 +150,7 @@ void loadWiFiConfig() {
   String ssid = prefs.getString("ssid", "");
   String pass = prefs.getString("pass", "");
   prefs.end();
-
-  if (ssid.length() > 0) {
-    wifiSsid = ssid;  
-    wifiPass = pass;
-  }
+  if (ssid.length() > 0) { wifiSsid = ssid; wifiPass = pass; }
 }
 
 void saveWiFiConfig(String ssid, String pass) {
@@ -245,80 +159,14 @@ void saveWiFiConfig(String ssid, String pass) {
   prefs.putString("ssid", ssid);
   prefs.putString("pass", pass);
   prefs.end();
-
-  wifiSsid = ssid;
-  wifiPass = pass;
+  wifiSsid = ssid; wifiPass = pass;
 }
 
-void loadMqttConfig() {
-  Preferences prefs;
-  prefs.begin("mqtt", false);
-  mqttBroker = prefs.getString("broker", "");
-  mqttPort = prefs.getInt("port", 8883);
-  mqttUser = prefs.getString("user", "");
-  mqttPass = prefs.getString("pass", "");
-  mqttTopicPrefix = prefs.getString("prefix", "kei/robot");
-  mqttEnabled = prefs.getBool("enabled", false);
-  mqttTls = prefs.getBool("tls", true);
-  prefs.end();
-}
-
-void saveMqttConfig(
-  String broker,
-  int port,
-  String user,
-  String pass,
-  String prefix,
-  bool enabled,
-  bool tls
-) {
-  Preferences prefs;
-  prefs.begin("mqtt", false);
-  prefs.putString("broker", broker);
-  prefs.putInt("port", port);
-  prefs.putString("user", user);
-  prefs.putString("pass", pass);
-  prefs.putString("prefix", prefix);
-  prefs.putBool("enabled", enabled);
-  prefs.putBool("tls", tls);
-  prefs.end();
-
-  mqttBroker = broker;
-  mqttPort = port;
-  mqttUser = user;
-  mqttPass = pass;
-  mqttTopicPrefix = prefix;
-  mqttEnabled = enabled;
-  mqttTls = tls;
-}
-
-// =======================
-// POWER SAVE
-// =======================
-void applyPowerSave() {
-  if (powerSave) {
-    WiFi.setSleep(WIFI_PS_MIN_MODEM);  
-    setCpuFrequencyMhz(80);
-  } else {
-    WiFi.setSleep(WIFI_PS_NONE);  
-    setCpuFrequencyMhz(240);
-  }
-}
-
-void applyPowerSaveSafe() {
-  savePowerSaveConfig();
-  ESP.restart();
-}
-
-// =======================
-// DEVICE NAME
-// =======================
 void saveDeviceNameConfig(String name) {
   Preferences prefs;
   prefs.begin("dname", false);
   prefs.putString("name", name);
   prefs.end();
-
   deviceName = name;
   deviceNameConfigured = name.length() > 0;
 }
@@ -328,49 +176,23 @@ void loadDeviceNameConfig() {
   prefs.begin("dname", false);
   String name = prefs.getString("name", "");
   prefs.end();
-
-  if (name.length() > 0) {
-    deviceName = name;
-    deviceNameConfigured = true;
-  }
+  if (name.length() > 0) { deviceName = name; deviceNameConfigured = true; }
 }
 
-// =======================
-// MQTT TOPIC
-// =======================
-String getDeviceId() {
-  if (deviceNameConfigured && deviceName.length() > 0)
-    return deviceName;
-
-  String mac = WiFi.macAddress();
-  mac.replace(":", "");
-  return mac;
+void applyPowerSave() {
+  if (powerSave) { WiFi.setSleep(WIFI_PS_MIN_MODEM); setCpuFrequencyMhz(80); }
+  else { WiFi.setSleep(WIFI_PS_NONE); setCpuFrequencyMhz(240); }
 }
 
-String getCmdTopic() {
-  return mqttTopicPrefix + "/" + getDeviceId() + "/cmd";
-}
+void applyPowerSaveSafe() { savePowerSaveConfig(); ESP.restart(); }
 
-String getTeleTopic() {
-  return mqttTopicPrefix + "/" + getDeviceId() + "/telemetry";
-}
-
-// =======================
-// WIFI
-// =======================
 void connectWiFi() {
   loadWiFiConfig();
-
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(WIFI_PS_NONE);
   WiFi.setAutoReconnect(true);
   WiFi.setTxPower(WIFI_POWER_19_5dBm);
-
-  WiFi.begin(
-    wifiSsid.c_str(),
-    wifiPass.c_str()
-  );
-
+  WiFi.begin(wifiSsid.c_str(), wifiPass.c_str());
   wifiConnecting = true;
   wifiConnectStart = millis();
 }
@@ -381,12 +203,11 @@ void handleWiFi() {
       wifiConnecting = false;
       cachedIP = WiFi.localIP().toString();
       cachedRssi = WiFi.RSSI();
-      wsLog("WiFi connected: " + cachedIP + " (" + String(cachedRssi) + " dBm)");
+      Serial.println("WiFi connected: " + cachedIP + " (" + String(cachedRssi) + " dBm)");
     }
     initialized = true;
     return;
   }
-
   if (initialized) {
     wifiConnecting = true;
     if (millis() - lastWifiAttempt > 10000) {
@@ -398,710 +219,271 @@ void handleWiFi() {
   }
 
   initialized = true;
+  pinMode(AIN1, OUTPUT); pinMode(AIN2, OUTPUT);
+  pinMode(BIN1, OUTPUT); pinMode(BIN2, OUTPUT);
+  digitalWrite(AIN1, LOW); digitalWrite(AIN2, LOW);
+  digitalWrite(BIN1, LOW); digitalWrite(BIN2, LOW);
+  pinMode(STBY, OUTPUT); digitalWrite(STBY, LOW);
+  delay(500);
+  digitalWrite(STBY, HIGH);
+  ledcSetup(CH_LEFT, 1000, 8); ledcAttachPin(PWMA, CH_LEFT);
+  ledcSetup(CH_RIGHT, 1000, 8); ledcAttachPin(PWMB, CH_RIGHT);
+  stopMotors();
+  loadRuntimeConfig(); loadPowerSaveConfig(); loadSpeedLimitConfig(); loadDeviceNameConfig();
+  applyPowerSave();
+  connectWiFi();
+  MDNS.begin("kei");
 
-  // FIRST BOOT INIT
-    pinMode(AIN1, OUTPUT);
-    pinMode(AIN2, OUTPUT);
-    pinMode(BIN1, OUTPUT);
-    pinMode(BIN2, OUTPUT);
-    digitalWrite(AIN1, LOW);
-    digitalWrite(AIN2, LOW);
-    digitalWrite(BIN1, LOW);
-    digitalWrite(BIN2, LOW);
+  httpServer.on("/", handleRoot);
+  httpServer.on("/config", handleConfig);
+  httpServer.on("/version", []() {
+    httpServer.send(200, "application/json", "{\"fw\":\"" + String(FW_VERSION) + "\"}");
+  });
 
-    pinMode(STBY, OUTPUT);
-    digitalWrite(STBY, LOW);
+  httpServer.on("/ping", []() {
+    String j = "{\"pong\":true,\"ip\":\"" + cachedIP + "\",\"rssi\":" + String(cachedRssi) + ",\"fw\":\"" + String(FW_VERSION) + "\"}";
+    httpServer.send(200, "application/json", j);
+  });
 
-    delay(500);
-    digitalWrite(STBY, HIGH);
+  httpServer.on("/telemetry", []() {
+    httpServer.send(200, "application/json", buildTelemetryJson());
+  });
 
-    ledcSetup(CH_LEFT, 1000, 8);
-    ledcAttachPin(PWMA, CH_LEFT);
-    ledcSetup(CH_RIGHT, 1000, 8);
-    ledcAttachPin(PWMB, CH_RIGHT);
+  httpServer.on("/cmd", []() {
+    if (httpServer.hasArg("plain")) {
+      handleMessage(httpServer.arg("plain"));
+      httpServer.send(200, "text/plain", "ok");
+    } else {
+      httpServer.send(400, "text/plain", "no body");
+    }
+  });
 
-    stopMotors();
-
-    loadRuntimeConfig();
-    loadPowerSaveConfig();
-    loadSpeedLimitConfig();
-    loadDeviceNameConfig();
-    loadMqttConfig();
-
-    applyPowerSave();
-
-    connectWiFi();
-
-    MDNS.begin("kei");
-
-    webSocket.begin();
-    webSocket.enableHeartbeat(15000, 5000, 3);
-
-    webSocket.onEvent(
-      [](uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
-        switch(type) {  
-          case WStype_CONNECTED:
-            wsConnected = true;
-            emergencyStop = false;
-            sendConfigToClient(num);
-            if (isSensorReady()) {
-              wsLog("[SENSOR] VL53L0X OK");
-            } else {
-              String diag = getSensorDiagnostic();
-              int idx = 0;
-              while (idx < (int)diag.length()) {
-                int nl = diag.indexOf('\n', idx);
-                if (nl < 0) nl = diag.length();
-                wsLog(diag.substring(idx, nl));
-                idx = nl + 1;
-              }
-            }
-            break;
-
-          case WStype_DISCONNECTED:  
-            wsConnected = false;  
-            stopMotors();  
-            break;  
-
-          case WStype_TEXT:  
-            handleMessage(String((char*)payload));  
-            break;  
-
-          default:  
-            break;  
-        }  
-      }
+  httpServer.on("/update", []() {
+    String html = F(
+      "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+      "<title>Kei OTA Update</title>"
+      "<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:sans-serif;background:#1a1a2e;color:#fff;padding:16px}"
+      "h1{font-size:20px;text-align:center;color:#e94560;margin-bottom:16px}"
+      ".sec{background:#16213e;border-radius:10px;padding:16px}"
+      "label{display:block;font-size:14px;margin-bottom:8px}"
+      "input[type=file]{width:100%;padding:10px;background:#0f3460;border:1px solid #1a3a6a;border-radius:6px;color:#fff}"
+      ".btn{width:100%;padding:12px;border:none;border-radius:8px;font-size:14px;font-weight:bold;cursor:pointer;margin-top:12px}"
+      ".btn-primary{background:#e94560;color:#fff}"
+      ".status{margin-top:12px;padding:10px;border-radius:6px;display:none;text-align:center}"
+      ".nav{margin-top:12px;text-align:center;font-size:12px}"
+      ".nav a{color:#e94560;text-decoration:none}"
+      "</style></head><body>"
+      "<h1>Firmware Update</h1>"
+      "<div class=sec>"
+      "<label>Pilih file .bin firmware</label>"
+      "<form id=form method=POST action=/upload enctype=multipart/form-data>"
+      "<input type=file name=firmware accept='.bin' required>"
+      "<button class='btn btn-primary' type=submit>Upload</button>"
+      "</form>"
+      "<div id=status class=status></div>"
+      "</div>"
+      "<div class=nav><a href='https://github.com/jajangking/kei/releases/latest' target=_blank>Download firmware dari GitHub</a></div>"
+      "<script>document.getElementById('form').onsubmit=function(e){"
+      "e.preventDefault();var f=new FormData(this);var s=document.getElementById('status');"
+      "s.style.display='block';s.style.background='#0f3460';s.textContent='Uploading...';"
+      "var x=new XMLHttpRequest();x.upload.onprogress=function(e){if(e.lengthComputable){"
+      "s.textContent=Math.round(e.loaded/e.total*100)+'% uploaded';}};"
+      "x.onload=function(){s.textContent=x.responseText;s.style.background=x.status==200?'#00a86b':'#e94560';};"
+      "x.onerror=function(){s.textContent='Upload failed';s.style.background='#e94560';};"
+      "x.open('POST','/upload');x.send(f);};</script>"
+      "</body></html>"
     );
+    httpServer.send(200, "text/html", html);
+  });
 
-    // HTTP
-    httpServer.on("/", handleRoot);
+  httpServer.on("/upload", HTTP_POST, []() {
+    httpServer.send(200, "text/plain", "Firmware updated! Rebooting...");
+    delay(1000);
+    ESP.restart();
+  }, []() {
+    HTTPUpload& upload = httpServer.upload();
+    if (upload.status == UPLOAD_FILE_START) {
+      otaError = false; stopMotors();
+      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) { Update.printError(Serial); otaError = true; }
+    } else if (upload.status == UPLOAD_FILE_WRITE) {
+      if (otaError) return;
+      if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) { Update.printError(Serial); otaError = true; }
+    } else if (upload.status == UPLOAD_FILE_END) {
+      if (otaError) { Update.end(false); Serial.println("OTA FAILED"); return; }
+      if (Update.end(true)) { Serial.printf("OTA success: %u bytes\n", upload.totalSize); }
+      else { Update.printError(Serial); }
+    }
+  });
 
-    httpServer.on("/config", []() {
-      handleConfig();
-    });
-
-    httpServer.on("/cmd", []() {
-      if (httpServer.hasArg("plain")) {
-        String body = httpServer.arg("plain");
-        handleMessage(body);
-        if (body.indexOf("\"ping\"") >= 0 || body.indexOf("ping") >= 0) {
-          httpServer.send(200, "application/json", "{\"pong\":true,\"ip\":\"" + WiFi.localIP().toString() + "\",\"rssi\":" + String(cachedRssi) + ",\"fw\":\"" + String(FW_VERSION) + "\"}");
-        } else {
-          httpServer.send(200, "text/plain", "ok");
-        }
-      } else {
-        httpServer.send(400, "text/plain", "no body");
-      }
-    });
-
-    httpServer.on("/version", []() {
-      String json = "{\"fw\":\"" + String(FW_VERSION) + "\"}";
-      httpServer.send(200, "application/json", json);
-    });
-
-    httpServer.on("/update", []() {
-      String html = F(
-        "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
-        "<title>Kei OTA Update</title>"
-        "<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:sans-serif;background:#1a1a2e;color:#fff;padding:16px}"
-        "h1{font-size:20px;text-align:center;color:#e94560;margin-bottom:16px}"
-        ".sec{background:#16213e;border-radius:10px;padding:16px}"
-        "label{display:block;font-size:14px;margin-bottom:8px}"
-        "input[type=file]{width:100%;padding:10px;background:#0f3460;border:1px solid #1a3a6a;border-radius:6px;color:#fff}"
-        ".btn{width:100%;padding:12px;border:none;border-radius:8px;font-size:14px;font-weight:bold;cursor:pointer;margin-top:12px}"
-        ".btn-primary{background:#e94560;color:#fff}"
-        ".status{margin-top:12px;padding:10px;border-radius:6px;display:none;text-align:center}"
-        ".nav{margin-top:12px;text-align:center;font-size:12px}"
-        ".nav a{color:#e94560;text-decoration:none}"
-        "</style></head><body>"
-        "<h1>Firmware Update</h1>"
-        "<div class=sec>"
-        "<label>Pilih file .bin firmware</label>"
-        "<form id=form method=POST action=/upload enctype=multipart/form-data>"
-        "<input type=file name=firmware accept='.bin' required>"
-        "<button class='btn btn-primary' type=submit>Upload</button>"
-        "</form>"
-        "<div id=status class=status></div>"
-        "</div>"
-        "<div class=nav><a href='https://github.com/jajangking/kei/releases/latest' target=_blank>Download firmware dari GitHub</a></div>"
-        "<script>document.getElementById('form').onsubmit=function(e){"
-        "e.preventDefault();var f=new FormData(this);var s=document.getElementById('status');"
-        "s.style.display='block';s.style.background='#0f3460';s.textContent='Uploading...';"
-        "var x=new XMLHttpRequest();x.upload.onprogress=function(e){if(e.lengthComputable){"
-        "s.textContent=Math.round(e.loaded/e.total*100)+'% uploaded';}};"
-        "x.onload=function(){s.textContent=x.responseText;s.style.background=x.status==200?'#00a86b':'#e94560';};"
-        "x.onerror=function(){s.textContent='Upload failed';s.style.background='#e94560';};"
-        "x.open('POST','/upload');x.send(f);};</script>"
-        "</body></html>"
-      );
-      httpServer.send(200, "text/html", html);
-    });
-
-    httpServer.on("/upload", HTTP_POST, []() {
-      httpServer.send(200, "text/plain", "Firmware updated! Rebooting...");
-      delay(1000);
-      ESP.restart();
-    }, []() {
-      HTTPUpload& upload = httpServer.upload();
-      if (upload.status == UPLOAD_FILE_START) {
-        otaError = false;
-        stopMotors();
-        if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
-          Update.printError(Serial);
-          otaError = true;
-        }
-      } else if (upload.status == UPLOAD_FILE_WRITE) {
-        if (otaError) return;
-        if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
-          Update.printError(Serial);
-          otaError = true;
-        }
-      } else if (upload.status == UPLOAD_FILE_END) {
-        if (otaError) {
-          Update.end(false);
-          wsLog("OTA FAILED — flash not modified, try again");
-          return;
-        }
-        if (Update.end(true)) {
-          Serial.printf("OTA update success: %u bytes\n", upload.totalSize);
-          wsLog("OTA update success: " + String(upload.totalSize) + " bytes");
-        } else {
-          Update.printError(Serial);
-        }
-      }
-    });
-
-    httpServer.begin();
-
-    // OTA
-    ArduinoOTA.onStart([]() {
-      stopMotors();
-    });
-
-    ArduinoOTA.begin();
-
-    wsLog("ESP32 ready — services started");
+  httpServer.begin();
+  ArduinoOTA.onStart([]() { stopMotors(); });
+  ArduinoOTA.begin();
+  Serial.println("ESP32 ready — HTTP-only");
 }
 
-// =======================
-// LOOP
-// =======================
 void loop() {
   ArduinoOTA.handle();
   httpServer.handleClient();
-  webSocket.loop();
   handleWiFi();
 
-  // MQTT
-  if (mqttEnabled) {
-    if (mqttClient.connected()) {
-      mqttClient.loop();
-    } else if (millis() - lastMqttAttempt > 30000) {
-      lastMqttAttempt = millis();
-      connectMQTT();
-    }
+  if (WiFi.status() != WL_CONNECTED) { stopMotors(); return; }
+
+  if (!emergencyStop && lastCommandTime > 0 && millis() - lastCommandTime > motorTimeout) {
+    targetLeftSpeed = 0; targetRightSpeed = 0;
   }
 
-  updateLED();
-  updateBuzzer();
-
-  // WIFI LOST
-  if (WiFi.status() != WL_CONNECTED) {
-    stopMotors();  
-    return;
-  }
-
-  // GRACEFUL RECONNECT HANDOVER
-  if (wifiConnecting) {
-    wifiConnecting = false;
-    connectMQTT();
-  }
-
-  // TIMEOUT
-  if (
-    !emergencyStop &&
-    lastCommandTime > 0 &&
-    millis() - lastCommandTime > motorTimeout
-  ) {
-    targetLeftSpeed = 0;  
-    targetRightSpeed = 0;
-  }
-
-  // Autonomy tick — bisa override target speeds
   if (!emergencyStop) {
     int autoL = 0, autoR = 0;
     tickAutonomy(&autoL, &autoR);
-    if (getBehavior() != "stop") {
-      targetLeftSpeed = autoL;
-      targetRightSpeed = autoR;
-    }
+    if (getBehavior() != "stop") { targetLeftSpeed = autoL; targetRightSpeed = autoR; }
   }
 
-  // I2C reads — readDistance() aman karena reuse cache dari tickAutonomy
   int obstacleDist = readDistance();
   safetyActive = (!emergencyStop && obstacleDist > 0 && obstacleDist < getSafetyThreshold());
   readMPU6050();
 
-  // RAMP
-  if (!emergencyStop) {
-    rampMotors();
+  if (!emergencyStop) rampMotors();
+
+  if (safetyActive) { ledcWrite(CH_LEFT, 0); ledcWrite(CH_RIGHT, 0); currentLeftSpeed = 0; currentRightSpeed = 0; }
+
+  if (millis() - lastTelemetry > TELEMETRY_INTERVAL) {
+    lastTelemetry = millis();
+    cachedRssi = WiFi.RSSI();
   }
 
-  if (safetyActive) {
-    ledcWrite(CH_LEFT, 0);
-    ledcWrite(CH_RIGHT, 0);
-    currentLeftSpeed = 0;
-    currentRightSpeed = 0;
-  }
-
-  // TELEMETRY
-  if (
-    millis() - lastTelemetry > TELEMETRY_INTERVAL
-  ) {
-    lastTelemetry = millis();  
-    sendTelemetry();
-  }
+  updateLED();
 }
 
-// =======================
-// HANDLE MESSAGE
-// =======================
 void handleMessage(String msg) {
   JSON_DOC(512) doc;
-
   DeserializationError error = deserializeJson(doc, msg);
-  if (error) {
-    Serial.println("JSON parse error: " + String(error.c_str()));
-    return;
-  }
+  if (error) { Serial.println("JSON parse error: " + String(error.c_str())); return; }
 
-  // EMERGENCY
   if (doc["emergency"].is<bool>()) {
-    emergencyStop = doc["emergency"].as<bool>();  
-    if (emergencyStop) {  
-      stopMotors();
-      if (getBehavior() != "stop") setBehavior("stop");
-    }
+    emergencyStop = doc["emergency"].as<bool>();
+    if (emergencyStop) { stopMotors(); if (getBehavior() != "stop") setBehavior("stop"); }
     return;
   }
 
-  // PING
-  if (doc["ping"] == true) {
-    webSocket.broadcastTXT("{\"pong\":true}");
-    return;
-  }
+  if (doc["leftTrim"].is<int>()) leftTrim = constrain(doc["leftTrim"].as<int>(), -100, 100);
+  if (doc["rightTrim"].is<int>()) rightTrim = constrain(doc["rightTrim"].as<int>(), -100, 100);
 
-  // MOTOR TRIM
-  if (doc["leftTrim"].is<int>()) {
-    leftTrim = constrain(doc["leftTrim"].as<int>(), -100, 100);
-  }
+  if (doc["safeDist"].is<int>()) { setSafetyThreshold(constrain(doc["safeDist"].as<int>(), 30, 2000)); return; }
 
-  if (doc["rightTrim"].is<int>()) {
-    rightTrim = constrain(doc["rightTrim"].as<int>(), -100, 100);
-  }
-
-  // SAFETY DISTANCE THRESHOLD
-  if (doc["safeDist"].is<int>()) {
-    setSafetyThreshold(constrain(doc["safeDist"].as<int>(), 30, 2000));
-    webSocket.broadcastTXT("{\"safeDist\":" + String(getSafetyThreshold()) + "}");
-    return;
-  }
-
-  // CONFIG
   bool configChanged = false;
+  if (doc["maxSpeed"].is<int>()) { maxSpeed = constrain(doc["maxSpeed"].as<int>(), 0, 255); configChanged = true; }
+  if (doc["rampRate"].is<int>()) { rampRate = constrain(doc["rampRate"].as<int>(), 1, 50); configChanged = true; }
+  if (doc["motorTimeout"].is<int>()) { motorTimeout = max(doc["motorTimeout"].as<int>(), 0); configChanged = true; }
+  if (doc["powerSave"].is<bool>()) { powerSave = doc["powerSave"].as<bool>(); configChanged = true; applyPowerSaveSafe(); }
+  if (doc["speedLimitEnabled"].is<bool>()) { speedLimitEnabled = doc["speedLimitEnabled"].as<bool>(); configChanged = true; }
+  if (doc["speedLimit"].is<int>()) { speedLimit = constrain(doc["speedLimit"].as<int>(), 0, 255); configChanged = true; }
+  if (configChanged) { saveRuntimeConfig(); saveSpeedLimitConfig(); }
 
-  if (doc["maxSpeed"].is<int>()) {
-    maxSpeed = constrain(  
-      doc["maxSpeed"].as<int>(),  
-      0,  
-      255  
-    );  
-    configChanged = true;
+  if (doc["ssid"].is<String>() && doc["password"].is<String>()) {
+    saveWiFiConfig(doc["ssid"].as<String>(), doc["password"].as<String>());
+    httpServer.send(200, "application/json", "{\"wifiConfig\":true,\"ssid\":\"" + doc["ssid"].as<String>() + "\"}");
+    delay(100); ESP.restart(); return;
   }
 
-  if (doc["rampRate"].is<int>()) {
-    rampRate = constrain(  
-      doc["rampRate"].as<int>(),  
-      1,  
-      50  
-    );  
-    configChanged = true;
-  }
-
-  if (doc["motorTimeout"].is<int>()) {
-    motorTimeout = max(  
-      doc["motorTimeout"].as<int>(),  
-      0  
-    );  
-    configChanged = true;
-  }
-
-  if (doc["powerSave"].is<bool>()) {
-    powerSave = doc["powerSave"].as<bool>();  
-    configChanged = true;  
-    applyPowerSaveSafe();
-  }
-
-  if (doc["speedLimitEnabled"].is<bool>()) {
-    speedLimitEnabled = doc["speedLimitEnabled"].as<bool>();  
-    configChanged = true;
-  }
-
-  if (doc["speedLimit"].is<int>()) {
-    speedLimit = constrain(  
-      doc["speedLimit"].as<int>(),  
-      0,  
-      255  
-    );  
-    configChanged = true;
-  }
-
-  if (configChanged) {
-    saveRuntimeConfig();  
-    saveSpeedLimitConfig();  
-
-    String reply = "{\"config\":true";
-    reply += ",\"maxSpeed\":" + String(maxSpeed);
-    reply += ",\"rampRate\":" + String(rampRate);
-    reply += ",\"motorTimeout\":" + String(motorTimeout);
-    reply += ",\"powerSave\":" + String(powerSave ? "true" : "false");
-    reply += ",\"speedLimitEnabled\":" + String(speedLimitEnabled ? "true" : "false");
-    reply += ",\"speedLimit\":" + String(speedLimit);
-    reply += ",\"leftTrim\":" + String(leftTrim);
-    reply += ",\"rightTrim\":" + String(rightTrim);
-    reply += "}";
-    webSocket.broadcastTXT(reply);
-  }
-
-  // MQTT CONFIG
-  if (doc["mqttBroker"].is<String>()) {
-    int port = doc["mqttEspPort"] | doc["mqttPort"] | 8883;
-    bool tls = doc["mqttTls"] | true;
-    saveMqttConfig(  
-      doc["mqttBroker"].as<String>(),  
-      port,  
-      doc["mqttUser"].as<String>(),  
-      doc["mqttPass"].as<String>(),  
-      doc["mqttPrefix"].as<String>(),  
-      doc["mqttEnabled"].as<bool>(),
-      tls
-    );  
-
-    mqttClient.disconnect();  
-    connectMQTT();  
-
-    webSocket.broadcastTXT("{\"mqttConfig\":true}");
-    return;
-  }
-
-  // MQTT DISABLE
-  if (
-    doc["mqttDisable"].is<bool>() &&
-    doc["mqttDisable"]
-  ) {
-    saveMqttConfig(  
-      "",  
-      8883,  
-      "",  
-      "",  
-      "kei/robot",  
-      false,
-      true
-    );  
-
-    mqttEnabled = false;  
-    mqttClient.disconnect();  
-
-    webSocket.broadcastTXT("{\"mqttConfig\":false}");
-    return;
-  }
-
-  // WIFI CONFIG
-  if (
-    doc["ssid"].is<String>() &&
-    doc["password"].is<String>()
-  ) {
-    saveWiFiConfig(  
-      doc["ssid"].as<String>(),  
-      doc["password"].as<String>()  
-    );  
-
-    webSocket.broadcastTXT("{\"wifiConfig\":true,\"ssid\":\"" + doc["ssid"].as<String>() + "\"}"); 
-
-    delay(100);
-    ESP.restart();
-    return;
-  }
-
-  // BEHAVIOR / AUTONOMY
   if (doc["behavior"].is<String>()) {
     String b = doc["behavior"].as<String>();
-    if (b == "explore" || b == "stop") {
-      setBehavior(b);
-    }
+    if (b == "explore" || b == "stop") setBehavior(b);
     return;
   }
 
-  // RESET YAW MPU6050
-  if (doc["headingReset"] == true) {
-    resetYaw();
-    return;
-  }
+  if (doc["headingReset"] == true) { resetYaw(); return; }
+  if (doc["servo"].is<int>()) { setServoAngle(constrain(doc["servo"].as<int>(), 0, 180)); return; }
 
-  // SERVO
-  if (doc["servo"].is<int>()) {
-    setServoAngle(constrain(doc["servo"].as<int>(), 0, 180));
-    return;
-  }
+  if (doc["deviceName"].is<String>()) { saveDeviceNameConfig(doc["deviceName"].as<String>()); return; }
+  if (doc["reboot"] == true) { delay(100); ESP.restart(); return; }
 
-  // DEVICE NAME
-  if (doc["deviceName"].is<String>()) {
-    saveDeviceNameConfig(doc["deviceName"].as<String>());
-    webSocket.broadcastTXT("{\"deviceName\":\"" + deviceName + "\"}");
-    return;
-  }
-
-  // REBOOT
-  if (doc["reboot"] == true) {
-    webSocket.broadcastTXT("{\"reboot\":true}");
-    delay(100);
-    ESP.restart();
-    return;
-  }
-
-  // FACTORY RESET
   if (doc["factoryReset"] == true) {
-    webSocket.broadcastTXT("{\"factoryReset\":true}");
-
     Preferences prefs;
-    prefs.begin("runtime", false);
-    prefs.clear();
-    prefs.end();
-    prefs.begin("pwr", false);
-    prefs.clear();
-    prefs.end();
-    prefs.begin("sl", false);
-    prefs.clear();
-    prefs.end();
-    prefs.begin("dname", false);
-    prefs.clear();
-    prefs.end();
-    prefs.begin("mqtt", false);
-    prefs.clear();
-    prefs.end();
-    prefs.begin("wifi", false);
-    prefs.clear();
-    prefs.end();
-
-    delay(100);
-    ESP.restart();
-    return;
+    prefs.begin("runtime", false); prefs.clear(); prefs.end();
+    prefs.begin("pwr", false); prefs.clear(); prefs.end();
+    prefs.begin("sl", false); prefs.clear(); prefs.end();
+    prefs.begin("dname", false); prefs.clear(); prefs.end();
+    prefs.begin("wifi", false); prefs.clear(); prefs.end();
+    delay(100); ESP.restart(); return;
   }
 
-  // MOTOR — manual command overrides autonomy
-  if (
-    doc["leftMotor"].is<int>() ||
-    doc["rightMotor"].is<int>()
-  ) {
-    if (emergencyStop)  
-      return;  
-
-    // Manual motor command → stop autonomy
+  if (doc["leftMotor"].is<int>() || doc["rightMotor"].is<int>()) {
+    if (emergencyStop) return;
     if (getBehavior() != "stop") setBehavior("stop");
-
-    int cap = speedLimitEnabled  
-      ? speedLimit  
-      : maxSpeed;  
-
+    int cap = speedLimitEnabled ? speedLimit : maxSpeed;
     int leftVal = (doc["leftMotor"] | 0) + leftTrim;
     targetLeftSpeed = constrain(leftVal, -cap, cap);
-
     int rightVal = (doc["rightMotor"] | 0) + rightTrim;
-    targetRightSpeed = constrain(rightVal, -cap, cap); 
-
+    targetRightSpeed = constrain(rightVal, -cap, cap);
     lastCommandTime = millis();
   }
 }
 
-// =======================
-// RAMP
-// =======================
 void rampMotors() {
   if (rampRate >= 255) {
     if (currentLeftSpeed != targetLeftSpeed || currentRightSpeed != targetRightSpeed) {
-      currentLeftSpeed = targetLeftSpeed;
-      currentRightSpeed = targetRightSpeed;
-      writeMotorA(currentLeftSpeed);
-      writeMotorB(currentRightSpeed);
+      currentLeftSpeed = targetLeftSpeed; currentRightSpeed = targetRightSpeed;
+      writeMotorA(currentLeftSpeed); writeMotorB(currentRightSpeed);
     }
     return;
   }
-  auto stepMotor = [](int &current, int target, int rate) {
-    if (current == target) return;
-    int step = (target > current) ? rate : -rate;
-    current += step;
-    if (abs(current - target) < rate) current = target;
-    current = constrain(current, -255, 255);
+  auto step = [](int &cur, int tgt, int rate) {
+    if (cur == tgt) return;
+    int s = (tgt > cur) ? rate : -rate; cur += s;
+    if (abs(cur - tgt) < rate) cur = tgt;
+    cur = constrain(cur, -255, 255);
   };
-
-  if (currentLeftSpeed != targetLeftSpeed) {
-    stepMotor(currentLeftSpeed, targetLeftSpeed, rampRate);
-    writeMotorA(currentLeftSpeed);
-  }
-
-  if (currentRightSpeed != targetRightSpeed) {
-    stepMotor(currentRightSpeed, targetRightSpeed, rampRate);
-    writeMotorB(currentRightSpeed);
-  }
+  if (currentLeftSpeed != targetLeftSpeed) { step(currentLeftSpeed, targetLeftSpeed, rampRate); writeMotorA(currentLeftSpeed); }
+  if (currentRightSpeed != targetRightSpeed) { step(currentRightSpeed, targetRightSpeed, rampRate); writeMotorB(currentRightSpeed); }
 }
 
-#define MIN_PWM 30  // minimum PWM to overcome dead zone
+#define MIN_PWM 30
 
-// =======================
-// MOTOR A
-// =======================
 void writeMotorA(int speed) {
   speed = constrain(speed, -255, 255);
-
   if (speed > 0) {
     if (speed < MIN_PWM) { digitalWrite(AIN1, LOW); digitalWrite(AIN2, LOW); ledcWrite(CH_LEFT, 0); return; }
-    digitalWrite(AIN1, HIGH);  
-    digitalWrite(AIN2, LOW);  
-    ledcWrite(CH_LEFT, speed);
+    digitalWrite(AIN1, HIGH); digitalWrite(AIN2, LOW); ledcWrite(CH_LEFT, speed);
   } else if (speed < 0) {
     if (-speed < MIN_PWM) { digitalWrite(AIN1, LOW); digitalWrite(AIN2, LOW); ledcWrite(CH_LEFT, 0); return; }
-    digitalWrite(AIN1, LOW);  
-    digitalWrite(AIN2, HIGH);  
-    ledcWrite(CH_LEFT, -speed);
-  } else {
-    digitalWrite(AIN1, LOW);  
-    digitalWrite(AIN2, LOW);  
-    ledcWrite(CH_LEFT, 0);
-  }
+    digitalWrite(AIN1, LOW); digitalWrite(AIN2, HIGH); ledcWrite(CH_LEFT, -speed);
+  } else { digitalWrite(AIN1, LOW); digitalWrite(AIN2, LOW); ledcWrite(CH_LEFT, 0); }
 }
 
-// =======================
-// MOTOR B
-// =======================
 void writeMotorB(int speed) {
   speed = constrain(speed, -255, 255);
-
   if (speed > 0) {
     if (speed < MIN_PWM) { digitalWrite(BIN1, LOW); digitalWrite(BIN2, LOW); ledcWrite(CH_RIGHT, 0); return; }
-    digitalWrite(BIN1, HIGH);  
-    digitalWrite(BIN2, LOW);  
-    ledcWrite(CH_RIGHT, speed);
+    digitalWrite(BIN1, HIGH); digitalWrite(BIN2, LOW); ledcWrite(CH_RIGHT, speed);
   } else if (speed < 0) {
     if (-speed < MIN_PWM) { digitalWrite(BIN1, LOW); digitalWrite(BIN2, LOW); ledcWrite(CH_RIGHT, 0); return; }
-    digitalWrite(BIN1, LOW);  
-    digitalWrite(BIN2, HIGH);  
-    ledcWrite(CH_RIGHT, -speed);
-  } else {
-    digitalWrite(BIN1, LOW);  
-    digitalWrite(BIN2, LOW);  
-    ledcWrite(CH_RIGHT, 0);
-  }
+    digitalWrite(BIN1, LOW); digitalWrite(BIN2, HIGH); ledcWrite(CH_RIGHT, -speed);
+  } else { digitalWrite(BIN1, LOW); digitalWrite(BIN2, LOW); ledcWrite(CH_RIGHT, 0); }
 }
 
-// =======================
-// STOP
-// =======================
 void stopMotors() {
-  targetLeftSpeed = 0;
-  targetRightSpeed = 0;
-
-  currentLeftSpeed = 0;
-  currentRightSpeed = 0;
-
-  writeMotorA(0);
-  writeMotorB(0);
-}
-
-// =======================
-// LED
-// =======================
-void buzzerOn(int freq) {
-  ledcSetup(CH_BUZZER, freq, 8);
-  ledcWrite(CH_BUZZER, 128);
-}
-
-void buzzerOff() {
-  ledcWrite(CH_BUZZER, 0);
-}
-
-void updateBuzzer() {
-  static unsigned long lastToggle = 0;
-  static bool state = false;
-
-  bool mundur = currentLeftSpeed < -30 && currentRightSpeed < -30;
-
-  if (!mundur) {
-    if (state) {
-      buzzerOff();
-      state = false;
-    }
-    return;
-  }
-
-  unsigned long now = millis();
-  unsigned long interval = state ? 100 : 400;
-
-  if (now - lastToggle >= interval) {
-    lastToggle = now;
-    state = !state;
-    if (state) {
-      buzzerOn(440);
-    } else {
-      buzzerOff();
-    }
-  }
+  targetLeftSpeed = 0; targetRightSpeed = 0;
+  currentLeftSpeed = 0; currentRightSpeed = 0;
+  writeMotorA(0); writeMotorB(0);
 }
 
 void updateLED() {
   unsigned long now = millis();
-
   if (emergencyStop) {
-    if (now - lastLedToggle > 100) {  
-      lastLedToggle = now;  
-      ledState = !ledState;  
-      digitalWrite(LED_PIN, ledState);  
-    }  
+    if (now - lastLedToggle > 100) { lastLedToggle = now; ledState = !ledState; digitalWrite(LED_PIN, ledState); }
     return;
   }
-
   if (WiFi.status() != WL_CONNECTED) {
-    if (now - lastLedToggle > 200) {  
-      lastLedToggle = now;  
-      ledState = !ledState;  
-      digitalWrite(LED_PIN, ledState);  
-    }  
+    if (now - lastLedToggle > 200) { lastLedToggle = now; ledState = !ledState; digitalWrite(LED_PIN, ledState); }
     return;
   }
-
-  if (wsConnected) {
-    digitalWrite(LED_PIN, HIGH);
-  } else {
-    if (now - lastLedToggle > 1000) {  
-      lastLedToggle = now;  
-      ledState = !ledState;  
-      digitalWrite(LED_PIN, ledState);  
-    }
-  }
+  digitalWrite(LED_PIN, HIGH);
 }
 
-
-
-// =======================
-// TELEMETRY (JSON manual — lebih cepat dari ArduinoJson)
-// =======================
 String buildTelemetryJson() {
-  String mode = emergencyStop
-    ? "emergency"
-    : (getBehavior() != "stop" ? "auto" : "manual");
+  String mode = emergencyStop ? "emergency" : (getBehavior() != "stop" ? "auto" : "manual");
   int avgSpeed = (abs(currentLeftSpeed) + abs(currentRightSpeed)) / 2;
-
-  String j;
-  j.reserve(512);
+  String j; j.reserve(512);
   j = "{\"mode\":\"" + mode + "\"";
   j += ",\"speed\":" + String(avgSpeed);
   j += ",\"left\":" + String(currentLeftSpeed);
@@ -1117,7 +499,6 @@ String buildTelemetryJson() {
   j += ",\"motorTimeout\":" + String(motorTimeout);
   j += ",\"ip\":\"" + cachedIP + "\"";
   j += ",\"ssid\":\"" + wifiSsid + "\"";
-  j += ",\"mqtt\":" + String((mqttEnabled && mqttClient.connected()) ? "true" : "false");
   j += ",\"deviceName\":\"" + deviceName + "\"";
   j += ",\"fw\":\"" + String(FW_VERSION) + "\"";
   j += ",\"distance\":" + String(readDistance());
@@ -1137,166 +518,101 @@ String buildTelemetryJson() {
   return j;
 }
 
-void sendTelemetry() {
-  cachedRssi = WiFi.RSSI();
-  String json = buildTelemetryJson();
-  webSocket.broadcastTXT(json);
-  if (mqttEnabled && mqttClient.connected())
-    mqttClient.publish(getTeleTopic().c_str(), json.c_str());
-}
-
-// =======================
-// PUSH CONFIG TO CLIENT
-// =======================
-void sendConfigToClient(uint8_t clientNum) {
-  String j = "{\"config\":true";
-  j += ",\"maxSpeed\":" + String(maxSpeed);
-  j += ",\"rampRate\":" + String(rampRate);
-  j += ",\"motorTimeout\":" + String(motorTimeout);
-  j += ",\"powerSave\":" + String(powerSave ? "true" : "false");
-  j += ",\"speedLimitEnabled\":" + String(speedLimitEnabled ? "true" : "false");
-  j += ",\"speedLimit\":" + String(speedLimit);
-  j += ",\"leftTrim\":" + String(leftTrim);
-  j += ",\"rightTrim\":" + String(rightTrim);
-  j += ",\"ssid\":\"" + wifiSsid + "\"";
-  j += ",\"mqttBroker\":\"" + mqttBroker + "\"";
-  j += ",\"mqttPort\":" + String(mqttPort);
-  j += ",\"mqttEspPort\":" + String(mqttPort);
-  j += ",\"mqttUser\":\"" + mqttUser + "\"";
-  j += ",\"mqttPass\":\"" + mqttPass + "\"";
-  j += ",\"mqttPrefix\":\"" + mqttTopicPrefix + "\"";
-  j += ",\"mqttEnabled\":" + String(mqttEnabled ? "true" : "false");
-  j += ",\"mqttTls\":" + String(mqttTls ? "true" : "false");
-  j += ",\"deviceName\":\"" + deviceName + "\"";
-  j += ",\"fw\":\"" + String(FW_VERSION) + "\"";
-  j += ",\"emergency\":" + String(emergencyStop ? "true" : "false");
-  j += ",\"safeDist\":" + String(getSafetyThreshold());
-  j += "}";
-  webSocket.sendTXT(clientNum, j);
-}
-
-// =======================
-// MQTT CALLBACK
-// =======================
-void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  String msg;
-  for (unsigned int i = 0; i < length; i++) {
-    msg += (char)payload[i];
-  }
-  handleMessage(msg);
-}
-
-// =======================
-// MQTT CONNECT
-// =======================
-void connectMQTT() {
-  if (!mqttEnabled || mqttBroker.length() == 0) return;
-
-  if (mqttTls) {
-    mqttClient.setClient(mqttSecureClient);
-    mqttSecureClient.setInsecure();
-    mqttSecureClient.setHandshakeTimeout(1000);
-    mqttSecureClient.setTimeout(1000);
-  } else {
-    mqttClient.setClient(mqttPlainClient);
-    mqttPlainClient.setTimeout(2000);
-  }
-
-  mqttClient.setServer(mqttBroker.c_str(), mqttPort);
-  mqttClient.setCallback(mqttCallback);
-
-  String clientId = "kei-" + getDeviceId();
-
-  if (mqttUser.length() > 0) {
-    mqttClient.connect(clientId.c_str(), mqttUser.c_str(), mqttPass.c_str());
-  } else {
-    mqttClient.connect(clientId.c_str());
-  }
-
-  if (mqttClient.connected()) {
-    mqttClient.subscribe(getCmdTopic().c_str());
-    mqttClient.subscribe((mqttTopicPrefix + "/broadcast/cmd").c_str());
-    wsLog("MQTT connected: " + mqttBroker + ":" + String(mqttPort));
-  } else {
-    int st = mqttClient.state();
-    wsLog("MQTT connect failed: " + mqttBroker + " (state=" + String(st) + ")");
-  }
-}
-
-// =======================
-// HTTP HANDLERS
-// =======================
 void handleRoot() {
   String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
     "<title>Kei Robot</title>"
     "<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:sans-serif;background:#1a1a2e;color:#fff;padding:16px}"
     "h1{font-size:20px;text-align:center;color:#e94560;margin-bottom:16px}"
     ".sec{background:#16213e;border-radius:10px;padding:16px;margin-bottom:12px}"
-    "label{display:block;font-size:14px;margin-bottom:8px}"
-    "input[type=file]{width:100%;padding:10px;background:#0f3460;border:1px solid #1a3a6a;border-radius:6px;color:#fff}"
-    ".btn{width:100%;padding:12px;border:none;border-radius:8px;font-size:14px;font-weight:bold;cursor:pointer;margin-top:12px}"
-    ".btn-primary{background:#e94560;color:#fff}"
-    ".status{margin-top:12px;padding:10px;border-radius:6px;display:none;text-align:center}"
-    ".info{font-size:12px;color:#aaa;margin:4px 0}"
-    ".info span{color:#e94560}"
+    ".info{font-size:12px;color:#aaa;margin:4px 0}.info span{color:#e94560}"
+    ".btn{width:100%;padding:12px;border:none;border-radius:8px;font-size:14px;font-weight:bold;cursor:pointer;margin-top:8px}"
+    ".btn-primary{background:#e94560;color:#fff}.btn-danger{background:#ff6b6b;color:#fff}"
+    ".btn-warn{background:#f0a500;color:#fff}"
+    ".chk{display:flex;align-items:center;gap:8px;margin:8px 0}.chk input{width:auto}"
     "</style></head><body>"
     "<h1>Kei Robot</h1>"
-    "<div class=sec>"
-    "<div class=info>Firmware: <span id=fw>loading...</span></div>"
-    "<div class=info>ESP IP: <span id=ip>loading...</span></div>"
-    "<div class=info>WiFi RSSI: <span id=rssi>loading...</span></div>"
+    "<div class=sec id=info>"
+    "<div class=info>Firmware: <span id=fw>...</span></div>"
+    "<div class=info>IP: <span id=ip>...</span></div>"
+    "<div class=info>RSSI: <span id=rssi>...</span> dBm</div>"
+    "<div class=info>Mode: <span id=mode>...</span></div>"
+    "<div class=info>Jarak: <span id=distance>...</span> mm</div>"
+    "<div class=info>Baterai: <span id=battery>...</span></div>"
     "</div>"
     "<div class=sec>"
-    "<label>Pilih file .bin firmware</label>"
-    "<form id=form method=POST action=/upload enctype=multipart/form-data>"
-    "<input type=file name=firmware accept='.bin' required>"
-    "<button class='btn btn-primary' type=submit>Upload</button>"
-    "</form>"
-    "<div id=status class=status></div>"
+    "<div style='display:grid;grid-template-columns:1fr 1fr;gap:8px'>"
+    "<button class='btn btn-primary' ontouchstart='fetch(\"/cmd\",{method:\"POST\",body:JSON.stringify({leftMotor:200,rightMotor:200})})' ontouchend='fetch(\"/cmd\",{method:\"POST\",body:JSON.stringify({leftMotor:0,rightMotor:0})})'>▲</button>"
+    "<button class='btn btn-warn' onclick=\"fetch('/cmd',{method:'POST',body:JSON.stringify({behavior:'explore'})})\">Explore</button>"
+    "<button class='btn btn-danger' onclick=\"fetch('/cmd',{method:'POST',body:JSON.stringify({emergency:true})})\">STOP</button>"
+    "<button class='btn btn-primary' onclick=\"fetch('/cmd',{method:'POST',body:JSON.stringify({behavior:'stop'})})\">Manual</button>"
+    "</div>"
     "</div>"
     "<div class=sec style='text-align:center'>"
-    "<a href='https://github.com/jajangking/kei/releases/latest' target=_blank style='color:#e94560;font-size:12px'>Download firmware dari GitHub</a>"
+    "<a href='/update' style='color:#e94560;font-size:12px'>OTA Update</a>"
     "</div>"
     "<script>"
-    "fetch('/version').then(r=>r.json()).then(d=>{document.getElementById('fw').textContent=d.fw});"
-    "var ws=new WebSocket('ws://'+location.hostname+':81');"
-    "ws.onmessage=function(e){var d=JSON.parse(e.data);if(d.ip)document.getElementById('ip').textContent=d.ip;if(d.rssi)document.getElementById('rssi').textContent=d.rssi+' dBm';if(d.fw)document.getElementById('fw').textContent=d.fw};"
-    "ws.onopen=function(){ws.send(JSON.stringify({ping:true}))};"
-    "document.getElementById('form').onsubmit=function(e){"
-    "e.preventDefault();var f=new FormData(this);var s=document.getElementById('status');"
-    "s.style.display='block';s.style.background='#0f3460';s.textContent='Uploading...';"
-    "var x=new XMLHttpRequest();x.upload.onprogress=function(e){if(e.lengthComputable){"
-    "s.textContent=Math.round(e.loaded/e.total*100)+'% uploaded';}};"
-    "x.onload=function(){s.textContent=x.responseText;s.style.background=x.status==200?'#00a86b':'#e94560';};"
-    "x.onerror=function(){s.textContent='Upload failed';s.style.background='#e94560';};"
-    "x.open('POST','/upload');x.send(f)};"
+    "setInterval(function(){"
+    "fetch('/telemetry').then(function(r){return r.json()}).then(function(d){"
+    "document.getElementById('fw').textContent=d.fw;"
+    "document.getElementById('ip').textContent=d.ip;"
+    "document.getElementById('rssi').textContent=d.rssi;"
+    "document.getElementById('mode').textContent=d.mode+' ('+d.behavior+')';"
+    "document.getElementById('distance').textContent=d.distance;"
+    "});"
+    "},1000);"
     "</script></body></html>";
   httpServer.send(200, "text/html", html);
 }
 
 void handleConfig() {
-  String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Kei Config</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:sans-serif;background:#1a1a2e;color:#fff;padding:16px}h1{font-size:20px;text-align:center;color:#e94560;margin-bottom:16px}.sec{background:#16213e;border-radius:10px;padding:12px;margin-bottom:12px}.sec h2{font-size:14px;color:#e94560;margin-bottom:10px}label{display:block;font-size:12px;color:#aaa;margin:8px 0 3px}input,select{width:100%;padding:10px;background:#0f3460;border:1px solid #1a3a6a;border-radius:6px;color:#fff;font-size:14px}input:focus{outline:none;border-color:#e94560}.row{display:grid;grid-template-columns:1fr 1fr;gap:8px}.btn{width:100%;padding:12px;border:none;border-radius:8px;font-size:14px;font-weight:bold;cursor:pointer;margin-top:8px}.btn-primary{background:#e94560;color:#fff}.btn-danger{background:#ff6b6b;color:#fff}.btn-warn{background:#f0a500;color:#fff}.btn-sm{padding:8px;font-size:12px;margin-top:4px}.chk{display:flex;align-items:center;gap:8px;margin:8px 0}.chk input{width:auto}.nav-links{text-align:center;margin-top:12px;font-size:12px}.nav-links a{color:#e94560;text-decoration:none;margin:0 8px}</style></head><body><h1>Configuration</h1><div class=sec><h2>Motor</h2><div class=row><div><label>Max Speed</label><input type=number id=maxSpeed min=0 max=255 value=255></div><div><label>Ramp Rate</label><input type=number id=rampRate min=1 max=50 value=8></div></div><div class=row><div><label>Motor Timeout (ms)</label><input type=number id=motorTimeout min=0 value=5000></div><div><label>Left Trim</label><input type=number id=leftTrim min=-100 max=100 value=0></div></div><div class=row><div><label>Right Trim</label><input type=number id=rightTrim min=-100 max=100 value=0></div><div></div></div><label class=chk><input type=checkbox id=powerSave>Power Save Mode</label><label class=chk><input type=checkbox id=speedLimitEnabled>Speed Limit</label><div id=speedLimitRow style=display:none><label>Speed Limit Value</label><input type=number id=speedLimit min=0 max=255 value=150></div></div><div class=sec><h2>WiFi</h2><div class=row><div><label>SSID</label><input id=wifiSsid></div><div><label>Password</label><input type=password id=wifiPass></div></div><button class='btn btn-primary btn-sm' onclick='saveWifi()'>Save & Reboot</button></div><div class=sec><h2>MQTT</h2><label class=chk><input type=checkbox id=mqttEnabled>MQTT Enabled</label><div class=row><div><label>Broker</label><input id=mqttBroker placeholder=broker.local></div><div><label>Port</label><input type=number id=mqttPort value=8883></div></div><div class=row><div><label>User</label><input id=mqttUser></div><div><label>Password</label><input type=password id=mqttPass></div></div><label>Topic Prefix</label><input id=mqttPrefix value=kei/robot></div><div class=sec><h2>Device</h2><label>Device Name</label><input id=deviceName placeholder='(auto: MAC address)'><button class='btn btn-primary btn-sm' onclick='saveDevice()'>Save</button></div><div class=sec><button class='btn btn-warn' onclick='factoryReset()'>Factory Reset</button><button class='btn btn-danger' onclick='cmd({reboot:true})'>Reboot</button></div><div class=nav-links><a href='/'>Control</a><a href='/config'>Config</a></div><script>function cmd(o){var ws=new WebSocket((location.protocol=='https:'?'wss:':'ws:')+'//'+location.host+'/ws/');ws.onopen=function(){ws.send(JSON.stringify(o));setTimeout(function(){ws.close()},100)}}function saveWifi(){var s=document.getElementById('wifiSsid').value,p=document.getElementById('wifiPass').value;if(!s)return;cmd({ssid:s,password:p})}function saveDevice(){var n=document.getElementById('deviceName').value;cmd({deviceName:n||'reset'})}function factoryReset(){if(confirm('Factory reset? All data will be lost.'))cmd({factoryReset:true})}document.getElementById('speedLimitEnabled').addEventListener('change',function(){document.getElementById('speedLimitRow').style.display=this.checked?'block':'none'});var ws=new WebSocket((location.protocol=='https:'?'wss:':'ws:')+'//'+location.host+'/ws/');ws.onmessage=function(e){try{var d=JSON.parse(e.data);if(d.config){document.getElementById('maxSpeed').value=d.maxSpeed||255;document.getElementById('rampRate').value=d.rampRate||8;document.getElementById('motorTimeout').value=d.motorTimeout||5000;document.getElementById('leftTrim').value=d.leftTrim||0;document.getElementById('rightTrim').value=d.rightTrim||0;document.getElementById('powerSave').checked=d.powerSave||false;document.getElementById('speedLimitEnabled').checked=d.speedLimitEnabled||false;document.getElementById('speedLimit').value=d.speedLimit||150;document.getElementById('wifiSsid').value=d.ssid||'';document.getElementById('mqttBroker').value=d.mqttBroker||'';document.getElementById('mqttPort').value=d.mqttPort||8883;document.getElementById('mqttUser').value=d.mqttUser||'';document.getElementById('mqttPass').value=d.mqttPass||'';document.getElementById('mqttPrefix').value=d.mqttPrefix||'kei/robot';document.getElementById('mqttEnabled').checked=d.mqttEnabled||false;document.getElementById('deviceName').value=d.deviceName||'';document.getElementById('speedLimitRow').style.display=d.speedLimitEnabled?'block':'none'}}catch(e){}};document.querySelectorAll('.sec input, .sec select').forEach(function(el){el.addEventListener('change',function(){if(el.id=='wifiSsid'||el.id=='wifiPass'||el.id=='deviceName')return;var msg={};if(el.type=='checkbox')msg[el.id]=el.checked;else msg[el.id]=parseInt(el.value)||0;cmd(msg)})})</script></body></html>";
+  String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+    "<title>Kei Config</title>"
+    "<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:sans-serif;background:#1a1a2e;color:#fff;padding:16px}"
+    "h1{font-size:20px;text-align:center;color:#e94560;margin-bottom:16px}"
+    ".sec{background:#16213e;border-radius:10px;padding:12px;margin-bottom:12px}"
+    ".sec h2{font-size:14px;color:#e94560;margin-bottom:10px}"
+    "label{display:block;font-size:12px;color:#aaa;margin:8px 0 3px}"
+    "input{width:100%;padding:10px;background:#0f3460;border:1px solid #1a3a6a;border-radius:6px;color:#fff;font-size:14px}"
+    ".btn{width:100%;padding:12px;border:none;border-radius:8px;font-size:14px;font-weight:bold;cursor:pointer;margin-top:8px}"
+    ".btn-primary{background:#e94560;color:#fff}"
+    ".btn-danger{background:#ff6b6b;color:#fff}"
+    ".chk{display:flex;align-items:center;gap:8px;margin:8px 0}.chk input{width:auto}"
+    "</style></head><body>"
+    "<h1>Config</h1>"
+    "<div class=sec>"
+    "<h2>WiFi</h2>"
+    "<label>SSID</label><input id=ssid>"
+    "<label>Password</label><input id=pass type=password>"
+    "<button class='btn btn-primary' onclick=\"var s=document.getElementById('ssid').value;var p=document.getElementById('pass').value;fetch('/cmd',{method:'POST',body:JSON.stringify({ssid:s,password:p})})\">Simpan & Reboot</button>"
+    "</div>"
+    "<div class=sec>"
+    "<h2>Motor</h2>"
+    "<label>Max Speed (0-255)</label><input id=maxSpeed type=number min=0 max=255>"
+    "<label>Motor Timeout (ms)</label><input id=motorTimeout type=number min=0>"
+    "<label>Left Trim</label><input id=leftTrim type=number min=-100 max=100>"
+    "<label>Right Trim</label><input id=rightTrim type=number min=-100 max=100>"
+    "<label class=chk><input id=speedLimitEnabled type=checkbox> Speed Limit</label>"
+    "<label>Speed Limit (0-255)</label><input id=speedLimit type=number min=0 max=255>"
+    "<button class='btn btn-primary' onclick=\"var d={};d.maxSpeed=document.getElementById('maxSpeed').value;d.motorTimeout=document.getElementById('motorTimeout').value;d.leftTrim=document.getElementById('leftTrim').value;d.rightTrim=document.getElementById('rightTrim').value;d.speedLimitEnabled=document.getElementById('speedLimitEnabled').checked;d.speedLimit=document.getElementById('speedLimit').value;fetch('/cmd',{method:'POST',body:JSON.stringify(d)})\">Simpan</button>"
+    "</div>"
+    "<div class=sec>"
+    "<h2>Factory Reset</h2>"
+    "<button class='btn btn-danger' onclick=\"fetch('/cmd',{method:'POST',body:JSON.stringify({factoryReset:true})})\">Hapus Semua & Reboot</button>"
+    "</div>"
+    "<script>fetch('/telemetry').then(r=>r.json()).then(function(d){"
+    "document.getElementById('ssid').value=d.ssid;"
+    "document.getElementById('maxSpeed').value=d.maxSpeed;"
+    "document.getElementById('motorTimeout').value=d.motorTimeout;"
+    "document.getElementById('leftTrim').value=d.leftTrim;"
+    "document.getElementById('rightTrim').value=d.rightTrim;"
+    "document.getElementById('speedLimitEnabled').checked=d.speedLimitEnabled;"
+    "document.getElementById('speedLimit').value=d.speedLimit;"
+    "})</script></body></html>";
   httpServer.send(200, "text/html", html);
 }
 
-// =======================
-// SETUP
-// =======================
-void playTone(int freq, int duration) {
-  if (freq > 0) {
-    ledcSetup(CH_BUZZER, freq, 8);
-    ledcWrite(CH_BUZZER, 128);
-  } else {
-    ledcWrite(CH_BUZZER, 0);
-  }
-  delay(duration);
-  ledcWrite(CH_BUZZER, 0);
-}
-
 void playStartupMelody() {
-  // short beep — 50ms doang
-  ledcSetup(CH_BUZZER, 1047, 8);
-  ledcWrite(CH_BUZZER, 128);
+  ledcSetup(CH_BUZZER, 1047, 8); ledcWrite(CH_BUZZER, 128);
   delay(50);
   ledcWrite(CH_BUZZER, 0);
 }
@@ -1304,23 +620,10 @@ void playStartupMelody() {
 void setup() {
   Serial.begin(115200);
   startTime = millis();
-
   delay(100);
-
-  pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, LOW);
-
-  ledcSetup(CH_BUZZER, 1000, 8); // placeholder, buzzerOn() nanti override
-  ledcAttachPin(BUZZER, CH_BUZZER);
-  ledcWrite(CH_BUZZER, 0);
-
+  pinMode(LED_PIN, OUTPUT); digitalWrite(LED_PIN, LOW);
+  ledcSetup(CH_BUZZER, 1000, 8); ledcAttachPin(BUZZER, CH_BUZZER); ledcWrite(CH_BUZZER, 0);
   playStartupMelody();
-
-  Wire.begin(SENSOR_SDA, SENSOR_SCL);
-  Wire.setClock(400000);
-  Wire.setTimeout(50);
-
-  initVL53L0X();
-  initMPU6050();
-  initAutonomy();
+  Wire.begin(SENSOR_SDA, SENSOR_SCL); Wire.setClock(400000); Wire.setTimeout(50);
+  initVL53L0X(); initMPU6050(); initAutonomy();
 }
