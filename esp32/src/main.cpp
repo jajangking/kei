@@ -793,10 +793,10 @@ void handleDiag() {
     "<div class=sec><h2>MPU6050</h2><div class=pre>" + mpu + "</div></div>"
     "<div class=sec><h2>System</h2>"
     "<div class=pre>uptime: " + String((millis()-startTime)/1000) + "s"
-    "  heap: " + String(ESP.getFreeHeap()) + "B"
-    "  wifi: " + cachedIP
-    "  rssi: " + String(cachedRssi) + "dBm"
-    "  safeDist: " + String(getSafetyThreshold()) + "mm</div></div>"
+    + "  heap: " + String(ESP.getFreeHeap()) + "B"
+    + "  wifi: " + cachedIP
+    + "  rssi: " + String(cachedRssi) + "dBm"
+    + "  safeDist: " + String(getSafetyThreshold()) + "mm</div></div>"
     "<div class=lk><a href='/'>⇐ Back</a></div>"
     "</body></html>";
   httpServer.send(200, "text/html", html);
