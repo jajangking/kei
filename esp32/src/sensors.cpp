@@ -91,7 +91,7 @@ static float roll = 0, pitch = 0, yaw = 0;
 static float gyroZ = 0;
 static unsigned long lastMPU = 0;
 static float gzOffset = 0;
-#define CAL_SAMPLES 200
+#define CAL_SAMPLES 100
 
 static void writeMPU(byte reg, byte val) {
   Wire.beginTransmission(MPU_ADDR);
@@ -115,6 +115,10 @@ static int16_t read16(byte reg) {
   return (buf[0] << 8) | buf[1];
 }
 
+static bool calInProgress = false;
+static int calSampleCount = 0;
+static float calSum = 0;
+
 bool initMPU6050() {
   Wire.beginTransmission(MPU_ADDR);
   if (Wire.endTransmission() != 0) {
@@ -126,18 +130,15 @@ bool initMPU6050() {
   writeMPU(MPU_PWR1, 0);
   delay(100);
 
-  Serial.println("[MPU] calibrate gyro Z...");
-  float sum = 0;
-  for (int i = 0; i < CAL_SAMPLES; i++) {
-    sum += read16(MPU_GYRO + 2) / 131.0;
-    delay(5);
-  }
-  gzOffset = sum / CAL_SAMPLES;
-  Serial.printf("[MPU] gyroZ offset: %.2f\n", gzOffset);
+  // gyro kalibrasi background — first 200 readMPU6050() calls akan samples
+  calInProgress = true;
+  calSampleCount = 0;
+  calSum = 0;
+  gzOffset = 0;
 
   mpuReady = true;
   lastMPU = millis();
-  Serial.println("[MPU] OK");
+  Serial.println("[MPU] OK (cal background)");
   return true;
 }
 
@@ -146,7 +147,8 @@ bool isMPUReady() { return mpuReady; }
 void readMPU6050() {
   if (!mpuReady) return;
   unsigned long now = millis();
-  if (now - lastMPU < 30) return; // rate limit 30ms
+  int minInterval = calInProgress ? 5 : 30; // kalibrasi lebih cepet
+  if (now - lastMPU < minInterval) return;
   if (now - lastMPU > 500) lastMPU = now - 10; // clamp dt kalo lama
 
   byte buf[14];
@@ -158,6 +160,19 @@ void readMPU6050() {
   gx = (buf[8] << 8) | buf[9];
   gy = (buf[10] << 8) | buf[11];
   gz = (buf[12] << 8) | buf[13];
+
+  // Gyro kalibrasi background
+  if (calInProgress) {
+    calSum += gz / 131.0;
+    calSampleCount++;
+    if (calSampleCount >= CAL_SAMPLES) {
+      gzOffset = calSum / CAL_SAMPLES;
+      calInProgress = false;
+      Serial.printf("[MPU] gyroZ offset: %.2f\n", gzOffset);
+    }
+    lastMPU = now;
+    return; // skip roll/pitch/yaw selama kalibrasi
+  }
 
   float accX = ax / 16384.0;
   float accY = ay / 16384.0;

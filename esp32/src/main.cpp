@@ -378,7 +378,8 @@ void handleWiFi() {
     if (wifiConnecting) {
       wifiConnecting = false;
       cachedIP = WiFi.localIP().toString();
-      wsLog("WiFi connected: " + cachedIP + " (" + String(WiFi.RSSI()) + " dBm)");
+      cachedRssi = WiFi.RSSI();
+      wsLog("WiFi connected: " + cachedIP + " (" + String(cachedRssi) + " dBm)");
     }
     initialized = true;
     return;
@@ -482,7 +483,7 @@ void handleWiFi() {
         String body = httpServer.arg("plain");
         handleMessage(body);
         if (body.indexOf("\"ping\"") >= 0 || body.indexOf("ping") >= 0) {
-          httpServer.send(200, "application/json", "{\"pong\":true,\"ip\":\"" + WiFi.localIP().toString() + "\",\"rssi\":" + WiFi.RSSI() + ",\"fw\":\"" + String(FW_VERSION) + "\"}");
+          httpServer.send(200, "application/json", "{\"pong\":true,\"ip\":\"" + WiFi.localIP().toString() + "\",\"rssi\":" + String(cachedRssi) + ",\"fw\":\"" + String(FW_VERSION) + "\"}");
         } else {
           httpServer.send(200, "text/plain", "ok");
         }
@@ -1094,13 +1095,16 @@ void updateLED() {
 // TELEMETRY (JSON manual — lebih cepat dari ArduinoJson)
 // =======================
 static String cachedIP = "";
+static int cachedRssi = 0;
 String buildTelemetryJson() {
   String mode = emergencyStop
     ? "emergency"
     : (getBehavior() != "stop" ? "auto" : "manual");
   int avgSpeed = (abs(currentLeftSpeed) + abs(currentRightSpeed)) / 2;
 
-  String j = "{\"mode\":\"" + mode + "\"";
+  String j;
+  j.reserve(512);
+  j = "{\"mode\":\"" + mode + "\"";
   j += ",\"speed\":" + String(avgSpeed);
   j += ",\"left\":" + String(currentLeftSpeed);
   j += ",\"right\":" + String(currentRightSpeed);
@@ -1128,7 +1132,7 @@ String buildTelemetryJson() {
   j += ",\"gyroZ\":" + String(round(getGyroZ() * 10) / 10);
   j += ",\"servo\":" + String(getServoAngle());
   j += ",\"behavior\":\"" + getBehavior() + "\"";
-  j += ",\"rssi\":" + String(WiFi.RSSI());
+  j += ",\"rssi\":" + String(cachedRssi);
   j += ",\"heap\":" + String(ESP.getFreeHeap());
   j += ",\"uptime\":" + String((millis() - startTime) / 1000);
   j += "}";
@@ -1136,6 +1140,7 @@ String buildTelemetryJson() {
 }
 
 void sendTelemetry() {
+  cachedRssi = WiFi.RSSI();
   String json = buildTelemetryJson();
   webSocket.broadcastTXT(json);
   if (mqttEnabled && mqttClient.connected())
@@ -1192,9 +1197,11 @@ void connectMQTT() {
   if (mqttTls) {
     mqttClient.setClient(mqttSecureClient);
     mqttSecureClient.setInsecure();
-    mqttSecureClient.setHandshakeTimeout(15000);
+    mqttSecureClient.setHandshakeTimeout(3000);
+    mqttSecureClient.setTimeout(2000);
   } else {
     mqttClient.setClient(mqttPlainClient);
+    mqttPlainClient.setTimeout(2000);
   }
 
   mqttClient.setServer(mqttBroker.c_str(), mqttPort);
@@ -1289,10 +1296,11 @@ void playTone(int freq, int duration) {
 }
 
 void playStartupMelody() {
-  playTone(523, 150);
-  playTone(659, 150);
-  playTone(784, 150);
-  playTone(1047, 300);
+  // short beep — non-blocking, gak pake delay
+  ledcSetup(CH_BUZZER, 1047, 8);
+  ledcWrite(CH_BUZZER, 128);
+  delay(50);
+  ledcWrite(CH_BUZZER, 0);
 }
 
 void setup() {

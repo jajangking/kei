@@ -32,7 +32,7 @@ void setServoAngle(int deg); // 0-180
 
 // Autonomy
 void initAutonomy();
-void tickAutonomy();
+void tickAutonomy(int *outLeft, int *outRight);
 void setBehavior(const String &name); // explore, stop, etc.
 String getBehavior();
 
