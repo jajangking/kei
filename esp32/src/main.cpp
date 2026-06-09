@@ -82,88 +82,119 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
 <html>
 <head>
 <meta charset='UTF-8'>
-<meta name='viewport' content='width=device-width,initial-scale=1,user-scalable=no'>
+<meta name='viewport' content='width=device-width,initial-scale=1,user-scalable=no,viewport-fit=cover'>
 <title>Kei Robot</title>
 <style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0a0a1a;color:#eee;padding:6px;height:100dvh;overflow:hidden;display:flex;flex-direction:column;gap:4px;user-select:none;-webkit-user-select:none}
-h1{font-size:14px;color:#e94560;text-align:center;flex-shrink:0;padding:2px 0;letter-spacing:1px}
-.sb{font-size:10px;color:#555;text-align:center;flex-shrink:0;padding:1px 0}
-.sb span{color:#e94560}
-.row{display:flex;gap:5px;flex:1;min-height:0}
-.jw{flex:1;background:#11112a;border-radius:10px;display:flex;align-items:center;justify-content:center;touch-action:none;min-height:140px}
-.jb{width:130px;height:130px;border-radius:50%;background:#1a1a3e;position:relative;box-shadow:inset 0 0 20px rgba(0,0,0,.5)}
-.jn{width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#e94560,#b02040);position:absolute;top:42px;left:42px;box-shadow:0 0 15px rgba(233,69,96,.25);pointer-events:none;transition:none}
-.tl{width:120px;flex-shrink:0;background:#11112a;border-radius:10px;padding:8px;font-size:10px;display:flex;flex-direction:column;gap:2px;overflow-y:auto}
-.tl .l{color:#555;display:inline-block;width:36px}.tl .v{color:#ddd}
-.sc{display:flex;gap:2px;margin:2px 0}
-.sct{flex:1;text-align:center;font-size:8px;font-weight:700;padding:2px 0;border-radius:3px;line-height:1.2}
-.btn{display:block;padding:8px 4px;border:none;border-radius:7px;font-size:11px;font-weight:600;cursor:pointer;text-align:center;transition:opacity .1s;flex:1;line-height:1.2}
-.btn:active{opacity:.5}
-.br{background:#b0302a;color:#fff}.bg{background:#27ae60;color:#fff}.bb{background:#2980b9;color:#fff}
-.bo{background:#a04020;color:#fff}.bk{background:#2c3e50;color:#ccc}.bp{background:#6a1b9a;color:#fff}.bw{background:#b8860b;color:#fff}
-.g2{display:grid;grid-template-columns:1fr 1fr;gap:4px}
-.g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px}
-.g4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:4px}
-.lk{text-align:center;font-size:9px;flex-shrink:0;padding:2px 0}
-.lk a{color:#444;text-decoration:none;margin:0 5px}
-.lk a:hover{color:#e94560}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{font-family:-apple-system,BlinkMacSystemFont,system-ui,sans-serif;background:linear-gradient(145deg,#070714 0%,#0d0d28 100%);color:#ddd;height:100dvh;overflow:hidden;display:flex;flex-direction:column;padding:10px 10px 6px;gap:6px;user-select:none;-webkit-user-select:none}
+/* header */
+.hd{display:flex;align-items:center;justify-content:space-between;flex-shrink:0;padding:0 4px}
+.hd h1{font-size:15px;font-weight:700;letter-spacing:1.5px;background:linear-gradient(135deg,#e94560,#ff6b8a);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hd .s{display:flex;align-items:center;gap:6px;font-size:10px;color:#666}
+.hd .s .dot{width:7px;height:7px;border-radius:50%;display:inline-block}
+.hd .s .dot.g{background:#27ae60;box-shadow:0 0 8px #27ae60}
+.hd .s .dot.r{background:#f44336;box-shadow:0 0 8px #f44336}
+.hd .s .dot.y{background:#ffeb3b;box-shadow:0 0 8px #ffeb3b}
+/* cards */
+.card{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:14px;padding:10px;backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px)}
+.row{display:flex;gap:6px;flex:1;min-height:0}
+/* joystick */
+.jw{flex:1;display:flex;align-items:center;justify-content:center;touch-action:none;min-height:130px}
+.jb{width:130px;height:130px;border-radius:50%;background:radial-gradient(circle at 40% 40%,#1e1e4a,#12122e);border:1px solid rgba(233,69,96,.15);position:relative;box-shadow:0 0 30px rgba(233,69,96,.05),inset 0 0 40px rgba(0,0,0,.4)}
+.jb::after{content:'';position:absolute;top:50%;left:50%;width:50px;height:50px;margin:-25px 0 0 -25px;border-radius:50%;border:1px solid rgba(233,69,96,.08);pointer-events:none}
+.jn{width:46px;height:46px;border-radius:50%;background:radial-gradient(circle at 35% 35%,#ff6b8a,#c02045);position:absolute;top:42px;left:42px;box-shadow:0 0 24px rgba(233,69,96,.4),inset 0 0 10px rgba(255,255,255,.15);pointer-events:none;transition:none}
+/* telemetry panel */
+.tl{width:130px;flex-shrink:0;display:flex;flex-direction:column;gap:4px;justify-content:center}
+.tl .i{display:flex;justify-content:space-between;align-items:center;padding:2px 6px;background:rgba(255,255,255,.03);border-radius:6px;font-size:9px}
+.tl .i .lb{color:#666}
+.tl .i .vl{color:#eee;font-weight:600;font-variant-numeric:tabular-nums}
+/* sectors bar */
+.sb{display:flex;gap:3px;margin:2px 0}
+.sb .s{flex:1;height:4px;border-radius:3px;transition:background .3s}
+/* mode badge */
+.badge{display:inline-block;padding:1px 8px;border-radius:10px;font-size:8px;font-weight:700;letter-spacing:.5px}
+.badge-auto{background:rgba(41,128,185,.2);color:#5dade2;border:1px solid rgba(41,128,185,.3)}
+.badge-manual{background:rgba(44,62,80,.2);color:#95a5a6;border:1px solid rgba(44,62,80,.3)}
+.badge-emergency{background:rgba(244,67,54,.2);color:#f44336;border:1px solid rgba(244,67,54,.3)}
+/* buttons */
+.btn{display:block;padding:9px 4px;border:none;border-radius:10px;font-size:11px;font-weight:600;cursor:pointer;text-align:center;transition:all .15s;flex:1;letter-spacing:.3px}
+.btn:active{transform:scale(.95);opacity:.7}
+.btn-primary{background:linear-gradient(135deg,#e94560,#c23152);color:#fff;box-shadow:0 4px 15px rgba(233,69,96,.25)}
+.btn-danger{background:linear-gradient(135deg,#c0392b,#e74c3c);color:#fff;box-shadow:0 4px 15px rgba(192,57,43,.25)}
+.btn-success{background:linear-gradient(135deg,#27ae60,#2ecc71);color:#fff;box-shadow:0 4px 15px rgba(39,174,96,.25)}
+.btn-blue{background:linear-gradient(135deg,#2980b9,#3498db);color:#fff;box-shadow:0 4px 15px rgba(41,128,185,.2)}
+.btn-dark{background:linear-gradient(135deg,#2c3e50,#34495e);color:#bdc3c7;box-shadow:0 4px 10px rgba(0,0,0,.2)}
+.btn-orange{background:linear-gradient(135deg,#d35400,#e67e22);color:#fff;box-shadow:0 4px 15px rgba(211,84,0,.2)}
+.btn-purple{background:linear-gradient(135deg,#6c3483,#8e44ad);color:#fff;box-shadow:0 4px 15px rgba(108,52,131,.2)}
+.btn-gold{background:linear-gradient(135deg,#b7950b,#f1c40f);color:#222;box-shadow:0 4px 15px rgba(183,149,11,.2)}
+.btn-outline{background:transparent;border:1px solid rgba(255,255,255,.08);color:#888}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+.g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px}
+.g4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:5px}
+.footer{display:flex;justify-content:center;gap:12px;flex-shrink:0;padding:3px 0;font-size:9px}
+.footer a{color:#444;text-decoration:none;padding:3px 6px;border-radius:6px;transition:all .2s}
+.footer a:hover{color:#e94560;background:rgba(233,69,96,.08)}
 .hide{display:none!important}
+/* ripple-like */
+.btn{position:relative;overflow:hidden}
 </style>
 </head>
 <body>
 
-<h1>⚡ KEI ROBOT</h1>
-<div class=sb id=sb>IP: <span id=ip>...</span> · RSSI: <span id=rssi>...</span> dBm · <span id=ver>...</span></div>
+<!-- Header -->
+<div class=hd>
+  <h1>⚡KEI</h1>
+  <div class=s><span class="dot g" id=statusDot></span><span id=statusText>online</span><span style=color:#555>|</span><span id=ip>...</span></div>
+</div>
 
+<!-- Main Row -->
 <div class=row>
-  <div class=jw id=jw>
-    <div class=jb id=jb>
-      <div class=jn id=jn></div>
-    </div>
+  <div class="card jw" id=jw>
+    <div class=jb id=jb><div class=jn id=jn></div></div>
   </div>
   <div class=tl id=tl>
-    <div><span class=l>Mode</span><span class=v id=mode>...</span></div>
-    <div><span class=l>Speed</span><span class=v id=speed>0</span></div>
-    <div><span class=l>Depan</span><span class=v id=dist>---</span></div>
-    <div class=sc><span class=sct id=sctL>←<br><b id=sl>---</b></span><span class=sct id=sctF>↑<br><b id=sf>---</b></span><span class=sct id=sctR>→<br><b id=sr>---</b></span></div>
-    <div><span class=l>Yaw</span><span class=v id=yaw>0.0</span></div>
-    <div><span class=l>Servo</span><span class=v id=servo>90</span></div>
-    <div><span class=l>RSSI</span><span class=v id=rssi2>--</span></div>
+    <div class=i><span class=lb>Mode</span><span id=modeBadge></span></div>
+    <div class=i><span class=lb>Speed</span><span class=vl id=speed>0</span></div>
+    <div class=i><span class=lb>Jarak</span><span class=vl id=dist>---</span></div>
+    <div class=sb id=sb><span class=s id=sbL style=background:#222></span><span class=s id=sbF style=background:#222></span><span class=s id=sbR style=background:#222></span></div>
+    <div class=i><span class=lb>Yaw</span><span class=vl id=yaw>0.0°</span></div>
+    <div class=i><span class=lb>Servo</span><span class=vl id=servo>90°</span></div>
   </div>
 </div>
 
+<!-- Emergency row -->
 <div class=g2 id=emergencyRow>
-  <button class='btn bg hide' id=btnRelease>RELEASE</button>
-  <button class='btn br' id=btnEmergency>EMERGENCY STOP</button>
+  <button class='btn btn-success hide' id=btnRelease>⟳ RELEASE</button>
+  <button class='btn btn-danger' id=btnEmergency>🧯 EMERGENCY</button>
 </div>
 
+<!-- Mode buttons -->
 <div class=g2>
-  <button class='btn bb' id=btnExplore>🤖 Explore</button>
-  <button class='btn bk' id=btnManual>⏹ Manual</button>
+  <button class='btn btn-blue' id=btnExplore>🤖 Explore</button>
+  <button class='btn btn-dark' id=btnManual>⏹ Manual</button>
 </div>
 
+<!-- D-pad + extras -->
 <div class=g3>
-  <button class='btn bo' id=btnFwd>▲</button>
-  <button class='btn bo' id=btnLeft>◀</button>
-  <button class='btn bo' id=btnRight>▶</button>
+  <button class='btn btn-orange' id=btnFwd>▲</button>
+  <button class='btn btn-orange' id=btnLeft>◀</button>
+  <button class='btn btn-orange' id=btnRight>▶</button>
 </div>
-
 <div class=g3>
-  <button class='btn bo' id=btnRev>▼</button>
-  <button class='btn bk' id=btnServoL>◄</button>
-  <button class='btn bk' id=btnServoR>►</button>
+  <button class='btn btn-orange' id=btnRev>▼</button>
+  <button class='btn btn-dark' id=btnServoL>◄</button>
+  <button class='btn btn-dark' id=btnServoR>►</button>
 </div>
-
 <div class=g3>
-  <button class='btn bk' id=btnStop>■ STOP</button>
-  <button class='btn bp' id=btnCenter>● 90</button>
-  <button class='btn bw' id=btnYawReset>⟳ Yaw</button>
+  <button class='btn btn-dark' id=btnStop>■ STOP</button>
+  <button class='btn btn-purple' id=btnCenter>● 90</button>
+  <button class='btn btn-gold' id=btnYawReset>⟳ Yaw</button>
 </div>
 
-<div class=lk>
+<!-- Footer -->
+<div class=footer>
   <a href=/config>⚙ Config</a>
-  <a href=/diag>🔍 Diagnostik</a>
+  <a href=/diag>🔍 Diag</a>
   <a href=/update>⬆ OTA</a>
 </div>
 
@@ -204,6 +235,7 @@ function cmd(o){
   x.send(JSON.stringify(o));
 }
 
+// Joystick events
 jb.addEventListener('touchstart',function(e){e.preventDefault();dragging=true;var p=pos(e);nub(p.dx,p.dy);send();},{passive:false});
 document.addEventListener('touchmove',function(e){if(!dragging)return;var n=Date.now();if(n-thr<40)return;thr=n;e.preventDefault();var p=pos(e);nub(p.dx,p.dy);send();},{passive:false});
 document.addEventListener('touchend',function(){if(!dragging)return;dragging=false;jn.style.left=(BASE_R-NUB_R)+'px';jn.style.top=(BASE_R-NUB_R)+'px';joyL=0;joyR=0;send();});
@@ -212,7 +244,7 @@ jb.addEventListener('mousedown',function(e){dragging=true;var p=pos(e);nub(p.dx,
 document.addEventListener('mousemove',function(e){if(!dragging)return;var n=Date.now();if(n-thr<40)return;thr=n;var p=pos(e);nub(p.dx,p.dy);send();});
 document.addEventListener('mouseup',function(){if(!dragging)return;dragging=false;jn.style.left=(BASE_R-NUB_R)+'px';jn.style.top=(BASE_R-NUB_R)+'px';joyL=0;joyR=0;send();});
 
-// Buttons
+// D-pad buttons
 ['btnFwd','btnRev','btnLeft','btnRight'].forEach(function(id){
   var el=$(id);
   var m={btnFwd:[200,200],btnRev:[-200,-200],btnLeft:[-150,150],btnRight:[150,-150]}[id];
@@ -232,31 +264,33 @@ $('btnServoL').addEventListener('click',function(){cmd({servo:0});});
 $('btnServoR').addEventListener('click',function(){cmd({servo:180});});
 $('btnYawReset').addEventListener('click',function(){cmd({headingReset:true});});
 
-// Sector color helper
-function sc(el,val,thr){
-  if(val<0){el.style.background='#222';el.style.color='#555';return;}
-  var c='#1a4a1a',t='#4caf50';
-  if(val<100){c='#4a1a1a';t='#f44336';}
-  else if(val<thr){c='#4a3a0a';t='#ffeb3b';}
-  el.style.background=c;el.style.color=t;
-}
-
 // Telemetry poll
 function poll(){
   fetch('/telemetry').then(function(r){return r.json()}).then(function(d){
-    $('ip').textContent=d.ip;$('rssi').textContent=d.rssi;$('ver').textContent=d.fw;
-    var md=d.mode+(d.behavior!='stop'?' ('+d.behavior+')':'');
-    $('mode').textContent=md;$('speed').textContent=d.speed;
-    $('dist').textContent=d.distance+' mm';
+    // IP
+    $('ip').textContent=d.ip;
+    // Mode badge
+    var md=d.mode,mb=$('modeBadge');
+    if(md=='emergency'){mb.className='badge badge-emergency';mb.textContent='EMERGENCY';$('statusDot').className='dot r';$('statusText').textContent='danger';}
+    else if(md=='auto'){mb.className='badge badge-auto';mb.textContent=d.behavior.toUpperCase();$('statusDot').className='dot g';$('statusText').textContent='auto';}
+    else{mb.className='badge badge-manual';mb.textContent='MANUAL';$('statusDot').className='dot g';$('statusText').textContent='manual';}
+    // Values
+    $('speed').textContent=d.speed;
+    $('dist').textContent=d.distance<0?'---':d.distance+'mm';
     $('yaw').textContent=d.yaw.toFixed(1)+'\u00b0';
-    $('servo').textContent=d.servo+'/';$('rssi2').textContent=d.rssi+' dBm';
-    // Sectors
+    $('servo').textContent=d.servo+'/';
+    // Sector bars
     var s=d.sectors,th=d.safeDist||200;
     if(s&&s.length==3){
-      $('sl').textContent=s[0]<0?'---':s[0]+'mm';
-      $('sf').textContent=s[1]<0?'---':s[1]+'mm';
-      $('sr').textContent=s[2]<0?'---':s[2]+'mm';
-      sc($('sctL'),s[0],th);sc($('sctF'),s[1],th);sc($('sctR'),s[2],th);
+      ['sbL','sbF','sbR'].forEach(function(id,i){
+        var el=$(id);
+        if(s[i]<0){el.style.background='#222';return;}
+        var c=s[i]<100?'#f44336':(s[i]<th?'#ffeb3b':'#27ae60');
+        var w=Math.min(100,Math.round(s[i]/th*100));
+        el.style.background=c+'44';el.style.boxShadow='0 0 6px '+c;
+        el.style.width=w+'%';el.style.margin='0 auto';
+        el.title=s[i]+'mm';
+      });
     }
     // Emergency toggle
     if(d.emergency!==lastEmerg){

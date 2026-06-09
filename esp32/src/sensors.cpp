@@ -31,6 +31,11 @@ static bool probeAddress(byte addr) {
 bool initVL53L0X() {
   diagLog = "[VL53L0X] init...";
 
+  // XSHUT pin — pull HIGH to enable sensor
+  pinMode(VL_XSHUT_PIN, OUTPUT);
+  digitalWrite(VL_XSHUT_PIN, HIGH);
+  delay(10);
+
   // Try address 0x29 (default), then 0x30 (alternative)
   byte addrs[] = {0x29, 0x30};
   byte foundAddr = 0;
@@ -90,10 +95,14 @@ void setSafetyThreshold(int mm) { safetyThresh = mm; }
 int getSafetyThreshold() { return safetyThresh; }
 
 void retrySensor() {
-  if (vlReady) return;
   sensorDead = false;
   vlReady = false;
   vlFailCount = 0;
+  // Pulse XSHUT LOW→HIGH to hard-reset the sensor
+  digitalWrite(VL_XSHUT_PIN, LOW);
+  delay(10);
+  digitalWrite(VL_XSHUT_PIN, HIGH);
+  delay(50);
   initVL53L0X();
 }
 

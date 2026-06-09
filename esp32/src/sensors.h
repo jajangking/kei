@@ -5,6 +5,7 @@
 
 #define SENSOR_SDA 21
 #define SENSOR_SCL 22
+#define VL_XSHUT_PIN 15
 
 // VL53L0X
 bool initVL53L0X();
