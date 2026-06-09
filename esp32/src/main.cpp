@@ -77,6 +77,179 @@ void updateLED();
 void connectWiFi();
 void handleWiFi();
 void handleRoot();
+const char PAGE_INDEX[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset='UTF-8'>
+<meta name='viewport' content='width=device-width,initial-scale=1,user-scalable=no'>
+<title>Kei Robot</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0a0a1a;color:#eee;padding:6px;height:100dvh;overflow:hidden;display:flex;flex-direction:column;gap:4px;user-select:none;-webkit-user-select:none}
+h1{font-size:14px;color:#e94560;text-align:center;flex-shrink:0;padding:2px 0;letter-spacing:1px}
+.sb{font-size:10px;color:#555;text-align:center;flex-shrink:0;padding:1px 0}
+.sb span{color:#e94560}
+.row{display:flex;gap:5px;flex:1;min-height:0}
+.jw{flex:1;background:#11112a;border-radius:10px;display:flex;align-items:center;justify-content:center;touch-action:none;min-height:140px}
+.jb{width:130px;height:130px;border-radius:50%;background:#1a1a3e;position:relative;box-shadow:inset 0 0 20px rgba(0,0,0,.5)}
+.jn{width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#e94560,#b02040);position:absolute;top:42px;left:42px;box-shadow:0 0 15px rgba(233,69,96,.25);pointer-events:none;transition:none}
+.tl{width:120px;flex-shrink:0;background:#11112a;border-radius:10px;padding:8px;font-size:10px;display:flex;flex-direction:column;gap:2px;overflow-y:auto}
+.tl .l{color:#555;display:inline-block;width:32px}.tl .v{color:#ddd}
+.btn{display:block;padding:8px 4px;border:none;border-radius:7px;font-size:11px;font-weight:600;cursor:pointer;text-align:center;transition:opacity .1s;flex:1;line-height:1.2}
+.btn:active{opacity:.5}
+.br{background:#b0302a;color:#fff}.bg{background:#27ae60;color:#fff}.bb{background:#2980b9;color:#fff}
+.bo{background:#a04020;color:#fff}.bk{background:#2c3e50;color:#ccc}.bp{background:#6a1b9a;color:#fff}.bw{background:#b8860b;color:#fff}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:4px}
+.g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px}
+.g4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:4px}
+.lk{text-align:center;font-size:9px;flex-shrink:0;padding:2px 0}
+.lk a{color:#444;text-decoration:none;margin:0 5px}
+.lk a:hover{color:#e94560}
+.hide{display:none!important}
+</style>
+</head>
+<body>
+
+<h1>⚡ KEI ROBOT</h1>
+<div class=sb id=sb>IP: <span id=ip>...</span> · RSSI: <span id=rssi>...</span> dBm · <span id=ver>...</span></div>
+
+<div class=row>
+  <div class=jw id=jw>
+    <div class=jb id=jb>
+      <div class=jn id=jn></div>
+    </div>
+  </div>
+  <div class=tl id=tl>
+    <div><span class=l>Mode</span><span class=v id=mode>...</span></div>
+    <div><span class=l>Speed</span><span class=v id=speed>0</span></div>
+    <div><span class=l>Jarak</span><span class=v id=dist>---</span></div>
+    <div><span class=l>Yaw</span><span class=v id=yaw>0.0</span></div>
+    <div><span class=l>Servo</span><span class=v id=servo>90</span></div>
+    <div><span class=l>RSSI</span><span class=v id=rssi2>--</span></div>
+  </div>
+</div>
+
+<div class=g2 id=emergencyRow>
+  <button class='btn bg hide' id=btnRelease>RELEASE</button>
+  <button class='btn br' id=btnEmergency>EMERGENCY STOP</button>
+</div>
+
+<div class=g2>
+  <button class='btn bb' id=btnExplore>🤖 Explore</button>
+  <button class='btn bk' id=btnManual>⏹ Manual</button>
+</div>
+
+<div class=g3>
+  <button class='btn bo' id=btnFwd>▲</button>
+  <button class='btn bo' id=btnLeft>◀</button>
+  <button class='btn bo' id=btnRight>▶</button>
+</div>
+
+<div class=g3>
+  <button class='btn bo' id=btnRev>▼</button>
+  <button class='btn bk' id=btnServoL>◄</button>
+  <button class='btn bk' id=btnServoR>►</button>
+</div>
+
+<div class=g3>
+  <button class='btn bk' id=btnStop>■ STOP</button>
+  <button class='btn bp' id=btnCenter>● 90</button>
+  <button class='btn bw' id=btnYawReset>⟳ Yaw</button>
+</div>
+
+<div class=lk>
+  <a href=/config>⚙ Config</a>
+  <a href=/update>⬆ OTA</a>
+</div>
+
+<script>
+(function(){
+var $=function(id){return document.getElementById(id)};
+var BASE_R=65,NUB_R=23,MAX_R=BASE_R-NUB_R-2;
+var jb=$('jb'),jn=$('jn');
+var dragging=false,joyL=0,joyR=0,lastL=0,lastR=0,thr=0;
+var lastEmerg=false;
+
+function pos(e){
+  var r=jb.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2;
+  var t=e.touches?e.touches[0]:e;
+  return {dx:t.clientX-cx,dy:t.clientY-cy};
+}
+function nub(dx,dy){
+  var d=Math.sqrt(dx*dx+dy*dy);
+  if(d>MAX_R){dx=dx/d*MAX_R;dy=dy/d*MAX_R;}
+  jn.style.left=(BASE_R-NUB_R+dx)+'px';
+  jn.style.top=(BASE_R-NUB_R+dy)+'px';
+  var ny=-dy/MAX_R,nx=dx/MAX_R;
+  joyL=Math.round(Math.max(-255,Math.min(255,(ny-nx)*255)));
+  joyR=Math.round(Math.max(-255,Math.min(255,(ny+nx)*255)));
+}
+function send(){
+  if(joyL===lastL&&joyR===lastR)return;
+  lastL=joyL;lastR=joyR;
+  var x=new XMLHttpRequest();
+  x.open('POST','/cmd',true);
+  x.setRequestHeader('Content-Type','application/json');
+  x.send(JSON.stringify({leftMotor:joyL,rightMotor:joyR}));
+}
+function cmd(o){
+  var x=new XMLHttpRequest();
+  x.open('POST','/cmd',true);
+  x.setRequestHeader('Content-Type','application/json');
+  x.send(JSON.stringify(o));
+}
+
+jb.addEventListener('touchstart',function(e){e.preventDefault();dragging=true;var p=pos(e);nub(p.dx,p.dy);send();},{passive:false});
+document.addEventListener('touchmove',function(e){if(!dragging)return;var n=Date.now();if(n-thr<40)return;thr=n;e.preventDefault();var p=pos(e);nub(p.dx,p.dy);send();},{passive:false});
+document.addEventListener('touchend',function(){if(!dragging)return;dragging=false;jn.style.left=(BASE_R-NUB_R)+'px';jn.style.top=(BASE_R-NUB_R)+'px';joyL=0;joyR=0;send();});
+document.addEventListener('touchcancel',function(){if(!dragging)return;dragging=false;jn.style.left=(BASE_R-NUB_R)+'px';jn.style.top=(BASE_R-NUB_R)+'px';joyL=0;joyR=0;send();});
+jb.addEventListener('mousedown',function(e){dragging=true;var p=pos(e);nub(p.dx,p.dy);send();});
+document.addEventListener('mousemove',function(e){if(!dragging)return;var n=Date.now();if(n-thr<40)return;thr=n;var p=pos(e);nub(p.dx,p.dy);send();});
+document.addEventListener('mouseup',function(){if(!dragging)return;dragging=false;jn.style.left=(BASE_R-NUB_R)+'px';jn.style.top=(BASE_R-NUB_R)+'px';joyL=0;joyR=0;send();});
+
+// Buttons
+['btnFwd','btnRev','btnLeft','btnRight'].forEach(function(id){
+  var el=$(id);
+  var m={btnFwd:[200,200],btnRev:[-200,-200],btnLeft:[-150,150],btnRight:[150,-150]}[id];
+  el.addEventListener('touchstart',function(e){e.preventDefault();cmd({leftMotor:m[0],rightMotor:m[1]});});
+  el.addEventListener('touchend',function(e){e.preventDefault();cmd({leftMotor:0,rightMotor:0});});
+  el.addEventListener('mousedown',function(){cmd({leftMotor:m[0],rightMotor:m[1]});});
+  el.addEventListener('mouseup',function(){cmd({leftMotor:0,rightMotor:0});});
+  el.addEventListener('mouseleave',function(){cmd({leftMotor:0,rightMotor:0});});
+});
+$('btnStop').addEventListener('click',function(){cmd({leftMotor:0,rightMotor:0});});
+$('btnExplore').addEventListener('click',function(){cmd({behavior:'explore'});});
+$('btnManual').addEventListener('click',function(){cmd({behavior:'stop'});});
+$('btnEmergency').addEventListener('click',function(){cmd({emergency:true});});
+$('btnRelease').addEventListener('click',function(){cmd({emergency:false});});
+$('btnCenter').addEventListener('click',function(){cmd({servo:90});});
+$('btnServoL').addEventListener('click',function(){cmd({servo:0});});
+$('btnServoR').addEventListener('click',function(){cmd({servo:180});});
+$('btnYawReset').addEventListener('click',function(){cmd({headingReset:true});});
+
+// Telemetry poll
+function poll(){
+  fetch('/telemetry').then(function(r){return r.json()}).then(function(d){
+    $('ip').textContent=d.ip;$('rssi').textContent=d.rssi;$('ver').textContent=d.fw;
+    $('mode').textContent=d.mode+(d.behavior!='stop'?' ('+d.behavior+')':'');
+    $('speed').textContent=d.speed;$('dist').textContent=d.distance+' mm';
+    $('yaw').textContent=d.yaw.toFixed(1)+'\u00b0';
+    $('servo').textContent=d.servo+'/';$('rssi2').textContent=d.rssi+' dBm';
+    // Emergency toggle
+    if(d.emergency!==lastEmerg){
+      lastEmerg=d.emergency;
+      if(d.emergency){$('btnEmergency').classList.add('hide');$('btnRelease').classList.remove('hide');}
+      else{$('btnEmergency').classList.remove('hide');$('btnRelease').classList.add('hide');}
+    }
+  }).catch(function(){});
+}
+setInterval(poll,1000);poll();
+})();
+</script>
+</body>
+</html>
+)rawliteral";
 void handleConfig();
 void saveRuntimeConfig();
 void loadRuntimeConfig();
@@ -361,7 +534,13 @@ void handleMessage(String msg) {
 
   if (doc["emergency"].is<bool>()) {
     emergencyStop = doc["emergency"].as<bool>();
-    if (emergencyStop) { stopMotors(); if (getBehavior() != "stop") setBehavior("stop"); }
+    if (emergencyStop) {
+      stopMotors();
+      if (getBehavior() != "stop") setBehavior("stop");
+    } else {
+      stopMotors();
+      lastCommandTime = millis();
+    }
     return;
   }
 
@@ -381,7 +560,6 @@ void handleMessage(String msg) {
 
   if (doc["ssid"].is<String>() && doc["password"].is<String>()) {
     saveWiFiConfig(doc["ssid"].as<String>(), doc["password"].as<String>());
-    httpServer.send(200, "application/json", "{\"wifiConfig\":true,\"ssid\":\"" + doc["ssid"].as<String>() + "\"}");
     delay(100); ESP.restart(); return;
   }
 
@@ -519,49 +697,7 @@ String buildTelemetryJson() {
 }
 
 void handleRoot() {
-  String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
-    "<title>Kei Robot</title>"
-    "<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:sans-serif;background:#1a1a2e;color:#fff;padding:16px}"
-    "h1{font-size:20px;text-align:center;color:#e94560;margin-bottom:16px}"
-    ".sec{background:#16213e;border-radius:10px;padding:16px;margin-bottom:12px}"
-    ".info{font-size:12px;color:#aaa;margin:4px 0}.info span{color:#e94560}"
-    ".btn{width:100%;padding:12px;border:none;border-radius:8px;font-size:14px;font-weight:bold;cursor:pointer;margin-top:8px}"
-    ".btn-primary{background:#e94560;color:#fff}.btn-danger{background:#ff6b6b;color:#fff}"
-    ".btn-warn{background:#f0a500;color:#fff}"
-    ".chk{display:flex;align-items:center;gap:8px;margin:8px 0}.chk input{width:auto}"
-    "</style></head><body>"
-    "<h1>Kei Robot</h1>"
-    "<div class=sec id=info>"
-    "<div class=info>Firmware: <span id=fw>...</span></div>"
-    "<div class=info>IP: <span id=ip>...</span></div>"
-    "<div class=info>RSSI: <span id=rssi>...</span> dBm</div>"
-    "<div class=info>Mode: <span id=mode>...</span></div>"
-    "<div class=info>Jarak: <span id=distance>...</span> mm</div>"
-    "<div class=info>Baterai: <span id=battery>...</span></div>"
-    "</div>"
-    "<div class=sec>"
-    "<div style='display:grid;grid-template-columns:1fr 1fr;gap:8px'>"
-    "<button class='btn btn-primary' ontouchstart='fetch(\"/cmd\",{method:\"POST\",body:JSON.stringify({leftMotor:200,rightMotor:200})})' ontouchend='fetch(\"/cmd\",{method:\"POST\",body:JSON.stringify({leftMotor:0,rightMotor:0})})'>▲</button>"
-    "<button class='btn btn-warn' onclick=\"fetch('/cmd',{method:'POST',body:JSON.stringify({behavior:'explore'})})\">Explore</button>"
-    "<button class='btn btn-danger' onclick=\"fetch('/cmd',{method:'POST',body:JSON.stringify({emergency:true})})\">STOP</button>"
-    "<button class='btn btn-primary' onclick=\"fetch('/cmd',{method:'POST',body:JSON.stringify({behavior:'stop'})})\">Manual</button>"
-    "</div>"
-    "</div>"
-    "<div class=sec style='text-align:center'>"
-    "<a href='/update' style='color:#e94560;font-size:12px'>OTA Update</a>"
-    "</div>"
-    "<script>"
-    "setInterval(function(){"
-    "fetch('/telemetry').then(function(r){return r.json()}).then(function(d){"
-    "document.getElementById('fw').textContent=d.fw;"
-    "document.getElementById('ip').textContent=d.ip;"
-    "document.getElementById('rssi').textContent=d.rssi;"
-    "document.getElementById('mode').textContent=d.mode+' ('+d.behavior+')';"
-    "document.getElementById('distance').textContent=d.distance;"
-    "});"
-    "},1000);"
-    "</script></body></html>";
-  httpServer.send(200, "text/html", html);
+  httpServer.send(200, "text/html", PAGE_INDEX);
 }
 
 void handleConfig() {
