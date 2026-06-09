@@ -94,8 +94,8 @@ bool safetyActive = false;
 // CONFIG
 // =======================
 int maxSpeed = 255;
-int rampRate = 4;
-int motorTimeout = 5000;
+int rampRate = 255;     // instant — no ramp
+int motorTimeout = 300;  // stop 300ms after joystick released
 
 bool powerSave = false;
 
@@ -194,8 +194,8 @@ void loadRuntimeConfig() {
   Preferences prefs;
   prefs.begin("runtime", false);
   maxSpeed = prefs.getInt("maxSpeed", 255);
-  rampRate = prefs.getInt("rampRate", 8);
-  motorTimeout = prefs.getInt("motorTimeout", 5000);
+  rampRate = prefs.getInt("rampRate", 255);
+  motorTimeout = prefs.getInt("motorTimeout", 300);
   leftTrim = prefs.getInt("leftTrim", 0);
   rightTrim = prefs.getInt("rightTrim", 0);
   prefs.end();
@@ -975,6 +975,15 @@ void handleMessage(String msg) {
 // RAMP
 // =======================
 void rampMotors() {
+  if (rampRate >= 255) {
+    if (currentLeftSpeed != targetLeftSpeed || currentRightSpeed != targetRightSpeed) {
+      currentLeftSpeed = targetLeftSpeed;
+      currentRightSpeed = targetRightSpeed;
+      writeMotorA(currentLeftSpeed);
+      writeMotorB(currentRightSpeed);
+    }
+    return;
+  }
   auto stepMotor = [](int &current, int target, int rate) {
     if (current == target) return;
     int step = (target > current) ? rate : -rate;
