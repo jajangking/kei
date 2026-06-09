@@ -7,7 +7,6 @@
 | **5V** | merah | VIN VL53L0X |
 | **5V** | merah | VM TB6612 (power motor) |
 | **3.3V** | orange | VCC TB6612 |
-| **3.3V** | orange | STBY TB6612 |
 | **3.3V** | orange | XSHUT VL53L0X |
 | **3.3V** | orange | VCC Buzzer |
 | **GND** | hitam | GND VL53L0X |
@@ -26,6 +25,7 @@
 
 | ESP32 | kabel | TB6612 |
 |---|---|---|
+| **GPIO32** | abu | STBY |
 | **GPIO25** | biru | PWMA |
 | **GPIO26** | putih | AIN1 |
 | **GPIO27** | coklat | AIN2 |
