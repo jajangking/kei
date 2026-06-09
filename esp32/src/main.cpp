@@ -1296,7 +1296,7 @@ void playTone(int freq, int duration) {
 }
 
 void playStartupMelody() {
-  // short beep — non-blocking, gak pake delay
+  // short beep — 50ms doang
   ledcSetup(CH_BUZZER, 1047, 8);
   ledcWrite(CH_BUZZER, 128);
   delay(50);
