@@ -78,3 +78,43 @@ Bagikan bus I2C sama VL53L0X.
 | **GND** | hitam | AD0 (set address 0x68) |
 
 AD0 langsung ke GND (pilih I2C address 0x68). Jangan di-fly. Jangan pake 5V — MPU6050 cuma toleran 3.3V.
+
+---
+
+## Troubleshooting — VL53L0X gak kedetek
+
+### 1. XSHUT harus GPIO, bukan 3.3V
+
+Dulu XSHUT ke 3.3V — kalau pinnya longgar atau ada cold solder, sensornya half-enabled dan gak respond di I2C.
+
+**Fix:** Pindahin XSHUT ke **GPIO15**. Kode bakal set HIGH pas init (`digitalWrite(VL_XSHUT_PIN, HIGH)`). Ini juga bisa hard-reset sensor via `retrySensor()` (pulse LOW → HIGH) tanpa restart ESP.
+
+### 2. Wire.setTimeout jangan 10ms
+
+`initVL53L0X()` dulu pake `Wire.setTimeout(10)` sebelum probing — terlalu agresif. Sensor butuh waktu lebih buat ngerespon.
+
+**Fix:** Gak usah set timeout di init. Biarin pake default 50ms dari `Wire.setTimeout(50)` di `setup()`.
+
+### 3. Retry init via command
+
+Kalau sensor tetep gak kedetek pas boot, kirim:
+```
+POST /cmd {"retrySensor": true}
+```
+Atau buka `/diag` → klik "⟳ Retry VL53L0X". Ini bakal pulse XSHUT LOW→HIGH + coba init ulang.
+
+### 4. I2C address alternatif
+
+Kode sekarang nyoba **0x29** (default) dulu, terus **0x30** (beberapa breakout pake address alternatif via solder pad).
+
+### 5. Cek wiring
+
+| Pin VL53L0X | Koneksi |
+|---|---|
+| VIN | 5V (bukan 3.3V — butuh 5V buat VCSEL laser) |
+| GND | GND |
+| SDA | GPIO21 |
+| SCL | GPIO22 |
+| XSHUT | GPIO15 |
+
+Kalo masih gak kedetek, cek voltase di VIN (5V) sama kontinuitas SDA/SCL. Kalo semua bener, breakout board mungkin rusak.
