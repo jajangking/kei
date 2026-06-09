@@ -23,7 +23,7 @@ jobs:
       - name: Install PlatformIO
         run: pip install platformio
 
-      - name: Build firmware
+      - name: Build all envs
         run: set -o pipefail; pio run -d esp32 2>&1 | tee /tmp/pio_output.txt
 
       - name: Upload error log if failed
@@ -37,9 +37,8 @@ jobs:
         if: success()
         run: |
           mkdir -p /tmp/release
-          cp esp32/.pio/build/esp32dev/bootloader.bin /tmp/release/
-          cp esp32/.pio/build/esp32dev/partitions.bin /tmp/release/
-          cp esp32/.pio/build/esp32dev/firmware.bin /tmp/release/
+          cp esp32/.pio/build/esp32dev/firmware.bin /tmp/release/firmware-ws-mqtt.bin
+          cp esp32/.pio/build/esp32dev-http/firmware.bin /tmp/release/firmware-http.bin
           ls -la /tmp/release/
 
       - name: Upload all binaries
@@ -53,11 +52,10 @@ jobs:
         if: success() && github.ref == 'refs/heads/main'
         run: |
           gh release create "build-${{ github.run_number }}" \
-            /tmp/release/bootloader.bin \
-            /tmp/release/partitions.bin \
-            /tmp/release/firmware.bin \
+            /tmp/release/firmware-ws-mqtt.bin \
+            /tmp/release/firmware-http.bin \
             --repo "${{ github.repository }}" \
             --title "Firmware Build #${{ github.run_number }}" \
-            --notes "Firmware build from commit ${{ github.sha }}"
+            --notes "**firmware-ws-mqtt.bin** — WebSocket + MQTT version (full feature)\\n**firmware-http.bin** — HTTP-only version (ringan, no freeze)"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
