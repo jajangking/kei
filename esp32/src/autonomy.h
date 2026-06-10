@@ -18,4 +18,8 @@ int getServoAngle();
 // Sector data
 int getSector(int index); // 0=left(180°), 1=front(90°), 2=right(0°)
 
+// Speed
+void setExploreSpeed(int speed);
+int getExploreSpeed();
+
 #endif

@@ -1,9 +1,6 @@
 #include "autonomy.h"
 #include "sensors.h"
 
-// ============================================================
-// Servo
-// ============================================================
 #define SERVO_CH 3
 #define SERVO_FREQ 50
 #define SERVO_RES 16
@@ -22,13 +19,13 @@ int getServoAngle() { return servoAngle; }
 // ============================================================
 // Autonomy — ESP32-side explore/avoid state machine
 // ============================================================
-#define EXPLORE_SPEED  140
 #define TURN_SPEED     100
 #define REV_SPEED     -80
-#define REV_MS         400
+#define REV_MS         600
+#define MIN_TURN_MS    400
+#define SWEEP_MS       200
+#define HYSTERESIS     80
 
-// Continuous sweep — always updating sectors while driving
-#define SWEEP_MS    200
 static const int sweepPath[] = {90, 60, 30, 60, 90, 120, 150, 120};
 #define SWEEP_LEN (sizeof(sweepPath)/sizeof(sweepPath[0]))
 static int sweepIdx = 0;
@@ -39,9 +36,12 @@ static String phase = "idle";
 static unsigned long phaseStart = 0;
 static bool turnRight = true;
 static int stuckCount = 0;
+static bool wasBlocked = false;
 static bool safetyOverride = false;
+static unsigned long exploreStart = 0;
+static unsigned long stuckStart = 0;
+static int exploreSpeed = 140;
 
-// Sector distances: 0=left(180°), 1=front(90°), 2=right(0°)
 static int sectorDist[3] = {-1, -1, -1};
 
 static void doSweep(unsigned long now) {
@@ -50,10 +50,10 @@ static void doSweep(unsigned long now) {
   int a = sweepPath[sweepIdx];
   sweepIdx = (sweepIdx + 1) % SWEEP_LEN;
   setServoAngle(a);
-  int d = readDistanceRaw(); // raw, no smoothing — avoids angle contamination
-  if (a <= 30)       sectorDist[2] = d; // right
-  else if (a >= 150) sectorDist[0] = d; // left
-  else               sectorDist[1] = d; // front
+  int d = readDistanceRaw();
+  if (a <= 30)       sectorDist[2] = d;
+  else if (a >= 150) sectorDist[0] = d;
+  else               sectorDist[1] = d;
 }
 
 static void pickTurn() {
@@ -61,7 +61,6 @@ static void pickTurn() {
   if (le > 0 && ri > 0)          turnRight = (ri >= le);
   else if (le > 0)               turnRight = false;
   else if (ri > 0)               turnRight = true;
-  // else keep current (alternating default)
   Serial.printf("[AUTO] pickTurn L=%d R=%d -> %s\n", le, ri, turnRight?"R":"L");
 }
 
@@ -71,6 +70,7 @@ void initAutonomy() {
   setServoAngle(90);
   behavior = "stop";
   phase = "idle";
+  wasBlocked = false;
   Serial.println("[AUTO] init OK");
 }
 
@@ -79,12 +79,24 @@ void setBehavior(const String &b) {
   phase = "idle";
   stuckCount = 0;
   safetyOverride = false;
+  wasBlocked = false;
+  exploreStart = millis();
+  stuckStart = 0;
   Serial.printf("[AUTO] behavior=%s\n", b.c_str());
 }
 
 String getBehavior() { return behavior; }
 bool getSafetyOverride() { return safetyOverride; }
 int getSector(int idx) { if (idx < 0 || idx > 2) return -1; return sectorDist[idx]; }
+
+static bool isBlockedHysteresis(int dist) {
+  if (wasBlocked)
+    return (dist > 0 && dist < getSafetyThreshold() + HYSTERESIS);
+  return (dist > 0 && dist < getSafetyThreshold());
+}
+
+void setExploreSpeed(int speed) { exploreSpeed = constrain(speed, 60, 255); }
+int getExploreSpeed() { return exploreSpeed; }
 
 void tickAutonomy(int *outLeft, int *outRight) {
   *outLeft = 0;
@@ -94,16 +106,24 @@ void tickAutonomy(int *outLeft, int *outRight) {
   if (behavior == "stop") return;
 
   int frontDist = sectorDist[1];
-  bool blocked = (frontDist > 0 && frontDist < getSafetyThreshold());
+  bool blocked = isBlockedHysteresis(frontDist);
   unsigned long now = millis();
+
+  if (blocked != wasBlocked) {
+    wasBlocked = blocked;
+    if (!blocked) Serial.printf("[AUTO] unblocked front=%d\n", frontDist);
+  }
 
   if (behavior == "explore") {
     if (phase == "idle") {
       phase = "fwd";
       phaseStart = now;
-      sectorDist[1] = readDistance();
-      *outLeft = EXPLORE_SPEED;
-      *outRight = EXPLORE_SPEED;
+      exploreStart = now;
+      stuckStart = 0;
+      stuckCount = 0;
+      doSweep(now);
+      *outLeft = exploreSpeed;
+      *outRight = exploreSpeed;
       return;
     }
 
@@ -111,7 +131,8 @@ void tickAutonomy(int *outLeft, int *outRight) {
       doSweep(now);
       if (blocked) {
         stuckCount++;
-        Serial.printf("[AUTO] blocked %d front=%d\n", stuckCount, frontDist);
+        if (stuckStart == 0) stuckStart = now;
+        Serial.printf("[AUTO] blocked #%d front=%d\n", stuckCount, frontDist);
         pickTurn();
         phase = "rev";
         phaseStart = now;
@@ -119,8 +140,8 @@ void tickAutonomy(int *outLeft, int *outRight) {
         *outRight = REV_SPEED;
         return;
       }
-      *outLeft = EXPLORE_SPEED;
-      *outRight = EXPLORE_SPEED;
+      *outLeft = exploreSpeed;
+      *outRight = exploreSpeed;
       return;
     }
 
@@ -128,7 +149,7 @@ void tickAutonomy(int *outLeft, int *outRight) {
       if (now - phaseStart >= REV_MS) {
         phase = "turn";
         phaseStart = now;
-        setServoAngle(90); // center servo during turn
+        setServoAngle(90);
       }
       *outLeft = REV_SPEED;
       *outRight = REV_SPEED;
@@ -136,16 +157,37 @@ void tickAutonomy(int *outLeft, int *outRight) {
     }
 
     if (phase == "turn") {
-      sectorDist[1] = readDistance();
-      if (!blocked) {
-        phase = "fwd";
-        *outLeft = EXPLORE_SPEED;
-        *outRight = EXPLORE_SPEED;
+      doSweep(now);
+
+      // Stuck: stuck > 5s in avoid cycle → wider turn
+      bool stuckStall = (stuckStart > 0 && now - stuckStart > 5000);
+
+      if (stuckStall) {
+        Serial.println("[AUTO] stuck — spin wider");
+        int s = TURN_SPEED + 40;
+        if (turnRight) { *outLeft = s; *outRight = -s; }
+        else           { *outLeft = -s; *outRight = s; }
         return;
       }
+
+      if (now - phaseStart < MIN_TURN_MS) {
+        if (turnRight) { *outLeft = TURN_SPEED; *outRight = -TURN_SPEED; }
+        else           { *outLeft = -TURN_SPEED; *outRight = TURN_SPEED; }
+        return;
+      }
+
+      if (!blocked) {
+        phase = "fwd";
+        stuckStart = 0;
+        *outLeft = exploreSpeed;
+        *outRight = exploreSpeed;
+        return;
+      }
+
       if (now - phaseStart > 5000) {
         turnRight = !turnRight;
         phaseStart = now;
+        Serial.println("[AUTO] turn flip");
       }
       if (turnRight) { *outLeft = TURN_SPEED; *outRight = -TURN_SPEED; }
       else           { *outLeft = -TURN_SPEED; *outRight = TURN_SPEED; }

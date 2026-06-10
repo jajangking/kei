@@ -112,3 +112,7 @@ Layer persepsi di atas detection mentah — output scene understanding buat expl
 - [ ] **Return path with heading** — simpan `{x, y, heading}` biar backtrack lebih akurat
 - [ ] **Goal navigation** — klik map → heading + distance → navigate
 - [ ] **Explore + Follow hybrid** — kalau detect object menarik, follow; after lost, resume explore
+
+## HTML dev workflow
+
+Dashboard HTML (`PAGE_INDEX`) ada di `esp32/data/index.html` — edit aja di situ, jalanin `python scripts/html2h.py` buat sync ke `src/page_index.h`, tinggal rebuild firmware. Bisa juga buka langsung `index.html` di browser pake mock data (tinggal ganti `/telemetry` sama `/cmd` endpoint).
