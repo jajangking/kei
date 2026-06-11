@@ -753,7 +753,6 @@ export default function VisionPage() {
       gyroRawRef.current = deg;
       gyroRef.current = ((deg - gyroOffsetRef.current) % 360 + 360) % 360;
       gyroRef.current = gyroRef.current * Math.PI / 180;
-      gyroRef.current = gyroRef.current * Math.PI / 180;
       if (useGyroRef.current) {
         headingRef.current = gyroRef.current;
       }
