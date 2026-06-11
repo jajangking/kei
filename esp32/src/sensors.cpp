@@ -71,7 +71,7 @@ int readDistanceRaw() {
 
   VL53L0X_RangingMeasurementData_t m;
   lox.rangingTest(&m, false);
-  if (m.RangeStatus == 4) {
+  if (m.RangeStatus != 0 || m.RangeMilliMeter > 4000) {
     vlFailCount++;
     return -1;
   }
@@ -258,18 +258,30 @@ String scanI2C() {
 #define SERVO_RES 16
 
 static int servoAngle = 90;
+static int servoAngleTarget = 90;
+static unsigned long lastServoStep = 0;
 
 void initServo() {
   ledcSetup(SERVO_CH, SERVO_FREQ, SERVO_RES);
   ledcAttachPin(SERVO_PIN, SERVO_CH);
-  setServoAngle(90);
+  servoAngle = 90;
+  servoAngleTarget = 90;
+  uint32_t duty = map(servoAngle, 0, 180, 3277, 6554);
+  ledcWrite(SERVO_CH, duty);
 }
 
 void setServoAngle(int deg) {
-  deg = constrain(deg, 0, 180);
-  uint32_t duty = map(deg, 0, 180, 3277, 6554);
+  servoAngleTarget = constrain(deg, 0, 180);
+}
+
+void updateServo() {
+  if (servoAngle == servoAngleTarget) return;
+  unsigned long now = millis();
+  if (now - lastServoStep < 15) return;
+  lastServoStep = now;
+  servoAngle += (servoAngleTarget > servoAngle) ? 1 : -1;
+  uint32_t duty = map(servoAngle, 0, 180, 3277, 6554);
   ledcWrite(SERVO_CH, duty);
-  servoAngle = deg;
 }
 
 int getServoAngle() { return servoAngle; }

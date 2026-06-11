@@ -50,6 +50,7 @@ export default function RemotePage() {
   const [manualDeviceId, setManualDeviceId] = useState("");
   const [scene, setScene] = useState<SceneMessage | null>(null);
   const [telemetry, setTelemetry] = useState<Telemetry>({});
+  const [servoLocal, setServoLocal] = useState(90);
   const [showVideo, setShowVideo] = useState(false);
   const [sceneAge, setSceneAge] = useState(0);
 
@@ -188,6 +189,7 @@ export default function RemotePage() {
           } else if (topic.endsWith("/telemetry")) {
             const { config: _cfg, ...rest } = data;
             setTelemetry(rest);
+            if (data.servo != null) setServoLocal(data.servo);
             if (data.distance != null) distanceRef.current = data.distance;
           }
         } catch {}
@@ -565,10 +567,10 @@ export default function RemotePage() {
           {telemetry.servo != null && (
             <span className="text-zinc-500 col-span-4 flex items-center gap-2">
               servo <input type="range" min="0" max="180" step="1"
-                value={telemetry.servo}
-                onChange={(e) => sendESP({ servo: parseInt(e.target.value) })}
+                value={servoLocal}
+                onChange={(e) => { const v = parseInt(e.target.value); setServoLocal(v); sendESP({ servo: v }); }}
                 className="w-20 h-1 accent-amber-500" />
-              <span className="text-amber-400 w-6 text-right">{telemetry.servo}°</span>
+              <span className="text-amber-400 w-6 text-right">{servoLocal}°</span>
             </span>
           )}
         </div>

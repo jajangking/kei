@@ -91,6 +91,7 @@ export default function VisionPage() {
   const [leftMotor, setLeftMotor] = useState(0);
   const [rightMotor, setRightMotor] = useState(0);
   const [telemetry, setTelemetry] = useState<Telemetry>({});
+  const [servoLocal, setServoLocal] = useState(90);
   const [logs, setLogs] = useState<{ msg: string; t: number }[]>([]);
 
   const [modelReady, setModelReady] = useState(false);
@@ -401,6 +402,7 @@ export default function VisionPage() {
         const { config: _cfg, ...rest } = d;
         lastTelemetryRef.current = Date.now();
         setTelemetry(p => ({ ...p, ...rest }));
+        if (d.servo != null) setServoLocal(d.servo);
         if (d.yaw != null && !useGyroRef.current) headingRef.current = d.yaw * Math.PI / 180;
         if (d.distance != null) distanceRef.current = d.distance;
       } catch {}
@@ -517,6 +519,7 @@ export default function VisionPage() {
             lastTelemetryRef.current = Date.now();
             const { config: _cfg, ...rest } = data;
             setTelemetry(p => ({ ...p, ...rest }));
+            if (data.servo != null) setServoLocal(data.servo);
             if (data.yaw != null && !useGyroRef.current) headingRef.current = data.yaw * Math.PI / 180;
             if (data.distance != null) distanceRef.current = data.distance;
           }
@@ -1815,10 +1818,10 @@ export default function VisionPage() {
                 <div className="flex items-center gap-2 px-3 py-1">
                   <span className="text-zinc-500 text-[8px] font-mono w-8">servo</span>
                   <input type="range" min="0" max="180" step="1"
-                    value={telemetry.servo}
-                    onChange={(e) => sendESP({ servo: parseInt(e.target.value) })}
+                    value={servoLocal}
+                    onChange={(e) => { const v = parseInt(e.target.value); setServoLocal(v); sendESP({ servo: v }); }}
                     className="w-20 h-1 accent-amber-500" />
-                  <span className="text-amber-400 text-[8px] font-mono w-6 text-right">{telemetry.servo}°</span>
+                  <span className="text-amber-400 text-[8px] font-mono w-6 text-right">{servoLocal}°</span>
                 </div>
               )}
               {telemetry.mpu_ok && (
