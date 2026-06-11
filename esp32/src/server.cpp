@@ -9,10 +9,10 @@ WebSocketsServer ws(81);
 static void handleRoot() { http.send(200, "text/html", PAGE_INDEX); }
 static void handleVersion() { http.send(200, "application/json", "{\"fw\":\"" + String(FW_VERSION) + "\"}"); }
 
-void wsBroadcast(const String &msg) { ws.broadcastTXT(msg); }
-void wsSend(uint8_t client, const String &msg) { ws.sendTXT(client, msg); }
+void wsBroadcast(String msg) { ws.broadcastTXT(msg); }
+void wsSend(uint8_t client, String msg) { ws.sendTXT(client, msg); }
 
-void wsLog(const String &msg) {
+void wsLog(String msg) {
   ws.broadcastTXT("{\"type\":\"log\",\"msg\":\"" + msg + "\"}");
   Serial.println(msg);
 }

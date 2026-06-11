@@ -12,8 +12,8 @@ extern WebSocketsServer ws;
 
 void initServer();
 void handleServer();
-void wsBroadcast(const String &msg);
-void wsSend(uint8_t client, const String &msg);
-void wsLog(const String &msg);
+void wsBroadcast(String msg);
+void wsSend(uint8_t client, String msg);
+void wsLog(String msg);
 
 #endif
