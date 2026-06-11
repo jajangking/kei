@@ -1539,7 +1539,6 @@ export default function VisionPage() {
             <span>accel: <span className="text-cyan-400">{accelDisp}</span></span>
             <span>track: <span className="text-white">{trackInfo || "-"}</span></span>
             <span>ws: <span className={wsConnected ? "text-green-400" : "text-red-400"}>{wsConnected ? "ON" : "OFF"}</span></span>
-            <span>gyro: <button onClick={() => { useGyroRef.current = true; setUseGyro(true); headingRef.current = gyroRef.current; }} className={useGyro ? "text-yellow-400 underline" : "text-zinc-600 hover:text-zinc-400"}>HP</button>|<button onClick={() => { useGyroRef.current = false; setUseGyro(false); }} className={!useGyro ? "text-yellow-400 underline" : "text-zinc-600 hover:text-zinc-400"}>MPU</button> <span className="text-zinc-600">{useGyro ? (gyroRef.current * 180 / Math.PI).toFixed(0) : (telemetry.yaw ?? 0).toFixed(0)}°</span></span>
           </div>
           <div className="mt-1 pt-1 border-t border-white/5 text-zinc-500 leading-3 h-[60px] overflow-y-auto">
             {detectionsRef.current.length > 0 ? detectionsRef.current.map((d, i) => {
@@ -1898,6 +1897,14 @@ export default function VisionPage() {
             style={{ backgroundColor: showTelemetry ? "#a855f7" : "transparent", borderColor: showTelemetry ? "#a855f7" : "rgba(255,255,255,0.15)", color: showTelemetry ? "#000" : "rgba(255,255,255,0.4)" }}>
             T
           </button>
+          <div className="absolute top-1.5 right-1.5 z-10 flex items-center gap-0.5 text-[7px] font-mono">
+            <button onClick={() => { useGyroRef.current = true; setUseGyro(true); headingRef.current = gyroRef.current; }}
+              className={"px-1 rounded " + (useGyro ? "text-yellow-400 underline bg-yellow-400/10" : "text-zinc-600 hover:text-zinc-400")}>HP</button>
+            <span className="text-zinc-700">|</span>
+            <button onClick={() => { useGyroRef.current = false; setUseGyro(false); }}
+              className={"px-1 rounded " + (!useGyro ? "text-yellow-400 underline bg-yellow-400/10" : "text-zinc-600 hover:text-zinc-400")}>MPU</button>
+            <span className="ml-1 text-zinc-500">{useGyro ? (gyroRef.current * 180 / Math.PI).toFixed(0) : (telemetry.yaw ?? 0).toFixed(0)}°</span>
+          </div>
           <div className="absolute bottom-0 left-0 right-0 flex flex-wrap gap-x-2 px-2 py-1 text-[6px] font-mono text-zinc-600 bg-black/40">
             <span><span style={{ color: '#3b82f6' }}>&#9650;</span> robot</span>
             <span><span style={{ color: '#22c55e' }}>&#8593;</span> gerak</span>
