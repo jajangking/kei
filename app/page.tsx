@@ -395,6 +395,7 @@ export default function VisionPage() {
         const { config: _cfg, ...rest } = d;
         lastTelemetryRef.current = Date.now();
         setTelemetry(p => ({ ...p, ...rest }));
+        if (d.yaw != null) headingRef.current = d.yaw * Math.PI / 180;
         if (d.distance != null) distanceRef.current = d.distance;
       } catch {}
     };
@@ -510,6 +511,7 @@ export default function VisionPage() {
             lastTelemetryRef.current = Date.now();
             const { config: _cfg, ...rest } = data;
             setTelemetry(p => ({ ...p, ...rest }));
+            if (data.yaw != null) headingRef.current = data.yaw * Math.PI / 180;
             if (data.distance != null) distanceRef.current = data.distance;
           }
         } catch {}
