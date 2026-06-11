@@ -11,7 +11,6 @@ static int lastGoodDist = -1;
 static int lastGoodRaw = -1;
 static String diagLog = "";
 
-static bool sensorDead = false; // skip all I2C kalo mati
 static int i2cFailCount = 0;
 
 // Rate-limiter
@@ -20,11 +19,40 @@ static int i2cFailCount = 0;
 static unsigned long lastVLRead = 0;
 static int vlFailCount = 0;
 
+static void I2C_ClearBus() {
+  // Toggle SCL 9x to release stuck SDA (ref: pololu/vl53l0x-arduino#50)
+  pinMode(SENSOR_SCL, OUTPUT);
+  pinMode(SENSOR_SDA, INPUT_PULLUP);
+  for (int i = 0; i < 9; i++) {
+    digitalWrite(SENSOR_SCL, LOW);
+    delayMicroseconds(10);
+    digitalWrite(SENSOR_SCL, HIGH);
+    delayMicroseconds(10);
+  }
+  // Send STOP condition
+  pinMode(SENSOR_SDA, OUTPUT);
+  digitalWrite(SENSOR_SDA, LOW);
+  delayMicroseconds(10);
+  digitalWrite(SENSOR_SCL, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(SENSOR_SDA, HIGH);
+  delayMicroseconds(10);
+  // Restore to INPUT (Wire.begin() will reconfigure)
+  pinMode(SENSOR_SDA, INPUT);
+  pinMode(SENSOR_SCL, INPUT);
+}
+
+static void servoDetachForI2C();
+static void servoAttachAfterI2C();
+
 static void resetI2C() {
+  servoDetachForI2C();
+
   Wire.end();
   delay(20);
+  I2C_ClearBus();
   Wire.begin(SENSOR_SDA, SENSOR_SCL);
-  Wire.setClock(100000);  // turun ke 100kHz biar stabil
+  Wire.setClock(100000);
   Wire.setTimeout(50);
   i2cFailCount = 0;
   vlFailCount = 0;
@@ -32,6 +60,8 @@ static void resetI2C() {
   initVL53L0X();
   delay(20);
   initMPU6050();
+
+  servoAttachAfterI2C();
 }
 
 static bool probeAddress(byte addr) {
@@ -78,7 +108,6 @@ bool initVL53L0X() {
   }
 
   diagLog += "\n[VL53L0X] semua attempt gagal — skip";
-  sensorDead = true;
   return false;
 }
 
@@ -114,7 +143,6 @@ int readDistance() {
 bool isSensorReady() { return vlReady; }
 String getSensorDiagnostic() { return diagLog; }
 void retrySensor() {
-  sensorDead = false;
   vlReady = false;
   vlFailCount = 0;
   // Pulse XSHUT LOW→HIGH to hard-reset the sensor
@@ -288,12 +316,31 @@ String scanI2C() {
 
 static int servoAngle = 90;
 
+static bool servoAttached = false;
+
 void initServo() {
   ledcSetup(SERVO_CH, SERVO_FREQ, SERVO_RES);
   ledcAttachPin(SERVO_PIN, SERVO_CH);
+  servoAttached = true;
   uint32_t duty = map(90, 0, 180, 205, 410);
   ledcWrite(SERVO_CH, duty);
   servoAngle = 90;
+}
+
+static void servoDetachForI2C() {
+  if (servoAttached) {
+    ledcDetachPin(SERVO_PIN);
+    servoAttached = false;
+  }
+}
+
+static void servoAttachAfterI2C() {
+  if (!servoAttached) {
+    ledcAttachPin(SERVO_PIN, SERVO_CH);
+    uint32_t duty = map(servoAngle, 0, 180, 205, 410);
+    ledcWrite(SERVO_CH, duty);
+    servoAttached = true;
+  }
 }
 
 void setServoAngle(int deg) {

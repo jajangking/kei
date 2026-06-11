@@ -290,6 +290,7 @@ void setup() {
   Wire.setTimeout(50);
 
   initMotors();
+  delay(100); // power rail stabil sebelum sensor init
   initVL53L0X();
   initMPU6050();
   initServo();
