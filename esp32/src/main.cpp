@@ -88,7 +88,7 @@ static void updateLED() {
 // ============================================================
 // Buzzer
 // ============================================================
-static void buzzerOn(int freq) { ledcSetup(PWM_BUZZ, freq, PWM_RES); ledcWrite(PWM_BUZZ, 128); }
+static void buzzerOn() { ledcWrite(PWM_BUZZ, 128); }
 static void buzzerOff() { ledcWrite(PWM_BUZZ, 0); }
 
 static void updateBuzzer() {
@@ -102,7 +102,7 @@ static void updateBuzzer() {
     unsigned long interval = state ? 60 : 200;
     if (now - last >= interval) {
       last = now; state = !state;
-      if (state) buzzerOn(880); else buzzerOff();
+      if (state) buzzerOn(); else buzzerOff();
     }
     return;
   }
@@ -116,12 +116,12 @@ static void updateBuzzer() {
   unsigned long interval = state ? 100 : 400;
   if (now - last >= interval) {
     last = now; state = !state;
-    if (state) buzzerOn(440); else buzzerOff();
+    if (state) buzzerOn(); else buzzerOff();
   }
 }
 
 static void playStartupMelody() {
-  ledcSetup(PWM_BUZZ, 1047, PWM_RES); ledcWrite(PWM_BUZZ, 128);
+  ledcWrite(PWM_BUZZ, 128);
   delay(50);
   ledcWrite(PWM_BUZZ, 0);
 }

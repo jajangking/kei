@@ -255,7 +255,7 @@ String scanI2C() {
 // ============================================================
 #define SERVO_CH 3
 #define SERVO_FREQ 50
-#define SERVO_RES 16
+#define SERVO_RES 12
 
 static int servoAngle = 90;
 static int servoAngleTarget = 90;
@@ -266,7 +266,7 @@ void initServo() {
   ledcAttachPin(SERVO_PIN, SERVO_CH);
   servoAngle = 90;
   servoAngleTarget = 90;
-  uint32_t duty = map(servoAngle, 0, 180, 3277, 6554);
+  uint32_t duty = map(servoAngle, 0, 180, 205, 410);
   ledcWrite(SERVO_CH, duty);
 }
 
@@ -280,7 +280,7 @@ void updateServo() {
   if (now - lastServoStep < 15) return;
   lastServoStep = now;
   servoAngle += (servoAngleTarget > servoAngle) ? 1 : -1;
-  uint32_t duty = map(servoAngle, 0, 180, 3277, 6554);
+  uint32_t duty = map(servoAngle, 0, 180, 205, 410);
   ledcWrite(SERVO_CH, duty);
 }
 

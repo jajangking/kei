@@ -28,7 +28,7 @@
 #define PWM_FREQ_MOTOR  1000
 #define PWM_FREQ_SERVO  50
 #define PWM_RES         8
-#define PWM_RES_SERVO   16
+#define PWM_RES_SERVO   12
 #define MOTOR_TIMEOUT_DEFAULT 300
 
 #endif
