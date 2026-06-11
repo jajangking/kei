@@ -52,6 +52,20 @@ void initServer() {
     http.send(200, "application/json", j);
   });
 
+  http.on("/api/diag", []() {
+    extern String getSensorDiagnostic();
+    extern String getMPUDiagnostic();
+    extern String scanI2C();
+    extern bool isSensorReady();
+    extern bool isMPUReady();
+    String j = "{\"vl\":" + String(isSensorReady() ? "true" : "false");
+    j += ",\"mpu\":" + String(isMPUReady() ? "true" : "false");
+    j += ",\"vl_diag\":\"" + getSensorDiagnostic() + "\"";
+    j += ",\"mpu_diag\":\"" + getMPUDiagnostic() + "\"";
+    j += ",\"i2c_scan\":\"" + scanI2C() + "\"}";
+    http.send(200, "application/json", j);
+  });
+
   http.on("/update", []() {
     String page = R"rawliteral(
 <!DOCTYPE html><html><head>
@@ -101,6 +115,36 @@ f.onsubmit=function(e){
     } else if (u.status == UPLOAD_FILE_END) {
       if (Update.end(true)) Update.printError(Serial);
     }
+  });
+
+  http.on("/diag", []() {
+    extern String getSensorDiagnostic();
+    extern String getMPUDiagnostic();
+    extern String scanI2C();
+    extern bool isSensorReady();
+    extern bool isMPUReady();
+    String s = getSensorDiagnostic();
+    String m = getMPUDiagnostic();
+    String i2c = scanI2C();
+    String body = R"rawliteral(
+<!DOCTYPE html><html><head>
+<meta charset=utf-8><meta http-equiv=refresh content=3>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>Diagnostic</title>
+<style>
+body{background:#111;color:#eee;font-family:monospace;padding:1rem;font-size:14px}
+h2{color:#f59e0b}
+pre{background:#1a1a1a;padding:1rem;border-radius:6px;border:1px solid #333;overflow:auto}
+.ok{color:#22c55e}.fail{color:#ef4444}
+</style></head><body>
+<h2>🔍 Sensor Diagnostic</h2>
+<p>VL53L0X: )rawliteral" + String(isSensorReady() ? "<span class=ok>OK</span>" : "<span class=fail>FAIL</span>") + R"rawliteral(
+ &nbsp; MPU6050: )rawliteral" + String(isMPUReady() ? "<span class=ok>OK</span>" : "<span class=fail>FAIL</span>") + R"rawliteral(</p>
+<pre>)rawliteral" + s + "\n\n" + m + "\n\n" + i2c + R"rawliteral(</pre>
+<p><small>Auto-refresh setiap 3 detik</small></p>
+</body></html>
+)rawliteral";
+    http.send(200, "text/html", body);
   });
 
   http.begin();
