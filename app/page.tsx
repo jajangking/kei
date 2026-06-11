@@ -745,7 +745,7 @@ export default function VisionPage() {
     const cb = (e: DeviceOrientationEvent) => {
       if (e.alpha === null) return;
       let deg = (e as any).webkitCompassHeading ?? e.alpha;
-      gyroRef.current = (360 - deg) * Math.PI / 180;
+      gyroRef.current = deg * Math.PI / 180;
       if (useGyroRef.current) {
         headingRef.current = gyroRef.current;
       }
