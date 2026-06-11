@@ -180,6 +180,7 @@ export default function VisionPage() {
     window.speechSynthesis.speak(u);
   }
   const gyroRef = useRef(0);
+  const gyroRawRef = useRef(0);
   const gyroOffsetRef = useRef(0);
   const useGyroRef = useRef(true);
   const [useGyro, setUseGyro] = useState(true);
@@ -396,7 +397,7 @@ export default function VisionPage() {
         const { config: _cfg, ...rest } = d;
         lastTelemetryRef.current = Date.now();
         setTelemetry(p => ({ ...p, ...rest }));
-        if (d.yaw != null && !useGyroRef.current) headingRef.current = -d.yaw * Math.PI / 180;
+        if (d.yaw != null && !useGyroRef.current) headingRef.current = d.yaw * Math.PI / 180;
         if (d.distance != null) distanceRef.current = d.distance;
       } catch {}
     };
@@ -512,7 +513,7 @@ export default function VisionPage() {
             lastTelemetryRef.current = Date.now();
             const { config: _cfg, ...rest } = data;
             setTelemetry(p => ({ ...p, ...rest }));
-            if (data.yaw != null && !useGyroRef.current) headingRef.current = -data.yaw * Math.PI / 180;
+            if (data.yaw != null && !useGyroRef.current) headingRef.current = data.yaw * Math.PI / 180;
             if (data.distance != null) distanceRef.current = data.distance;
           }
         } catch {}
@@ -746,8 +747,9 @@ export default function VisionPage() {
     const cb = (e: DeviceOrientationEvent) => {
       if (e.alpha === null) return;
       let deg = (e as any).webkitCompassHeading ?? e.alpha;
-      gyroRef.current = (deg * Math.PI / 180) - gyroOffsetRef.current;
-      if (gyroRef.current < 0) gyroRef.current += Math.PI * 2;
+      gyroRawRef.current = deg;
+      gyroRef.current = ((deg - gyroOffsetRef.current) % 360 + 360) % 360;
+      gyroRef.current = gyroRef.current * Math.PI / 180;
       if (useGyroRef.current) {
         headingRef.current = gyroRef.current;
       }
@@ -1906,7 +1908,7 @@ export default function VisionPage() {
             <button onClick={() => { useGyroRef.current = false; setUseGyro(false); }}
               className={"px-1 rounded " + (!useGyro ? "text-yellow-400 underline bg-yellow-400/10" : "text-zinc-600 hover:text-zinc-400")}>MPU</button>
             <span className="ml-1 text-zinc-500">{useGyro ? (gyroRef.current * 180 / Math.PI).toFixed(0) : (telemetry.yaw ?? 0).toFixed(0)}°</span>
-            <button onClick={() => { gyroOffsetRef.current += gyroRef.current; if (gyroOffsetRef.current > Math.PI * 2) gyroOffsetRef.current -= Math.PI * 2; headingRef.current = 0; sendESP({ headingReset: true }); }}
+            <button onClick={() => { gyroOffsetRef.current = gyroRawRef.current; headingRef.current = 0; sendESP({ headingReset: true }); }}
               className="ml-1 text-zinc-600 hover:text-white">↺</button>
           </div>
           <div className="absolute bottom-0 left-0 right-0 flex flex-wrap gap-x-2 px-2 py-1 text-[6px] font-mono text-zinc-600 bg-black/40">
