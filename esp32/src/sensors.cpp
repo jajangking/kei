@@ -267,43 +267,50 @@ String scanI2C() {
 }
 
 // ============================================================
-// Servo — software PWM (bypass LEDC, no more timer conflicts)
+// Servo — bitbang PWM with RMT-like timing
 // ============================================================
+#include <esp_timer.h>
+
 static int servoAngle = 90;
-static int servoAngleTarget = 90;
-static unsigned long lastServoStep = 0;
-static unsigned long lastPulse = 0;
+static int servoPulseUs = 1472; // 90° center
+static esp_timer_handle_t servoEndTimer = NULL;
+
+static void IRAM_ATTR servoPulseEnd(void *arg) {
+  GPIO.out_w1tc = (1 << SERVO_PIN);
+}
+
+static void IRAM_ATTR servoPulseStart(void *arg) {
+  GPIO.out_w1ts = (1 << SERVO_PIN);
+  esp_timer_start_once(servoEndTimer, servoPulseUs);
+}
 
 void initServo() {
   pinMode(SERVO_PIN, OUTPUT);
   digitalWrite(SERVO_PIN, LOW);
+
+  esp_timer_create_args_t args = {};
+  args.callback = &servoPulseEnd;
+  args.arg = NULL;
+  args.name = "servo_end";
+  esp_timer_create(&args, &servoEndTimer);
+
+  // Periodic timer every 20ms (50Hz) for pulse start
+  esp_timer_create_args_t startArgs = {};
+  startArgs.callback = &servoPulseStart;
+  startArgs.arg = NULL;
+  startArgs.name = "servo_start";
+  esp_timer_handle_t startTimer;
+  esp_timer_create(&startArgs, &startTimer);
+  esp_timer_start_periodic(startTimer, 20000);
+
   servoAngle = 90;
-  servoAngleTarget = 90;
+  servoPulseUs = map(90, 0, 180, 544, 2400);
 }
 
 void setServoAngle(int deg) {
-  servoAngleTarget = constrain(deg, 0, 180);
-}
-
-void updateServo() {
-  // Smooth step toward target
-  if (servoAngle != servoAngleTarget) {
-    unsigned long ms = millis();
-    if (ms - lastServoStep >= 15) {
-      lastServoStep = ms;
-      servoAngle += (servoAngleTarget > servoAngle) ? 1 : -1;
-    }
-  }
-
-  // Generate 50Hz PWM pulse (20ms period)
-  unsigned long us = micros();
-  if (us - lastPulse >= 20000) {
-    lastPulse = us;
-    int pw = map(servoAngle, 0, 180, 544, 2400); // SG90 pulse width
-    digitalWrite(SERVO_PIN, HIGH);
-    delayMicroseconds(pw);
-    digitalWrite(SERVO_PIN, LOW);
-  }
+  deg = constrain(deg, 0, 180);
+  servoAngle = deg;
+  servoPulseUs = map(deg, 0, 180, 544, 2400);
 }
 
 int getServoAngle() { return servoAngle; }

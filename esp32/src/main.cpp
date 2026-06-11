@@ -245,8 +245,6 @@ void loop() {
   handleWiFi();
   updateLED();
   updateBuzzer();
-  updateServo();
-
   if (WiFi.status() != WL_CONNECTED) { stopMotors(); return; }
 
   // MQTT reconnect
