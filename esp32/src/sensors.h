@@ -33,6 +33,7 @@ String scanI2C();
 #define SERVO_PIN 5
 void initServo();
 void setServoAngle(int deg); // 0-180
+void updateServo();
 int getServoAngle();
 
 #endif
