@@ -16,8 +16,17 @@ static bool sensorDead = false; // skip all I2C kalo mati
 // Rate-limiter
 #define VL_READ_INTERVAL 200
 #define VL_FAIL_BACKOFF  1000
+#define VL_RESET_THRESHOLD 10
 static unsigned long lastVLRead = 0;
 static int vlFailCount = 0;
+
+static void resetI2C() {
+  Wire.end();
+  delay(10);
+  Wire.begin(PIN_SDA, PIN_SCL);
+  Wire.setClock(400000);
+  Wire.setTimeout(50);
+}
 
 static bool probeAddress(byte addr) {
   for (int r = 0; r < 3; r++) {
@@ -68,6 +77,13 @@ int readDistanceRaw() {
   int interval = (vlFailCount >= 3) ? VL_FAIL_BACKOFF : VL_READ_INTERVAL;
   if (now - lastVLRead < interval) return lastGoodRaw;
   lastVLRead = now;
+
+  if (vlFailCount >= VL_RESET_THRESHOLD) {
+    resetI2C();
+    initVL53L0X();
+    vlFailCount = 0;
+    return -1;
+  }
 
   VL53L0X_RangingMeasurementData_t m;
   lox.rangingTest(&m, false);
