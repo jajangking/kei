@@ -267,50 +267,27 @@ String scanI2C() {
 }
 
 // ============================================================
-// Servo — bitbang PWM with RMT-like timing
+// Servo — LEDC channel 8 (low-speed, grup beda dari motor)
 // ============================================================
-#include <esp_timer.h>
+#define SERVO_CH 8
+#define SERVO_FREQ 50
+#define SERVO_RES 12
 
 static int servoAngle = 90;
-static int servoPulseUs = 1472; // 90° center
-static esp_timer_handle_t servoEndTimer = NULL;
-
-static void IRAM_ATTR servoPulseEnd(void *arg) {
-  GPIO.out_w1tc = (1 << SERVO_PIN);
-}
-
-static void IRAM_ATTR servoPulseStart(void *arg) {
-  GPIO.out_w1ts = (1 << SERVO_PIN);
-  esp_timer_start_once(servoEndTimer, servoPulseUs);
-}
 
 void initServo() {
-  pinMode(SERVO_PIN, OUTPUT);
-  digitalWrite(SERVO_PIN, LOW);
-
-  esp_timer_create_args_t args = {};
-  args.callback = &servoPulseEnd;
-  args.arg = NULL;
-  args.name = "servo_end";
-  esp_timer_create(&args, &servoEndTimer);
-
-  // Periodic timer every 20ms (50Hz) for pulse start
-  esp_timer_create_args_t startArgs = {};
-  startArgs.callback = &servoPulseStart;
-  startArgs.arg = NULL;
-  startArgs.name = "servo_start";
-  esp_timer_handle_t startTimer;
-  esp_timer_create(&startArgs, &startTimer);
-  esp_timer_start_periodic(startTimer, 20000);
-
+  ledcSetup(SERVO_CH, SERVO_FREQ, SERVO_RES);
+  ledcAttachPin(SERVO_PIN, SERVO_CH);
+  uint32_t duty = map(90, 0, 180, 205, 410);
+  ledcWrite(SERVO_CH, duty);
   servoAngle = 90;
-  servoPulseUs = map(90, 0, 180, 544, 2400);
 }
 
 void setServoAngle(int deg) {
   deg = constrain(deg, 0, 180);
   servoAngle = deg;
-  servoPulseUs = map(deg, 0, 180, 544, 2400);
+  uint32_t duty = map(deg, 0, 180, 205, 410);
+  ledcWrite(SERVO_CH, duty);
 }
 
 int getServoAngle() { return servoAngle; }
