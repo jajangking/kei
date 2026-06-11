@@ -94,12 +94,25 @@ static void buzzerOff() { ledcWrite(PWM_BUZZ, 0); }
 static void updateBuzzer() {
   static unsigned long last = 0;
   static bool state = false;
-  bool mundur = currentLeft < -30 && currentRight < -30;
-  if (!mundur) {
-    if (state) { buzzerOff(); state = false; }
+  unsigned long now = millis();
+
+  // Proximity warning — priority: beep cepat kalo jarak <= 5cm
+  int d = readDistance();
+  if (d > 0 && d <= 50) {
+    unsigned long interval = state ? 60 : 200;
+    if (now - last >= interval) {
+      last = now; state = !state;
+      if (state) buzzerOn(880); else buzzerOff();
+    }
     return;
   }
-  unsigned long now = millis();
+
+  bool mundur = currentLeft < -30 && currentRight < -30;
+  if (!mundur) {
+    if (state) { buzzerOff(); state = false; last = 0; }
+    return;
+  }
+  if (last == 0) last = now;
   unsigned long interval = state ? 100 : 400;
   if (now - last >= interval) {
     last = now; state = !state;
