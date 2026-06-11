@@ -1539,7 +1539,7 @@ export default function VisionPage() {
             <span>accel: <span className="text-cyan-400">{accelDisp}</span></span>
             <span>track: <span className="text-white">{trackInfo || "-"}</span></span>
             <span>ws: <span className={wsConnected ? "text-green-400" : "text-red-400"}>{wsConnected ? "ON" : "OFF"}</span></span>
-            <span>gyro: <button onClick={() => { useGyroRef.current = !useGyroRef.current; setUseGyro(useGyroRef.current); if (useGyroRef.current) headingRef.current = gyroRef.current; }} className={useGyro ? "text-yellow-400 underline" : "text-zinc-600 hover:text-zinc-400"}>{useGyro ? "ON" : "OFF"}</button> <span className="text-zinc-600">{(gyroRef.current * 180 / Math.PI).toFixed(0)}°</span></span>
+            <span>gyro: <button onClick={() => { useGyroRef.current = true; setUseGyro(true); headingRef.current = gyroRef.current; }} className={useGyro ? "text-yellow-400 underline" : "text-zinc-600 hover:text-zinc-400"}>HP</button>|<button onClick={() => { useGyroRef.current = false; setUseGyro(false); }} className={!useGyro ? "text-yellow-400 underline" : "text-zinc-600 hover:text-zinc-400"}>MPU</button> <span className="text-zinc-600">{useGyro ? (gyroRef.current * 180 / Math.PI).toFixed(0) : (telemetry.yaw ?? 0).toFixed(0)}°</span></span>
           </div>
           <div className="mt-1 pt-1 border-t border-white/5 text-zinc-500 leading-3 h-[60px] overflow-y-auto">
             {detectionsRef.current.length > 0 ? detectionsRef.current.map((d, i) => {
