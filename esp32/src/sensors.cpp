@@ -23,7 +23,7 @@ static int vlFailCount = 0;
 static void resetI2C() {
   Wire.end();
   delay(10);
-  Wire.begin(PIN_SDA, PIN_SCL);
+  Wire.begin(SENSOR_SDA, SENSOR_SCL);
   Wire.setClock(400000);
   Wire.setTimeout(50);
 }
