@@ -12,11 +12,11 @@ static int lastGoodRaw = -1;
 static String diagLog = "";
 
 static bool sensorDead = false; // skip all I2C kalo mati
+static int i2cFailCount = 0;
 
 // Rate-limiter
 #define VL_READ_INTERVAL 200
 #define VL_FAIL_BACKOFF  1000
-#define VL_RESET_THRESHOLD 10
 static unsigned long lastVLRead = 0;
 static int vlFailCount = 0;
 
@@ -26,6 +26,10 @@ static void resetI2C() {
   Wire.begin(SENSOR_SDA, SENSOR_SCL);
   Wire.setClock(400000);
   Wire.setTimeout(50);
+  i2cFailCount = 0;
+  vlFailCount = 0;
+  initVL53L0X();
+  initMPU6050();
 }
 
 static bool probeAddress(byte addr) {
@@ -78,20 +82,14 @@ int readDistanceRaw() {
   if (now - lastVLRead < interval) return lastGoodRaw;
   lastVLRead = now;
 
-  if (vlFailCount >= VL_RESET_THRESHOLD) {
-    resetI2C();
-    initVL53L0X();
-    vlFailCount = 0;
-    return -1;
-  }
-
   VL53L0X_RangingMeasurementData_t m;
   lox.rangingTest(&m, false);
   if (m.RangeStatus != 0 || m.RangeMilliMeter > 4000) {
-    vlFailCount++;
+    if (++vlFailCount >= 10) { resetI2C(); return -1; }
     return -1;
   }
   vlFailCount = 0;
+  i2cFailCount = 0;
   lastGoodRaw = (int)m.RangeMilliMeter;
   return lastGoodRaw;
 }
@@ -141,14 +139,14 @@ static void writeMPU(byte reg, byte val) {
   Wire.endTransmission();
 }
 
-static void readMPURaw(byte reg, byte* buf, int len) {
+static bool readMPURaw(byte reg, byte* buf, int len) {
   Wire.beginTransmission(MPU_ADDR);
   Wire.write(reg);
-  Wire.endTransmission(false);
+  if (Wire.endTransmission(false) != 0) return false;
   Wire.requestFrom(MPU_ADDR, len);
   int n = Wire.available();
   for (int i = 0; i < len && i < n; i++) buf[i] = Wire.read();
-  // kalo I2C error, biarin buf berisi 0 (default-nya 0 via zero-initialized caller)
+  return n == len;
 }
 
 static int16_t read16(byte reg) {
@@ -193,8 +191,12 @@ void readMPU6050() {
   if (now - lastMPU < minInterval) return;
   if (now - lastMPU > 500) lastMPU = now - 10; // clamp dt kalo lama
 
-  byte buf[14];
-  readMPURaw(MPU_ACCEL, buf, 14);
+  byte buf[14] = {0};
+  if (!readMPURaw(MPU_ACCEL, buf, 14)) {
+    if (++i2cFailCount >= 20) { resetI2C(); }
+    return;
+  }
+  i2cFailCount = 0;
 
   ax = (buf[0] << 8) | buf[1];
   ay = (buf[2] << 8) | buf[3];
