@@ -267,23 +267,18 @@ String scanI2C() {
 }
 
 // ============================================================
-// Servo
+// Servo — software PWM (bypass LEDC, no more timer conflicts)
 // ============================================================
-#define SERVO_CH 3
-#define SERVO_FREQ 50
-#define SERVO_RES 12
-
 static int servoAngle = 90;
 static int servoAngleTarget = 90;
 static unsigned long lastServoStep = 0;
+static unsigned long lastPulse = 0;
 
 void initServo() {
-  ledcSetup(SERVO_CH, SERVO_FREQ, SERVO_RES);
-  ledcAttachPin(SERVO_PIN, SERVO_CH);
+  pinMode(SERVO_PIN, OUTPUT);
+  digitalWrite(SERVO_PIN, LOW);
   servoAngle = 90;
   servoAngleTarget = 90;
-  uint32_t duty = map(90, 0, 180, 205, 410);
-  ledcWrite(SERVO_CH, duty);
 }
 
 void setServoAngle(int deg) {
@@ -291,13 +286,24 @@ void setServoAngle(int deg) {
 }
 
 void updateServo() {
-  if (servoAngle == servoAngleTarget) return;
-  unsigned long now = millis();
-  if (now - lastServoStep < 15) return;
-  lastServoStep = now;
-  servoAngle += (servoAngleTarget > servoAngle) ? 1 : -1;
-  uint32_t duty = map(servoAngle, 0, 180, 205, 410);
-  ledcWrite(SERVO_CH, duty);
+  // Smooth step toward target
+  if (servoAngle != servoAngleTarget) {
+    unsigned long ms = millis();
+    if (ms - lastServoStep >= 15) {
+      lastServoStep = ms;
+      servoAngle += (servoAngleTarget > servoAngle) ? 1 : -1;
+    }
+  }
+
+  // Generate 50Hz PWM pulse (20ms period)
+  unsigned long us = micros();
+  if (us - lastPulse >= 20000) {
+    lastPulse = us;
+    int pw = map(servoAngle, 0, 180, 544, 2400); // SG90 pulse width
+    digitalWrite(SERVO_PIN, HIGH);
+    delayMicroseconds(pw);
+    digitalWrite(SERVO_PIN, LOW);
+  }
 }
 
 int getServoAngle() { return servoAngle; }
