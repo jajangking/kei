@@ -1904,6 +1904,8 @@ export default function VisionPage() {
             <button onClick={() => { useGyroRef.current = false; setUseGyro(false); }}
               className={"px-1 rounded " + (!useGyro ? "text-yellow-400 underline bg-yellow-400/10" : "text-zinc-600 hover:text-zinc-400")}>MPU</button>
             <span className="ml-1 text-zinc-500">{useGyro ? (gyroRef.current * 180 / Math.PI).toFixed(0) : (telemetry.yaw ?? 0).toFixed(0)}°</span>
+            <button onClick={() => { headingRef.current = 0; sendESP({ headingReset: true }); }}
+              className="ml-1 text-zinc-600 hover:text-white">↺</button>
           </div>
           <div className="absolute bottom-0 left-0 right-0 flex flex-wrap gap-x-2 px-2 py-1 text-[6px] font-mono text-zinc-600 bg-black/40">
             <span><span style={{ color: '#3b82f6' }}>&#9650;</span> robot</span>

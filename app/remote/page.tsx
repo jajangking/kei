@@ -508,8 +508,10 @@ export default function RemotePage() {
             distanceRef={distanceRef}
           />
           {scene && (
-            <div className="absolute bottom-1.5 left-1.5 z-10 text-[6px] font-mono text-zinc-600">
-              {scene.mode} | {scene.detections.length} obj | {(scene.heading * 180 / Math.PI).toFixed(0)}°
+            <div className="absolute bottom-1.5 left-1.5 z-10 flex items-center gap-1 text-[6px] font-mono text-zinc-600">
+              {scene && <>{scene.mode} | {scene.detections.length} obj | {(scene.heading * 180 / Math.PI).toFixed(0)}°</>}
+              <button onClick={() => sendESP({ headingReset: true })}
+                className="ml-1 text-zinc-600 hover:text-white">↺</button>
             </div>
           )}
         </div>
