@@ -53,7 +53,39 @@ void initServer() {
   });
 
   http.on("/update", []() {
-    http.send(200, "text/html", String(PAGE_INDEX)); // placeholder: real OTA page
+    String page = R"rawliteral(
+<!DOCTYPE html><html><head>
+<meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>OTA Update</title>
+<style>
+body{background:#111;color:#eee;font-family:monospace;padding:2rem}
+h2{color:#f59e0b}
+input,button{background:#222;color:#eee;border:1px solid #444;padding:8px 16px;font:inherit;border-radius:6px}
+button{background:#f59e0b;color:#111;font-weight:bold;cursor:pointer;margin-top:1rem}
+button:disabled{opacity:.4}
+#status{margin-top:1rem;color:#888;font-size:14px}
+</style></head><body>
+<h2>⬆ OTA Update</h2>
+<form id=f action=/upload method=post enctype=multipart/form-data>
+<input type=file name=firmware accept=.bin required>
+<button id=b type=submit>Upload & Flash</button>
+</form>
+<div id=status></div>
+<script>
+var f=document.getElementById('f'),b=document.getElementById('b'),s=document.getElementById('status');
+f.onsubmit=function(e){
+  e.preventDefault();
+  var fd=new FormData(f);
+  b.disabled=true; b.textContent='Uploading...'; s.textContent='Uploading firmware...';
+  fetch('/upload',{method:'POST',body:fd}).then(function(r){return r.text()}).then(function(t){
+    s.textContent=t; b.textContent='Done';
+  }).catch(function(e){
+    s.textContent='Error: '+e.message; b.disabled=false; b.textContent='Upload & Flash';
+  });
+};
+</script></body></html>
+)rawliteral";
+    http.send(200, "text/html", page);
   });
 
   http.on("/upload", HTTP_POST, []() {
@@ -67,7 +99,7 @@ void initServer() {
     } else if (u.status == UPLOAD_FILE_WRITE) {
       if (Update.write(u.buf, u.currentSize) != u.currentSize) Update.printError(Serial);
     } else if (u.status == UPLOAD_FILE_END) {
-      if (!Update.end(true)) Update.printError(Serial);
+      if (Update.end(true)) Update.printError(Serial);
     }
   });
 
