@@ -1,0 +1,34 @@
+#ifndef PINS_H
+#define PINS_H
+
+#define FW_VERSION "2.0.0-modular " __DATE__ " " __TIME__
+
+#define PIN_LED    2
+#define PIN_BUZZ   4
+
+#define PIN_PWMA  25
+#define PIN_AIN1  26
+#define PIN_AIN2  27
+#define PIN_PWMB  13
+#define PIN_BIN1  14
+#define PIN_BIN2  33
+#define PIN_STBY  32
+
+#define PIN_SDA   21
+#define PIN_SCL   22
+#define VL_XSHUT  15
+
+#define PIN_SERVO 5
+
+#define PWM_MOT_A  0
+#define PWM_MOT_B  1
+#define PWM_BUZZ   2
+#define PWM_SERVO  3
+
+#define PWM_FREQ_MOTOR  1000
+#define PWM_FREQ_SERVO  50
+#define PWM_RES         8
+#define PWM_RES_SERVO   16
+#define MOTOR_TIMEOUT_DEFAULT 300
+
+#endif

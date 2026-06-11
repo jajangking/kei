@@ -252,3 +252,27 @@ String scanI2C() {
   s += "\n[I2C] " + String(n) + " device(s)";
   return s;
 }
+
+// ============================================================
+// Servo
+// ============================================================
+#define SERVO_CH 3
+#define SERVO_FREQ 50
+#define SERVO_RES 16
+
+static int servoAngle = 90;
+
+void initServo() {
+  ledcSetup(SERVO_CH, SERVO_FREQ, SERVO_RES);
+  ledcAttachPin(SERVO_PIN, SERVO_CH);
+  setServoAngle(90);
+}
+
+void setServoAngle(int deg) {
+  deg = constrain(deg, 0, 180);
+  uint32_t duty = map(deg, 0, 180, 3277, 6554);
+  ledcWrite(SERVO_CH, duty);
+  servoAngle = deg;
+}
+
+int getServoAngle() { return servoAngle; }

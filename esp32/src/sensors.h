@@ -33,12 +33,8 @@ String scanI2C();
 
 // Servo
 #define SERVO_PIN 5
+void initServo();
 void setServoAngle(int deg); // 0-180
-
-// Autonomy
-void initAutonomy();
-void tickAutonomy(int *outLeft, int *outRight);
-void setBehavior(const String &name); // explore, stop, etc.
-String getBehavior();
+int getServoAngle();
 
 #endif

@@ -5,10 +5,6 @@ import { ObjectDetector, FaceDetector, FilesetResolver, type Detection } from "@
 import Simulasi from "./simulasi";
 import VoiceGroq from "./voicegroq";
 import { loadDB, saveDB, registerFace, renameFace, deleteFace, recognize, type FaceRecord } from "./facerecog";
-import { Scanner } from "./autonomy/scan";
-import { ReflexSystem } from "./autonomy/reflex";
-import { MotorSystem } from "./autonomy/motor";
-import type { ScanSector } from "./autonomy/types";
 import type { SceneMessage } from "./lib/sceneTypes";
 interface Telemetry {
   speed?: number;
@@ -166,7 +162,6 @@ export default function VisionPage() {
   const motorRunningRef = useRef(false);
   const detectTimerRef = useRef(0);
   const dynIntervalRef = useRef(250);
-  const reflexLogRef = useRef("");
 
 
   const [debug, setDebug] = useState(false);
@@ -175,29 +170,6 @@ export default function VisionPage() {
   const aiBusyRef = useRef(false);
   const sceneTickRef = useRef(0);
   const motorRef = useRef({ sendMotor: (l: number, r: number) => {}, trackTarget: null as { label: string; lastSeen: number } | null, setTrackTarget: (t: { label: string; lastSeen: number } | null) => {}, aiMotor: null as { l: number; r: number } | null });
-  const scannerRef = useRef(new Scanner());
-  const reflexRef = useRef(new ReflexSystem());
-  const motorRef2 = useRef<MotorSystem | null>(null);
-  const [scanResults, setScanResults] = useState<ScanSector[]>([]);
-  const [scanState, setScanState] = useState<"idle" | "spinning" | "done">("idle");
-  const [testResult, setTestResult] = useState("");
-  const behaviorRef = useRef<{ mode: "wall" | "drive" | "spin" | "scan" | "explore" | "return" } | null>(null);
-  interface ScanBhv { phase: "turn" | "pause"; sector: number; targetH: number; pauseTimer: number; startH: number; }
-  const scanBhvRef = useRef<ScanBhv | null>(null);
-  interface ExploreBhv {
-    phase: "drive" | "avoid" | "scan" | "choose" | "navturn";
-    scanTimer: number;
-    chosenH: number;
-    avoidStep: number;
-    avoidTimer: number;
-    returnPath: { x: number; y: number }[];
-    returnIdx: number;
-    driveFwd: number;
-  }
-  const exploreBhvRef = useRef<ExploreBhv>({ phase: "drive", scanTimer: 0, chosenH: 0, avoidStep: 0, avoidTimer: 0, returnPath: [], returnIdx: 0, driveFwd: 180 });
-  const lastExplorePhaseRef = useRef("");
-  const pauseForFaceRef = useRef(false);
-  const faceGreetTimoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function speakSimple(text: string) {
     if (aiBusyRef.current) return;
@@ -269,15 +241,6 @@ export default function VisionPage() {
     },
     aiMotor: null,
   };
-
-  // Init motor system for autonomy modules
-  if (!motorRef2.current) {
-    motorRef2.current = new MotorSystem((l, r) => {
-      sendMotor(l, r);
-      setLeftMotor(l);
-      setRightMotor(r);
-    });
-  }
 
   // Keyboard
   const keysRef = useRef(new Set<string>());
@@ -524,7 +487,7 @@ export default function VisionPage() {
           if (did && did === mqttDeviceIdRef.current) {
             if (topic.endsWith("/cmd")) {
               if (data.behavior) {
-                handleBehaviorCmd(data.behavior);
+                sendESP({ behavior: data.behavior });
               }
               if (data.emergency !== undefined) {
                 sendESP({ emergency: data.emergency });
@@ -880,15 +843,9 @@ export default function VisionPage() {
                   if (rec && rec.id === faceStableRef.current.id) {
                     faceStableRef.current.count++;
                     recognizedFaceRef.current = rec;
-                    if (faceStableRef.current.count === 5 && !aiBusyRef.current && !pauseForFaceRef.current) {
-                      pauseForFaceRef.current = true;
-                      if (behaviorRef.current) {
-                        behaviorRef.current = null;
-                        sendMotor(0, 0);
-                      }
+                    if (faceStableRef.current.count === 5 && !aiBusyRef.current) {
+                      sendMotor(0, 0);
                       speakSimple(`Halo ${rec.name}`);
-                      if (faceGreetTimoutRef.current) clearTimeout(faceGreetTimoutRef.current);
-                      faceGreetTimoutRef.current = setTimeout(() => { pauseForFaceRef.current = false; }, 4000);
                     }
                   } else if (rec) {
                     faceStableRef.current = { id: rec.id, count: 1 };
@@ -906,7 +863,7 @@ export default function VisionPage() {
           }
 
           detectionsRef.current = all;
-          updateSmooth(all, motorRunningRef.current || !!reflexRef.current.wallActive);
+          updateSmooth(all, motorRunningRef.current);
         } catch (err) {
           console.error("detect error:", err);
         }
@@ -922,7 +879,7 @@ export default function VisionPage() {
         publishScene();
         relayFrame();
       }
-      dynIntervalRef.current = (motorRunningRef.current || reflexRef.current.wallActive) ? 120 : 250;
+      dynIntervalRef.current = motorRunningRef.current ? 120 : 250;
       detectTimerRef.current = window.setTimeout(detectAndDraw, dynIntervalRef.current);
     };
 
@@ -1004,9 +961,9 @@ export default function VisionPage() {
       heading: headingRef.current,
       position: { x: posRef.current.x, y: posRef.current.y },
       freeSectors: [],
-      pathClear: !reflexRef.current.wallActive,
+      pathClear: true,
       tracking: { active: trackingRef.current, target: trackLabelRef.current || undefined },
-      mode: behaviorRef.current?.mode || "idle",
+      mode: "idle",
       timestamp: now,
     };
     try {
@@ -1030,80 +987,6 @@ export default function VisionPage() {
       fetch("/api/frame", { method: "POST", body: blob }).catch(() => {});
     }, "image/jpeg", 0.6);
   }, []);
-
-  function handleBehaviorCmd(cmd: string) {
-    if (cmd === "edge") {
-      const r = reflexRef.current;
-      const e = r.detectEdges(source, videoRef.current, streamImgRef.current, brightnessCanvasRef.current);
-      setTestResult(`edge L:${e.left.toFixed(1)} C:${e.center.toFixed(1)} R:${e.right.toFixed(1)}`);
-      return;
-    }
-    sendMotor(0, 0);
-    const bhv = cmd;
-    switch (bhv) {
-      case "stop":
-        behaviorRef.current = null;
-        sendESP({ behavior: "stop" });
-        if (motorRef2.current) motorRef2.current.stop();
-        if (trackingRef.current) { setTracking(false); trackingRef.current = false; trackTargetRef.current = null; trackLabelRef.current = null; setTrackInfo(""); setPickerTargets([]); }
-        setTestResult("STOP");
-        break;
-      case "wall":
-        behaviorRef.current = { mode: "wall" };
-        setTestResult("wall behavior start...");
-        if (trackingRef.current) { setTracking(false); trackingRef.current = false; trackTargetRef.current = null; }
-        break;
-      case "drive":
-        behaviorRef.current = { mode: "drive" };
-        setTestResult("maju behavior start...");
-        if (trackingRef.current) { setTracking(false); trackingRef.current = false; trackTargetRef.current = null; }
-        break;
-      case "spin":
-        behaviorRef.current = { mode: "spin" };
-        setTestResult("spin behavior start...");
-        if (trackingRef.current) { setTracking(false); trackingRef.current = false; trackTargetRef.current = null; }
-        break;
-      case "explore":
-        behaviorRef.current = null;
-        sendESP({ behavior: "explore" });
-        setTestResult("explore (ESP32 mode)...");
-        speakSimple("Mulai jelajah");
-        if (trackingRef.current) { setTracking(false); trackingRef.current = false; trackTargetRef.current = null; }
-        break;
-      case "return":
-        if (exploreBhvRef.current.returnPath.length === 0) { setTestResult("gak ada path!"); return; }
-        behaviorRef.current = { mode: "return" };
-        setTestResult("pulang...");
-        break;
-      case "scan":
-        const s = scannerRef.current;
-        if (behaviorRef.current?.mode === "scan") {
-          behaviorRef.current = null;
-          s.stop();
-          setScanState("idle");
-          if (motorRef2.current) motorRef2.current.stop();
-          setTestResult("scan dihentikan");
-        } else {
-          s.reset();
-          behaviorRef.current = { mode: "scan" };
-          setTestResult("scan...");
-        }
-        break;
-      case "follow":
-        if (tracking) {
-          setTracking(false); trackingRef.current = false; trackTargetRef.current = null; trackLabelRef.current = null; setTrackInfo(""); setPickerTargets([]);
-          setTestResult("follow OFF");
-        } else {
-          setTracking(true); trackingRef.current = true;
-          const labels = [...new Set(detectionsRef.current.map(d => d.categories[0].categoryName))];
-          if (labels.length === 0) { setTrackInfo("mencari..."); setTestResult("follow ON: mencari..."); } else if (labels.length === 1) {
-            trackTargetRef.current = { label: labels[0], lastSeen: Date.now() }; trackLabelRef.current = labels[0]; setTrackInfo(`🔒 ${labels[0]}`); setPickerTargets([]);
-            setTestResult("follow: " + labels[0]);
-          } else { setPickerTargets(labels); setTrackInfo("pilih objek"); setTestResult("follow: pilih objek"); }
-        }
-        break;
-    }
-  }
 
   function drawOverlay() {
     const canvas = overlayRef.current;
@@ -1231,23 +1114,6 @@ export default function VisionPage() {
     });
   }
 
-  function pickBestSector(results: ScanSector[]): number | null {
-    if (!results) return null;
-    const SECTORS = 8;
-    const sectorAngle = (2 * Math.PI) / SECTORS;
-    let best = 0;
-    let bestDist = -1;
-    for (let i = 0; i < SECTORS; i++) {
-      const found = results.find(r => r.index === i);
-      const camDist = found ? found.dist : Infinity;
-      const sensorDist = found ? found.sensorDist : 0;
-      const dist = sensorDist > 0 ? sensorDist / 10 : camDist;
-      if (dist > bestDist) { bestDist = dist; best = i; }
-    }
-    if (bestDist <= 0) return null;
-    return sectorAngle * best + sectorAngle / 2;
-  }
-
   function processTracking(detections: Detection[]) {
     const video = videoRef.current;
     if (!video) return;
@@ -1256,296 +1122,6 @@ export default function VisionPage() {
 
     const stableDetections = filterDetections(detections);
     const motorRunning = motorRunningRef.current;
-
-    // Behavior system (test buttons) — takes priority over everything
-    const bhv = behaviorRef.current;
-    if (bhv) {
-      const r = reflexRef.current;
-      const m = motorRef2.current;
-      if (bhv.mode === "wall") {
-        const result = r.tick(true, headingRef.current, posRef.current, source, video, streamImgRef.current, brightnessCanvasRef.current, distanceRef.current);
-        if (result && result.override) {
-          setLeftMotor(result.command.l);
-          setRightMotor(result.command.r);
-          sendMotor(result.command.l, result.command.r);
-          setTestResult(`wall phase=${r.wallActive?.phase ?? '-'}`);
-          if (!r.wallActive) {
-            behaviorRef.current = null;
-            setTestResult(`wall selesai`);
-          }
-        } else {
-          behaviorRef.current = null;
-          setTestResult(`wall: tidak ada tembok`);
-        }
-      } else if (bhv.mode === "drive") {
-        const wall = r.detectWall(source, video, streamImgRef.current, brightnessCanvasRef.current);
-        if (wall.blocked) {
-          behaviorRef.current = { mode: "wall" };
-          r.reset();
-          setTestResult(`wall! pindah reflex`);
-        } else {
-          m?.drive(180);
-          setTestResult(`maju...`);
-        }
-      } else if (bhv.mode === "spin") {
-        const wall = r.detectWall(source, video, streamImgRef.current, brightnessCanvasRef.current);
-        if (wall.blocked) {
-          behaviorRef.current = { mode: "wall" };
-          r.reset();
-          setTestResult(`wall! pindah reflex`);
-        } else {
-          m?.spin(200);
-          setTestResult(`muter...`);
-        }
-      } else if (bhv.mode === "scan") {
-        const SECTOR_RAD = Math.PI / 4;
-        const SCAN_N = 8;
-        const s = scannerRef.current;
-        if (s.state === "idle") {
-          s.reset();
-          s.start(headingRef.current);
-          setScanState("spinning");
-          setScanResults([]);
-          setTrackInfo("scan 360°...");
-          reflexRef.current.reset();
-          scanBhvRef.current = { phase: "turn", sector: 0, targetH: headingRef.current + SECTOR_RAD, pauseTimer: 0, startH: headingRef.current };
-        }
-        const sc = scanBhvRef.current;
-        if (!sc) return;
-        if (sc.phase === "turn") {
-          sendMotor(-200, 200);
-          setTestResult(`scan turn ${sc.sector + 1}/${SCAN_N}`);
-          const spin = Math.abs(headingRef.current - sc.startH);
-          if (spin >= (sc.sector + 1) * SECTOR_RAD) {
-            scanBhvRef.current = { ...sc, phase: "pause", pauseTimer: 0 };
-            sendMotor(0, 0);
-          }
-        }
-        if (sc.phase === "pause") {
-          scanBhvRef.current = { ...sc, pauseTimer: sc.pauseTimer + 1 };
-          s.tick(headingRef.current, stableDetections, vw, vh);
-          setTestResult(`scan pause ${sc.sector + 1}/${SCAN_N}`);
-          if (sc.pauseTimer >= 3) {
-            const next = sc.sector + 1;
-            if (next >= SCAN_N) {
-              s.state = "done";
-              sendMotor(0, 0);
-              const res = s.getResults();
-              setScanResults(res);
-              setScanState("done");
-              setTrackInfo(`scan: ${res.length} objek`);
-              setTestResult(`scan selesai: ${res.length} objek`);
-              behaviorRef.current = null;
-              scanBhvRef.current = null;
-            } else {
-              scanBhvRef.current = { phase: "turn", sector: next, targetH: headingRef.current + SECTOR_RAD, pauseTimer: 0, startH: sc.startH };
-            }
-          }
-        }
-      } else if (bhv.mode === "explore" || bhv.mode === "return") {
-        const es = exploreBhvRef.current;
-        const s = scannerRef.current;
-        if (pauseForFaceRef.current) { sendMotor(0, 0); return; }
-        const ep = es.phase + (bhv.mode === "return" ? ":return" : "");
-        if (ep !== lastExplorePhaseRef.current) {
-          lastExplorePhaseRef.current = ep;
-          if (es.phase === "drive") speakSimple("Jelajah maju");
-          else if (es.phase === "avoid" && es.avoidStep === 0) speakSimple("Ada halangan");
-          else if (es.phase === "avoid" && es.avoidStep === 2) speakSimple("Minggir");
-          else if (es.phase === "scan") speakSimple("Scan");
-          else if (es.phase === "navturn" && bhv.mode === "return") speakSimple("Pulang");
-        }
-        if (bhv.mode === "return" && es.phase !== "navturn" && es.phase !== "drive") {
-          const rp = es.returnPath;
-          if (rp.length > 0) {
-            const idx = rp.length - 1;
-            es.returnIdx = idx;
-            const t = rp[idx];
-            const p = posRef.current;
-            const dx = t.x - p.x, dy = t.y - p.y;
-            es.chosenH = Math.atan2(dx, -dy);
-            es.phase = "navturn";
-          } else {
-            behaviorRef.current = null;
-            setTestResult(`pulang! gak ada path`);
-          }
-          sendMotor(0, 0);
-        }
-          if (es.phase === "drive") {
-          sendMotor(es.driveFwd, es.driveFwd);
-          const wall = r.detectWall(source, video, streamImgRef.current, brightnessCanvasRef.current);
-          // VL53L0X override — obstacle terlalu dekat
-          if (distanceRef.current > 0 && distanceRef.current < 300) {
-            wall.blocked = true;
-            wall.center = true;
-          }
-          if (wall.blocked) {
-            es.phase = "avoid"; es.avoidStep = 0; es.avoidTimer = 0;
-            r.reset(); sendMotor(0, 0);
-            setTestResult(`explore wall!`);
-          }
-          const edge = r.detectEdges(source, video, streamImgRef.current, brightnessCanvasRef.current);
-          if (edge.left > 45 || edge.center > 45 || edge.right > 45) {
-            es.phase = "avoid"; es.avoidStep = 0; es.avoidTimer = 0;
-            r.reset(); sendMotor(0, 0);
-            setTestResult(`explore edge!`);
-          }
-          const accel = accelRef.current;
-          if (Math.abs(accel.x || 0) > 18 || Math.abs(accel.y || 0) > 18) {
-            es.phase = "avoid"; es.avoidStep = 0; es.avoidTimer = 0;
-            sendMotor(0, 0);
-            setTestResult(`explore bump!`);
-          }
-          es.scanTimer++;
-          if (es.scanTimer % 10 === 0) {
-            const p = posRef.current;
-            es.returnPath.push({ x: p.x, y: p.y });
-            if (es.returnPath.length > 100) es.returnPath.shift();
-          }
-          if (bhv.mode === "return") {
-            const rp = es.returnPath;
-            const idx = es.returnIdx;
-            if (idx >= 0 && idx < rp.length) {
-              const t = rp[idx];
-              const p = posRef.current;
-              const dx = t.x - p.x, dy = t.y - p.y;
-              const dist = Math.hypot(dx, dy);
-              if (dist < 15) {
-                es.returnIdx = idx - 1;
-                if (es.returnIdx < 0) {
-                  behaviorRef.current = null; sendMotor(0, 0);
-                  setTestResult(`pulang!`);
-                  speakSimple("Berhasil pulang");
-                } else {
-                  const nt = rp[es.returnIdx];
-                  es.chosenH = Math.atan2(nt.x - p.x, -(nt.y - p.y));
-                  es.phase = "navturn";
-                }
-              } else {
-                setTestResult(`explore return ${dist.toFixed(0)}px`);
-              }
-            } else {
-              setTestResult(`explore return idx=${idx}`);
-            }
-          } else if (es.scanTimer > 40) {
-            es.phase = "scan";
-            s.reset(); s.start(headingRef.current);
-            setScanState("spinning"); setScanResults([]);
-            scanBhvRef.current = { phase: "turn", sector: 0, targetH: headingRef.current + Math.PI / 4, pauseTimer: 0, startH: headingRef.current };
-            setTestResult(`explore scan...`);
-          } else {
-            setTestResult(`explore drive ${es.scanTimer}`);
-          }
-        } else if (es.phase === "avoid") {
-          if (es.avoidStep === 0) {
-            es.avoidTimer++;
-            if (es.avoidTimer > 3) { es.avoidStep = 1; es.avoidTimer = 0; }
-            setTestResult(`explore avoid stop`);
-          } else if (es.avoidStep === 1) {
-            sendMotor(-es.driveFwd, -es.driveFwd);
-            es.avoidTimer++;
-            if (es.avoidTimer > 10) { es.avoidStep = 2; es.avoidTimer = 0; }
-            setTestResult(`explore avoid back`);
-          } else if (es.avoidStep === 2) {
-            sendMotor(-es.driveFwd, es.driveFwd);
-            es.avoidTimer++;
-            if (es.avoidTimer > 15) {
-              es.phase = "scan"; es.scanTimer = 0;
-              s.reset(); s.start(headingRef.current);
-              setScanState("spinning"); setScanResults([]);
-              scanBhvRef.current = { phase: "turn", sector: 0, targetH: headingRef.current + Math.PI / 4, pauseTimer: 0, startH: headingRef.current };
-              setTestResult(`explore scan after avoid`);
-            }
-          }
-        } else if (es.phase === "scan") {
-          const sc = scanBhvRef.current;
-          if (sc?.phase === "turn") {
-            sendMotor(-200, 200);
-            const spin = Math.abs(headingRef.current - sc.startH);
-            if (spin >= (sc.sector + 1) * Math.PI / 4) {
-              scanBhvRef.current = { ...sc, phase: "pause", pauseTimer: 0 };
-              sendMotor(0, 0);
-            }
-          } else if (sc?.phase === "pause") {
-            scanBhvRef.current = { ...sc, pauseTimer: sc.pauseTimer + 1 };
-          s.tick(headingRef.current, stableDetections, vw, vh, distanceRef.current);
-            if (sc.pauseTimer >= 3) {
-              const next = sc.sector + 1;
-              if (next >= 8) {
-                s.state = "done";
-                const res = s.getResults();
-                setScanResults(res); setScanState("done");
-                es.phase = "choose";
-              } else {
-                scanBhvRef.current = { phase: "turn", sector: next, targetH: headingRef.current + Math.PI / 4, pauseTimer: 0, startH: sc.startH };
-              }
-            }
-          }
-          setTestResult(`explore scan...`);
-        } else if (es.phase === "choose") {
-          const best = pickBestSector(s.getResults());
-          if (best !== null) {
-            es.chosenH = best;
-            es.phase = "navturn";
-            const deg = (best * 180 / Math.PI).toFixed(0);
-            setTestResult(`explore pilih ${deg}°`);
-            speakSimple(`Belok ${deg} derajat`);
-          } else {
-            es.chosenH = headingRef.current;
-            es.phase = "drive"; es.scanTimer = 0;
-            setTestResult(`explore lanjut`);
-          }
-        } else if (es.phase === "navturn") {
-          const current = headingRef.current;
-          const targetH = bhv.mode === "return" ? es.chosenH : es.chosenH;
-          const diff = targetH - current;
-          let norm = diff % (2 * Math.PI);
-          if (norm > Math.PI) norm -= 2 * Math.PI;
-          if (norm < -Math.PI) norm += 2 * Math.PI;
-          if (Math.abs(norm) < 0.08) {
-            m?.stop();
-            if (bhv.mode === "return") {
-              es.phase = "drive";
-              es.scanTimer = 0;
-              es.driveFwd = 200;
-              speakSimple("Lanjut pulang");
-            } else {
-              es.phase = "drive";
-              es.scanTimer = 0;
-              setTestResult(`explore nav done`);
-            }
-          } else {
-            const speed = Math.min(200, Math.abs(norm) * 100 + 60);
-            if (norm > 0) sendMotor(-speed, speed);
-            else sendMotor(speed, -speed);
-          }
-        }
-      }
-      return;
-    }
-
-    // Reflex safety (only when no behavior active)
-    if (!aiBusyRef.current) {
-      const reflex = reflexRef.current;
-      const img = streamImgRef.current;
-      const canvas = brightnessCanvasRef.current;
-      const wallPhase = reflexRef.current.wallActive?.phase;
-      const loopAct = reflexRef.current.loopDetectedFlag;
-      reflexLogRef.current = `motor=${motorRunning} wall=${wallPhase ?? '-'} loop=${loopAct}`;
-      const result = reflex.tick(motorRunning, headingRef.current, posRef.current, source, video, img, canvas, distanceRef.current);
-      if (result && result.override) {
-        setLeftMotor(result.command.l);
-        setRightMotor(result.command.r);
-        sendMotor(result.command.l, result.command.r);
-        if (result.reason === "loop") {
-          setTrackInfo('muter aja! cari jalan');
-          trackTargetRef.current = null;
-        } else if (result.reason?.startsWith("wall")) {
-          setTrackInfo('tembok!');
-        }
-        return;
-      }
-    }
 
     if (!trackingRef.current) return;
 
@@ -1660,14 +1236,24 @@ export default function VisionPage() {
         lastSeenPosRef.current = { cx: found.cx, cy: found.cy };
         setTrackInfo(`${target.label}`);
 
-        // Obstacle influence — gentle nudge only, no hard swerve
-        const motor = motorRef2.current!;
-        if (obstacle) {
-          const obox = obstacle.boundingBox!;
-          const ocx = (obox.originX + obox.width / 2) / vw;
-          motor.pidTrack(found, ocx < 0.5 ? 40 : -40);
+        // PID track target
+        const pidIntegral = { current: 0 };
+        const pidLastError = { current: 0 };
+        const stopZone = 0.22;
+        if (found.area > stopZone) {
+          setLeftMotor(0); setRightMotor(0); sendMotor(0, 0);
         } else {
-          motor.pidTrack(found, 0);
+          const errorX = found.cx - 0.5;
+          const kp = 160, ki = 0.02, kd = 40;
+          pidIntegral.current = Math.max(-50, Math.min(50, pidIntegral.current + errorX));
+          const deriv = errorX - pidLastError.current;
+          pidLastError.current = errorX;
+          const turn = errorX * kp + pidIntegral.current * ki + deriv * kd;
+          const baseSpeed = Math.max(150, Math.round((1 - found.area / stopZone) * 200));
+          const bias = obstacle ? ((obstacle.boundingBox!.originX + obstacle.boundingBox!.width / 2) / vw < 0.5 ? 40 : -40) : 0;
+          const l = Math.max(-255, Math.min(255, baseSpeed + Math.round(turn) + bias));
+          const r = Math.max(-255, Math.min(255, baseSpeed - Math.round(turn) - bias));
+          setLeftMotor(l); setRightMotor(r); sendMotor(l, r);
         }
       } else {
         trackLostRef.current++;
@@ -1946,17 +1532,6 @@ export default function VisionPage() {
             <span>track: <span className="text-white">{trackInfo || "-"}</span></span>
             <span>ws: <span className={wsConnected ? "text-green-400" : "text-red-400"}>{wsConnected ? "ON" : "OFF"}</span></span>
             <span>gyro: <button onClick={() => { useGyroRef.current = !useGyroRef.current; setUseGyro(useGyroRef.current); if (useGyroRef.current) headingRef.current = gyroRef.current; }} className={useGyro ? "text-yellow-400 underline" : "text-zinc-600 hover:text-zinc-400"}>{useGyro ? "ON" : "OFF"}</button> <span className="text-zinc-600">{(gyroRef.current * 180 / Math.PI).toFixed(0)}°</span></span>
-            <span>scan: <span className="text-purple-400">{scanState}</span></span>
-          </div>
-          <div className="mt-1 pt-1 border-t border-white/5 text-zinc-500 leading-3 h-[40px] overflow-y-auto">
-            {scanResults.length > 0 ? scanResults.map((r, i) => (
-              <div key={i} className="truncate">
-                <span className="text-purple-400">{r.label}</span>
-                <span className="text-zinc-600"> {(r.heading * 180 / Math.PI).toFixed(0)}°</span>
-                <span className="text-zinc-500"> jarak {r.dist.toFixed(0)}px</span>
-                {r.sensorDist > 0 && <span className="text-red-400"> VL={(r.sensorDist / 10).toFixed(0)}cm</span>}
-              </div>
-            )) : <span className="text-zinc-700 italic">-</span>}
           </div>
           <div className="mt-1 pt-1 border-t border-white/5 text-zinc-500 leading-3 h-[60px] overflow-y-auto">
             {detectionsRef.current.length > 0 ? detectionsRef.current.map((d, i) => {
@@ -1969,131 +1544,6 @@ export default function VisionPage() {
                 </div>
               );
             }) : <span className="text-zinc-700 italic">tidak ada objek</span>}
-          </div>
-
-          {/* Test panel */}
-          <div className="mt-1.5 pt-1.5 border-t border-white/5">
-            <div className="text-zinc-600 mb-1 text-[7px] font-semibold tracking-wider">TEST</div>
-            <div className="flex flex-wrap gap-1 mb-1">
-              <button onClick={() => {
-                behaviorRef.current = { mode: "wall" };
-                setTestResult(`wall behavior start...`);
-                if (trackingRef.current) { setTracking(false); trackingRef.current = false; trackTargetRef.current = null; }
-              }}
-                className="px-1.5 h-4 rounded text-[7px] font-bold border border-zinc-700 text-zinc-400 hover:bg-zinc-800 leading-none flex items-center"
-                title="Wall avoidance behavior">WALL</button>
-              <button onClick={() => {
-                const r = reflexRef.current;
-                const e = r.detectEdges(source, videoRef.current, streamImgRef.current, brightnessCanvasRef.current);
-                setTestResult(`edge L:${e.left.toFixed(1)} C:${e.center.toFixed(1)} R:${e.right.toFixed(1)}`);
-              }}
-                className="px-1.5 h-4 rounded text-[7px] font-bold border border-zinc-700 text-zinc-400 hover:bg-zinc-800 leading-none flex items-center"
-                title="Edge detection test">EDGE</button>
-              <button onClick={() => {
-                behaviorRef.current = { mode: "spin" };
-                setTestResult(`spin behavior start...`);
-                if (trackingRef.current) { setTracking(false); trackingRef.current = false; trackTargetRef.current = null; }
-              }}
-                className="px-1.5 h-4 rounded text-[7px] font-bold border border-amber-700 text-amber-400 hover:bg-zinc-800 leading-none flex items-center"
-                title="Spin behavior">SPIN</button>
-              <button onClick={() => {
-                behaviorRef.current = { mode: "drive" };
-                setTestResult(`maju behavior start...`);
-                if (trackingRef.current) { setTracking(false); trackingRef.current = false; trackTargetRef.current = null; }
-              }}
-                className="px-1.5 h-4 rounded text-[7px] font-bold border border-amber-700 text-amber-400 hover:bg-zinc-800 leading-none flex items-center"
-                title="Drive behavior">MAJU</button>
-              <button onClick={() => {
-                behaviorRef.current = null;
-                const m = motorRef2.current;
-                if (m) m.stop();
-                setTestResult(`STOP`);
-              }}
-                className="px-1.5 h-4 rounded text-[7px] font-bold border border-red-700 text-red-400 hover:bg-zinc-800 leading-none flex items-center"
-                title="Stop behavior & motor">STOP</button>
-              <button onClick={() => {
-                const s = scannerRef.current;
-                if (behaviorRef.current?.mode === "scan") {
-                  behaviorRef.current = null;
-                  s.stop();
-                  setScanState("idle");
-                  const m = motorRef2.current;
-                  if (m) m.stop();
-                  setTestResult(`scan dihentikan`);
-                } else {
-                  s.reset();
-                  behaviorRef.current = { mode: "scan" };
-                  setTestResult(`scan...`);
-                }
-              }}
-                className="px-1.5 h-4 rounded text-[7px] font-bold border leading-none flex items-center"
-                style={{
-                  backgroundColor: scanState === "spinning" ? "#a855f7" : scanState === "done" ? "#22c55e" : "transparent",
-                  borderColor: scanState !== "idle" ? "#a855f7" : "rgba(255,255,255,0.15)",
-                  color: scanState !== "idle" ? "#000" : "rgba(255,255,255,0.4)"
-                }}
-                title="Scan 300°">SCAN</button>
-              <button onClick={() => {
-                const bhv = behaviorRef.current;
-                if (bhv?.mode === "explore" || bhv?.mode === "return") {
-                  behaviorRef.current = null;
-                  const m = motorRef2.current;
-                  if (m) m.stop();
-                  setTestResult(`explore stop`);
-                  speakSimple("Jelajah berhenti");
-                } else {
-                  behaviorRef.current = { mode: "explore" };
-                  const es = exploreBhvRef.current;
-                  es.phase = "drive"; es.scanTimer = 0; es.avoidStep = 0; es.avoidTimer = 0;
-                  es.returnPath = []; es.returnIdx = 0; es.driveFwd = 180;
-                  setTestResult(`explore start...`);
-                }
-              }}
-                className="px-1.5 h-4 rounded text-[7px] font-bold border leading-none flex items-center"
-                style={{
-                  backgroundColor: behaviorRef.current?.mode === "explore" ? "#22c55e" : "transparent",
-                  borderColor: behaviorRef.current?.mode === "explore" ? "#22c55e" : "rgba(255,255,255,0.15)",
-                  color: behaviorRef.current?.mode === "explore" ? "#000" : "rgba(255,255,255,0.4)"
-                }}
-                title="Explore mode">EXPLORE</button>
-              <button onClick={() => {
-                if (exploreBhvRef.current.returnPath.length === 0) {
-                  setTestResult(`gak ada path!`);
-                  return;
-                }
-                behaviorRef.current = { mode: "return" };
-                setTestResult(`pulang...`);
-              }}
-                className="px-1.5 h-4 rounded text-[7px] font-bold border leading-none flex items-center"
-                style={{
-                  backgroundColor: behaviorRef.current?.mode === "return" ? "#a855f7" : "transparent",
-                  borderColor: behaviorRef.current?.mode === "return" ? "#a855f7" : "rgba(255,255,255,0.15)",
-                  color: behaviorRef.current?.mode === "return" ? "#000" : "rgba(255,255,255,0.4)"
-                }}
-                title="Return home">PULANG</button>
-              <button onClick={() => {
-                if (tracking) {
-                  setTracking(false); trackingRef.current = false; trackTargetRef.current = null; trackLabelRef.current = null; setTrackInfo(""); setPickerTargets([]);
-                  setTestResult(`follow OFF`);
-                } else {
-                  setTracking(true); trackingRef.current = true;
-                  const labels = [...new Set(detectionsRef.current.map(d => d.categories[0].categoryName))];
-                  if (labels.length === 0) { setTrackInfo("mencari..."); setTestResult(`follow ON: mencari...`); } else if (labels.length === 1) {
-                    trackTargetRef.current = { label: labels[0], lastSeen: Date.now() }; trackLabelRef.current = labels[0]; setTrackInfo(`🔒 ${labels[0]}`); setPickerTargets([]);
-                    setTestResult(`follow: ${labels[0]}`);
-                  } else { setPickerTargets(labels); setTrackInfo("pilih objek"); setTestResult(`follow: pilih objek`); }
-                }
-              }}
-                className="px-1.5 h-4 rounded text-[7px] font-bold border leading-none flex items-center"
-                style={{
-                  backgroundColor: tracking ? "#ef4444" : "transparent",
-                  borderColor: tracking ? "#ef4444" : "rgba(255,255,255,0.15)",
-                  color: tracking ? "#000" : "rgba(255,255,255,0.4)"
-                }}
-                title="Follow object toggle">FOLLOW</button>
-            </div>
-            <div className="text-[7px] font-mono text-zinc-600 truncate">{testResult || "\u00A0"}</div>
-            <div className="text-[7px] font-mono text-zinc-700 truncate">{reflexLogRef.current || "\u00A0"}</div>
           </div>
         </div>
           )}

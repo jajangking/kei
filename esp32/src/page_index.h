@@ -8,110 +8,110 @@ const char PAGE_INDEX[] PROGMEM = R"rawliteral(
 <title>Kei Robot</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-body{font-family:-apple-system,BlinkMacSystemFont,system-ui,sans-serif;background:linear-gradient(145deg,#070714 0%,#0d0d28 100%);color:#ddd;height:100dvh;overflow:hidden;display:flex;flex-direction:column;padding:10px 10px 6px;gap:6px;user-select:none;-webkit-user-select:none}
-.hd{display:flex;align-items:center;justify-content:space-between;flex-shrink:0;padding:0 4px}
-.hd h1{font-size:15px;font-weight:700;letter-spacing:1.5px;background:linear-gradient(135deg,#e94560,#ff6b8a);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
-.hd .s{display:flex;align-items:center;gap:6px;font-size:10px;color:#666}
-.hd .s .dot{width:7px;height:7px;border-radius:50%;display:inline-block}
-.hd .s .dot.g{background:#27ae60;box-shadow:0 0 8px #27ae60}
-.hd .s .dot.r{background:#f44336;box-shadow:0 0 8px #f44336}
-.hd .s .dot.y{background:#ffeb3b;box-shadow:0 0 8px #ffeb3b}
-.card{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:14px;padding:10px;backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px)}
-.row{display:flex;gap:6px;flex:1;min-height:0}
-.jw{flex:1;display:flex;align-items:center;justify-content:center;touch-action:none;min-height:130px}
-.jb{width:130px;height:130px;border-radius:50%;background:radial-gradient(circle at 40% 40%,#1e1e4a,#12122e);border:1px solid rgba(233,69,96,.15);position:relative;box-shadow:0 0 30px rgba(233,69,96,.05),inset 0 0 40px rgba(0,0,0,.4)}
-.jb::after{content:'';position:absolute;top:50%;left:50%;width:50px;height:50px;margin:-25px 0 0 -25px;border-radius:50%;border:1px solid rgba(233,69,96,.08);pointer-events:none}
-.jn{width:46px;height:46px;border-radius:50%;background:radial-gradient(circle at 35% 35%,#ff6b8a,#c02045);position:absolute;top:42px;left:42px;box-shadow:0 0 24px rgba(233,69,96,.4),inset 0 0 10px rgba(255,255,255,.15);pointer-events:none;transition:none}
-.tl{width:130px;flex-shrink:0;display:flex;flex-direction:column;gap:4px;justify-content:center}
-.tl .i{display:flex;justify-content:space-between;align-items:center;padding:2px 6px;background:rgba(255,255,255,.03);border-radius:6px;font-size:9px}
-.tl .i .lb{color:#666}
-.tl .i .vl{color:#eee;font-weight:600;font-variant-numeric:tabular-nums}
-.sb{display:flex;gap:3px;margin:2px 0}
-.sb .s{flex:1;height:4px;border-radius:3px;transition:background .3s}
-.badge{display:inline-block;padding:1px 8px;border-radius:10px;font-size:8px;font-weight:700;letter-spacing:.5px}
-.badge-auto{background:rgba(41,128,185,.2);color:#5dade2;border:1px solid rgba(41,128,185,.3)}
+body{font-family:-apple-system,BlinkMacSystemFont,system-ui,sans-serif;background:linear-gradient(160deg,#070714 0%,#0d0d28 60%,#111133 100%);color:#ddd;height:100dvh;overflow-y:auto;display:flex;flex-direction:column;padding:8px 10px 12px;gap:8px;user-select:none}
+/* scroll */
+body::-webkit-scrollbar{width:3px}
+body::-webkit-scrollbar-thumb{background:rgba(233,69,96,.3);border-radius:2px}
+/* header */
+.hd{display:flex;align-items:center;justify-content:space-between;flex-shrink:0;padding:0 4px 2px}
+.hd h1{font-size:16px;font-weight:800;letter-spacing:2px;background:linear-gradient(135deg,#e94560,#ff6b8a);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hd .s{display:flex;align-items:center;gap:5px;font-size:9px;color:#555}
+.hd .s .dot{width:6px;height:6px;border-radius:50%;display:inline-block}
+.hd .s .dot.g{background:#27ae60;box-shadow:0 0 6px #27ae60}
+.hd .s .dot.r{background:#f44336;box-shadow:0 0 6px #f44336}
+.hd .s .dot.y{background:#ffeb3b;box-shadow:0 0 6px #ffeb3b}
+/* card */
+.card{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:16px;padding:12px;backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);flex-shrink:0}
+/* mode badge */
+.badge{display:inline-block;padding:2px 10px;border-radius:12px;font-size:9px;font-weight:700;letter-spacing:.5px;text-transform:uppercase}
 .badge-manual{background:rgba(44,62,80,.2);color:#95a5a6;border:1px solid rgba(44,62,80,.3)}
 .badge-emergency{background:rgba(244,67,54,.2);color:#f44336;border:1px solid rgba(244,67,54,.3)}
-.btn{display:block;padding:9px 4px;border:none;border-radius:10px;font-size:11px;font-weight:600;cursor:pointer;text-align:center;transition:all .15s;flex:1;letter-spacing:.3px}
-.btn:active{transform:scale(.95);opacity:.7}
-.btn-primary{background:linear-gradient(135deg,#e94560,#c23152);color:#fff;box-shadow:0 4px 15px rgba(233,69,96,.25)}
-.btn-danger{background:linear-gradient(135deg,#c0392b,#e74c3c);color:#fff;box-shadow:0 4px 15px rgba(192,57,43,.25)}
-.btn-success{background:linear-gradient(135deg,#27ae60,#2ecc71);color:#fff;box-shadow:0 4px 15px rgba(39,174,96,.25)}
-.btn-blue{background:linear-gradient(135deg,#2980b9,#3498db);color:#fff;box-shadow:0 4px 15px rgba(41,128,185,.2)}
-.btn-dark{background:linear-gradient(135deg,#2c3e50,#34495e);color:#bdc3c7;box-shadow:0 4px 10px rgba(0,0,0,.2)}
-.btn-orange{background:linear-gradient(135deg,#d35400,#e67e22);color:#fff;box-shadow:0 4px 15px rgba(211,84,0,.2)}
-.btn-purple{background:linear-gradient(135deg,#6c3483,#8e44ad);color:#fff;box-shadow:0 4px 15px rgba(108,52,131,.2)}
-.btn-gold{background:linear-gradient(135deg,#b7950b,#f1c40f);color:#222;box-shadow:0 4px 15px rgba(183,149,11,.2)}
-.btn-outline{background:transparent;border:1px solid rgba(255,255,255,.08);color:#888}
-.g2{display:grid;grid-template-columns:1fr 1fr;gap:5px}
-.g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px}
-.g4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:5px}
-.footer{display:flex;justify-content:center;gap:12px;flex-shrink:0;padding:3px 0;font-size:9px}
-.footer a{color:#444;text-decoration:none;padding:3px 6px;border-radius:6px;transition:all .2s}
-.footer a:hover{color:#e94560;background:rgba(233,69,96,.08)}
+/* buttons base */
+.btn{display:block;padding:11px 4px;border:none;border-radius:12px;font-size:12px;font-weight:600;cursor:pointer;text-align:center;transition:all .12s;flex:1;letter-spacing:.3px;touch-action:manipulation}
+.btn:active{transform:scale(.93);opacity:.7}
+/* joystick */
+.jw{display:flex;align-items:center;justify-content:center;touch-action:none;min-height:140px;flex:1}
+.jb{width:140px;height:140px;border-radius:50%;background:radial-gradient(circle at 40% 40%,#1e1e4a,#12122e);border:1px solid rgba(233,69,96,.12);position:relative;box-shadow:0 0 40px rgba(233,69,96,.04),inset 0 0 50px rgba(0,0,0,.5)}
+.jb::after{content:'';position:absolute;top:50%;left:50%;width:55px;height:55px;margin:-27.5px 0 0 -27.5px;border-radius:50%;border:1px solid rgba(233,69,96,.06);pointer-events:none}
+.jn{width:50px;height:50px;border-radius:50%;background:radial-gradient(circle at 35% 35%,#ff6b8a,#c02045);position:absolute;top:45px;left:45px;box-shadow:0 0 28px rgba(233,69,96,.5),inset 0 0 12px rgba(255,255,255,.12);pointer-events:none;transition:none}
+/* joystick + telemetry row */
+.jt{display:flex;gap:10px;align-items:center}
+.jt .tl{display:flex;flex-direction:column;gap:5px;flex-shrink:0;width:110px}
+.tl .i{display:flex;justify-content:space-between;align-items:center;padding:3px 8px;background:rgba(255,255,255,.03);border-radius:8px;font-size:10px}
+.tl .i .lb{color:#555}
+.tl .i .vl{color:#eee;font-weight:600;font-variant-numeric:tabular-nums}
+/* d-pad row */
+.dp{display:flex;gap:6px;justify-content:center;padding:6px 0 2px}
+.dp .btn{max-width:56px;padding:10px;font-size:14px;border-radius:10px}
+.btn-orange{background:linear-gradient(135deg,#d35400,#e67e22);color:#fff;box-shadow:0 4px 12px rgba(211,84,0,.2)}
+.btn-red{background:linear-gradient(135deg,#c0392b,#e74c3c);color:#fff;box-shadow:0 4px 12px rgba(192,57,43,.25)}
+.btn-dark{background:rgba(255,255,255,.06);color:#999;border:1px solid rgba(255,255,255,.05);box-shadow:none}
+/* servo row */
+.srv{display:flex;gap:5px;align-items:center;justify-content:center;padding:2px 0}
+.srv .btn{max-width:52px;padding:8px;font-size:11px;border-radius:8px}
+.srv .srv-val{font-size:13px;font-weight:700;color:#e94560;min-width:40px;text-align:center}
+.srv-btn{background:rgba(233,69,96,.08);color:#e94560;border:1px solid rgba(233,69,96,.12)}
+/* emergency btn */
+.emergency .btn-danger{padding:14px;font-size:14px;font-weight:800;letter-spacing:1px;border-radius:12px}
+.emergency .btn-success{padding:14px;font-size:14px;font-weight:800;letter-spacing:1px;border-radius:12px}
+/* footer */
+.footer{display:flex;justify-content:center;gap:14px;flex-shrink:0;padding:6px 0 2px;font-size:10px}
+.footer a{color:#333;text-decoration:none;padding:4px 8px;border-radius:6px;transition:all .2s}
+.footer a:hover{color:#e94560;background:rgba(233,69,96,.06)}
 .hide{display:none!important}
-.btn{position:relative;overflow:hidden}
-.slider{-webkit-appearance:none;appearance:none;width:100%;height:14px;background:rgba(255,255,255,.05);border-radius:7px;outline:none;margin:6px 0}
-.slider::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:36px;height:36px;border-radius:50%;background:radial-gradient(circle at 35% 35%,#e94560,#c02045);cursor:pointer;box-shadow:0 0 16px rgba(233,69,96,.4)}
-.slider::-moz-range-thumb{width:36px;height:36px;border-radius:50%;background:radial-gradient(circle at 35% 35%,#e94560,#c02045);cursor:pointer;border:none;box-shadow:0 0 16px rgba(233,69,96,.4)}
-#exploreSpeedRow{flex-direction:row;align-items:center;gap:8px;padding:6px 10px;margin:0}
-#exploreSpeedRow .lb{font-size:10px;color:#666;white-space:nowrap}
-#exploreSpeedRow .val{font-size:12px;font-weight:700;color:#e94560;min-width:28px;text-align:right}
 </style>
 </head>
-<body>
+<body class=mode-manual>
 
+<!-- Header -->
 <div class=hd>
   <h1>⚡KEI</h1>
-  <div class=s><span class="dot g" id=statusDot></span><span id=statusText>online</span><span style=color:#555>|</span><span id=ip>...</span></div>
+  <div class=s><span class=dot id=statusDot></span><span id=statusText>offline</span><span style=color:#333>|</span><span id=ip>---</span></div>
 </div>
 
-<div class=row>
-  <div class="card jw" id=jw>
-    <div class=jb id=jb><div class=jn id=jn></div></div>
+<!-- Card: Drive -->
+<div class=card>
+  <div class=jt>
+    <div class=jw id=jw>
+      <div class=jb id=jb><div class=jn id=jn></div></div>
+    </div>
+    <div class=tl id=tl>
+      <div class=i><span class=lb>Mode</span><span id=modeBadge></span></div>
+      <div class=i><span class=lb>Speed</span><span class=vl id=speed>0</span></div>
+      <div class=i><span class=lb>Jarak</span><span class=vl id=dist>---</span></div>
+      <div class=i><span class=lb>Yaw</span><span class=vl id=yaw>0.0°</span></div>
+      <div class=i><span class=lb>Servo</span><span class=vl id=servo>90°</span></div>
+    </div>
   </div>
-  <div class=tl id=tl>
-    <div class=i><span class=lb>Mode</span><span id=modeBadge></span></div>
-    <div class=i><span class=lb>Speed</span><span class=vl id=speed>0</span></div>
-    <div class=i><span class=lb>Jarak</span><span class=vl id=dist>---</span></div>
-    <div class=sb id=sb><span class=s id=sbL style=background:#222></span><span class=s id=sbF style=background:#222></span><span class=s id=sbR style=background:#222></span></div>
-    <div class=i><span class=lb>Yaw</span><span class=vl id=yaw>0.0°</span></div>
-    <div class=i><span class=lb>Servo</span><span class=vl id=servo>90°</span></div>
+  <div class=dp>
+    <button class='btn btn-orange' id=btnLeft>◀</button>
+    <button class='btn btn-orange' id=btnFwd>▲</button>
+    <button class='btn btn-dark' id=btnStop>■</button>
+    <button class='btn btn-orange' id=btnRev>▼</button>
+    <button class='btn btn-orange' id=btnRight>▶</button>
   </div>
 </div>
 
-<div class=g2 id=emergencyRow>
-  <button class='btn btn-success hide' id=btnRelease>⟳ RELEASE</button>
+<!-- Card: Servo -->
+<div class=card style=padding:10px>
+  <div class=srv>
+    <button class='btn srv-btn' id=btnServoL>◄</button>
+    <span class=srv-val id=servoVal>90°</span>
+    <button class='btn srv-btn' id=btnServoR>►</button>
+    <span style=flex:1></span>
+    <button class='btn btn-dark' id=btnCenter style='max-width:48px;font-size:10px'>●</button>
+    <button class='btn btn-dark' id=btnYawReset style='max-width:60px;font-size:10px'>⟳Yaw</button>
+  </div>
+</div>
+
+
+<!-- Card: Emergency -->
+<div class='card emergency'>
   <button class='btn btn-danger' id=btnEmergency>🧯 EMERGENCY</button>
+  <button class='btn btn-success hide' id=btnRelease>⟳ RELEASE</button>
 </div>
 
-<div class='card' id=exploreSpeedRow style='display:none'>
-  <span class=lb>Speed explore</span>
-  <input type=range min=60 max=255 value=140 id=exploreSpeedSlider class=slider>
-  <span class=val id=exploreSpeedVal>140</span>
-</div>
-
-<div class=g2>
-  <button class='btn btn-blue' id=btnExplore>🤖 Explore</button>
-  <button class='btn btn-dark' id=btnManual>⏹ Manual</button>
-</div>
-
-<div class=g3>
-  <button class='btn btn-orange' id=btnFwd>▲</button>
-  <button class='btn btn-orange' id=btnLeft>◀</button>
-  <button class='btn btn-orange' id=btnRight>▶</button>
-</div>
-<div class=g3>
-  <button class='btn btn-orange' id=btnRev>▼</button>
-  <button class='btn btn-dark' id=btnServoL>◄</button>
-  <button class='btn btn-dark' id=btnServoR>►</button>
-</div>
-<div class=g3>
-  <button class='btn btn-dark' id=btnStop>■ STOP</button>
-  <button class='btn btn-purple' id=btnCenter>● 90</button>
-  <button class='btn btn-gold' id=btnYawReset>⟳ Yaw</button>
-</div>
-
+<!-- Footer -->
 <div class=footer>
   <a href=/config>⚙ Config</a>
   <a href=/diag>🔍 Diag</a>
@@ -121,7 +121,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,system-ui,sans-serif;backgroun
 <script>
 (function(){
 var $=function(id){return document.getElementById(id)};
-var BASE_R=65,NUB_R=23,MAX_R=BASE_R-NUB_R-2;
+var BASE_R=70,NUB_R=25,MAX_R=BASE_R-NUB_R-2;
 var jb=$('jb'),jn=$('jn');
 var dragging=false,joyL=0,joyR=0,lastL=0,lastR=0,thr=0;
 var lastEmerg=false;
@@ -155,6 +155,7 @@ function cmd(o){
   x.send(JSON.stringify(o));
 }
 
+// Joystick
 jb.addEventListener('touchstart',function(e){e.preventDefault();dragging=true;var p=pos(e);nub(p.dx,p.dy);send();},{passive:false});
 document.addEventListener('touchmove',function(e){if(!dragging)return;var n=Date.now();if(n-thr<40)return;thr=n;e.preventDefault();var p=pos(e);nub(p.dx,p.dy);send();},{passive:false});
 document.addEventListener('touchend',function(){if(!dragging)return;dragging=false;jn.style.left=(BASE_R-NUB_R)+'px';jn.style.top=(BASE_R-NUB_R)+'px';joyL=0;joyR=0;send();});
@@ -163,23 +164,20 @@ jb.addEventListener('mousedown',function(e){dragging=true;var p=pos(e);nub(p.dx,
 document.addEventListener('mousemove',function(e){if(!dragging)return;var n=Date.now();if(n-thr<40)return;thr=n;var p=pos(e);nub(p.dx,p.dy);send();});
 document.addEventListener('mouseup',function(){if(!dragging)return;dragging=false;jn.style.left=(BASE_R-NUB_R)+'px';jn.style.top=(BASE_R-NUB_R)+'px';joyL=0;joyR=0;send();});
 
+// D-pad
 ['btnFwd','btnRev','btnLeft','btnRight'].forEach(function(id){
   var el=$(id);
   var m={btnFwd:[200,200],btnRev:[-200,-200],btnLeft:[-150,150],btnRight:[150,-150]}[id];
   el.addEventListener('touchstart',function(e){e.preventDefault();cmd({leftMotor:m[0],rightMotor:m[1]});});
   el.addEventListener('touchend',function(e){e.preventDefault();cmd({leftMotor:0,rightMotor:0});});
+  el.addEventListener('touchcancel',function(e){e.preventDefault();cmd({leftMotor:0,rightMotor:0});});
   el.addEventListener('mousedown',function(){cmd({leftMotor:m[0],rightMotor:m[1]});});
   el.addEventListener('mouseup',function(){cmd({leftMotor:0,rightMotor:0});});
   el.addEventListener('mouseleave',function(){cmd({leftMotor:0,rightMotor:0});});
 });
+
+// Controls
 $('btnStop').addEventListener('click',function(){cmd({leftMotor:0,rightMotor:0});});
-$('btnExplore').addEventListener('click',function(){cmd({behavior:'explore'});});
-$('btnManual').addEventListener('click',function(){cmd({behavior:'stop'});});
-$('exploreSpeedSlider').addEventListener('input',function(){
-  var v=this.value;
-  $('exploreSpeedVal').textContent=v;
-  cmd({exploreSpeed:parseInt(v)});
-});
 $('btnEmergency').addEventListener('click',function(){cmd({emergency:true});});
 $('btnRelease').addEventListener('click',function(){cmd({emergency:false});});
 $('btnCenter').addEventListener('click',function(){cmd({servo:90});});
@@ -187,32 +185,22 @@ $('btnServoL').addEventListener('click',function(){cmd({servo:0});});
 $('btnServoR').addEventListener('click',function(){cmd({servo:180});});
 $('btnYawReset').addEventListener('click',function(){cmd({headingReset:true});});
 
+// Telemetry poll
 function poll(){
   fetch('/telemetry').then(function(r){return r.json()}).then(function(d){
     $('ip').textContent=d.ip;
-    var md=d.mode,mb=$('modeBadge');
+    var md=d.mode;
+    // Mode badge
+    var mb=$('modeBadge');
     if(md=='emergency'){mb.className='badge badge-emergency';mb.textContent='EMERGENCY';$('statusDot').className='dot r';$('statusText').textContent='danger';}
-    else if(md=='auto'){mb.className='badge badge-auto';mb.textContent=d.behavior.toUpperCase();$('statusDot').className='dot g';$('statusText').textContent='auto';}
     else{mb.className='badge badge-manual';mb.textContent='MANUAL';$('statusDot').className='dot g';$('statusText').textContent='manual';}
+    // Telemetry values
     $('speed').textContent=d.speed;
     $('dist').textContent=d.distance<0?'---':d.distance+'mm';
     $('yaw').textContent=d.yaw.toFixed(1)+'\u00b0';
-    $('servo').textContent=d.servo+'/';
-    var esr=$('exploreSpeedRow');
-    if(d.behavior=='explore'){esr.style.display='block';$('exploreSpeedSlider').value=d.exploreSpeed;$('exploreSpeedVal').textContent=d.exploreSpeed;}
-    else{esr.style.display='none';}
-    var s=d.sectors,th=d.safeDist||200;
-    if(s&&s.length==3){
-      ['sbL','sbF','sbR'].forEach(function(id,i){
-        var el=$(id);
-        if(s[i]<0){el.style.background='#222';return;}
-        var c=s[i]<100?'#f44336':(s[i]<th?'#ffeb3b':'#27ae60');
-        var w=Math.min(100,Math.round(s[i]/th*100));
-        el.style.background=c+'44';el.style.boxShadow='0 0 6px '+c;
-        el.style.width=w+'%';el.style.margin='0 auto';
-        el.title=s[i]+'mm';
-      });
-    }
+    $('servo').textContent=d.servo+'°';
+    $('servoVal').textContent=d.servo+'°';
+    // Emergency toggle
     if(d.emergency!==lastEmerg){
       lastEmerg=d.emergency;
       if(d.emergency){$('btnEmergency').classList.add('hide');$('btnRelease').classList.remove('hide');}
@@ -225,4 +213,5 @@ setInterval(poll,1000);poll();
 </script>
 </body>
 </html>
+
 )rawliteral";
