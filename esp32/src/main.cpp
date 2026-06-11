@@ -1,16 +1,17 @@
-#define JSON_DOC(x) JsonDocument
-
 #include <Arduino.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <WiFiClientSecure.h>
 #include <Wire.h>
+#include <ArduinoJson.h>
 #include "pins.h"
 #include "config.h"
 #include "motor.h"
 #include "wifi.h"
 #include "server.h"
 #include "sensors.h"
+
+void handleMessage(const String &msg);
 
 // ============================================================
 // State
@@ -157,7 +158,7 @@ static void sendTelemetry() {
 // Message handler
 // ============================================================
 void handleMessage(const String &msg) {
-  JSON_DOC(512) doc;
+  JsonDocument doc;
   DeserializationError err = deserializeJson(doc, msg);
   if (err) { Serial.printf("[CMD] parse error: %s\n", err.c_str()); return; }
 

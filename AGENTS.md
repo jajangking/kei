@@ -10,9 +10,8 @@ Monorepo with two packages:
 npm run dev          # dev server at http://0.0.0.0:3000 (all interfaces)
 npm run build        # production build
 npm run lint         # ESLint (only linter — no typecheck in scripts)
-pio run -d esp32                    # build ALL firmware variants
-pio run -d esp32 -e esp32dev-http  # build HTTP-only version only
-pio run -d esp32 -t upload && pio run -d esp32 -t monitor  # flash + serial (default env)
+# NOTE: Local pio run tidak bisa — build hanya via GitHub CI (push ke main).
+# Semua perubahan firmware harus di-commit & push, nanti build otomatis di GitHub Actions.
 ```
 
 ## Architecture

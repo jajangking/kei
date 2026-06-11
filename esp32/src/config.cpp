@@ -1,4 +1,5 @@
 #include "config.h"
+#include <WiFi.h>
 
 RuntimeCfg runtimeCfg;
 SpeedLimitCfg speedLimitCfg;
