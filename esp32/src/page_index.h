@@ -137,8 +137,8 @@ function nub(dx,dy){
   jn.style.left=(BASE_R-NUB_R+dx)+'px';
   jn.style.top=(BASE_R-NUB_R+dy)+'px';
   var ny=-dy/MAX_R,nx=dx/MAX_R;
-  joyL=Math.round(Math.max(-255,Math.min(255,(ny-nx)*255)));
-  joyR=Math.round(Math.max(-255,Math.min(255,(ny+nx)*255)));
+  joyL=Math.round(Math.max(-255,Math.min(255,(ny+nx)*255)));
+  joyR=Math.round(Math.max(-255,Math.min(255,(ny-nx)*255)));
 }
 function send(){
   if(joyL===lastL&&joyR===lastR)return;
