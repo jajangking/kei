@@ -10,7 +10,7 @@ static bool vlReady = false;
 static int lastGoodDist = -1;
 static int lastGoodRaw = -1;
 static String diagLog = "";
-static int safetyThresh = 200;
+
 static bool sensorDead = false; // skip all I2C kalo mati
 
 // Rate-limiter
@@ -91,9 +91,6 @@ int readDistance() {
 
 bool isSensorReady() { return vlReady; }
 String getSensorDiagnostic() { return diagLog; }
-void setSafetyThreshold(int mm) { safetyThresh = mm; }
-int getSafetyThreshold() { return safetyThresh; }
-
 void retrySensor() {
   sensorDead = false;
   vlReady = false;

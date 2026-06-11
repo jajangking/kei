@@ -23,7 +23,6 @@ unsigned long lastLedToggle = 0;
 unsigned long lastMqttAttempt = 0;
 
 bool emergencyStop = false;
-bool safetyActive = false;
 bool otaError = false;
 
 // ============================================================
@@ -129,8 +128,7 @@ String buildTelemetryJson() {
   j += ",\"ip\":\"" + cachedIP + "\"";
   j += ",\"fw\":\"" + String(FW_VERSION) + "\"";
   j += ",\"distance\":" + String(readDistance());
-  j += ",\"sensor_ok\":" + String(isSensorReady() ? "true" : "false");
-  j += ",\"safeDist\":" + String(getSafetyThreshold());
+
   j += ",\"mpu_ok\":" + String(isMPUReady() ? "true" : "false");
   j += ",\"roll\":" + String(round(getRoll() * 10) / 10);
   j += ",\"pitch\":" + String(round(getPitch() * 10) / 10);
@@ -175,7 +173,7 @@ void handleMessage(const String &msg) {
   if (doc["motorTimeout"].is<int>()) { runtimeCfg.motorTimeout = max(doc["motorTimeout"].as<int>(), 0); saveRuntime(); }
   if (doc["leftTrim"].is<int>()) { runtimeCfg.leftTrim = constrain(doc["leftTrim"].as<int>(), -100, 100); saveRuntime(); }
   if (doc["rightTrim"].is<int>()) { runtimeCfg.rightTrim = constrain(doc["rightTrim"].as<int>(), -100, 100); saveRuntime(); }
-  if (doc["safeDist"].is<int>()) { setSafetyThreshold(constrain(doc["safeDist"].as<int>(), 30, 2000)); return; }
+
   if (doc["powerSave"].is<bool>()) { powerSave = doc["powerSave"].as<bool>(); savePowerSave(); ESP.restart(); }
   if (doc["speedLimitEnabled"].is<bool>()) { speedLimitCfg.enabled = doc["speedLimitEnabled"].as<bool>(); saveSpeedLimit(); }
   if (doc["speedLimit"].is<int>()) { speedLimitCfg.limit = constrain(doc["speedLimit"].as<int>(), 0, 255); saveSpeedLimit(); }
@@ -251,15 +249,10 @@ void loop() {
 
   // Sensors
   int obstacleDist = readDistance();
-  safetyActive = (!emergencyStop && obstacleDist > 0 && obstacleDist < getSafetyThreshold());
   readMPU6050();
 
   // Apply motors
   if (!emergencyStop) rampMotors();
-  if (safetyActive) {
-    ledcWrite(PWM_MOT_A, 0); ledcWrite(PWM_MOT_B, 0);
-    currentLeft = 0; currentRight = 0;
-  }
 
   // Telemetry
   if (millis() - lastTelemetry > 1000) {

@@ -13,8 +13,6 @@ int readDistance();
 int readDistanceRaw();
 bool isSensorReady();
 String getSensorDiagnostic();
-void setSafetyThreshold(int mm);
-int getSafetyThreshold();
 void retrySensor();
 
 // MPU6050

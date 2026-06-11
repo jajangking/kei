@@ -28,8 +28,7 @@ interface Telemetry {
   leftTrim?: number;
   rightTrim?: number;
   distance?: number;
-  sensor_ok?: boolean;
-  safeDist?: number;
+
   mpu_ok?: boolean;
   roll?: number;
   pitch?: number;
@@ -546,14 +545,7 @@ export default function RemotePage() {
           <span className="text-zinc-500">uptime <span className="text-white">{telemetry.uptime ? `${Math.floor(telemetry.uptime / 60)}m${telemetry.uptime % 60}s` : "-"}</span></span>
           <span className="text-zinc-500">ip <span className="text-cyan-400">{telemetry.ip ?? "-"}</span></span>
           <span className="text-zinc-500">mqtt <span className={telemetry.mqtt ? "text-green-400" : "text-red-400"}>{telemetry.mqtt ? "ON" : "OFF"}</span></span>
-          <span className="text-zinc-500">jarak <span className="text-red-400">{telemetry.distance != null && telemetry.distance > 0 ? `${(telemetry.distance / 10).toFixed(0)}cm` : "-"}</span>{telemetry.sensor_ok === false && <span className="text-zinc-600 ml-1">⚇</span>}</span>
-          <span className="text-zinc-500 flex items-center gap-1 col-span-2">stop
-            <input type="range" min="3" max="100" step="1"
-              value={Math.round((telemetry.safeDist ?? 200) / 10)}
-              onChange={(e) => sendESP({ safeDist: parseInt(e.target.value) * 10 })}
-              className="w-16 h-1 accent-red-500" />
-            <span className="text-red-400 text-[7px] font-mono w-6 text-right">{(telemetry.safeDist ?? 200) / 10}cm</span>
-          </span>
+          <span className="text-zinc-500">jarak <span className="text-red-400">{telemetry.distance != null && telemetry.distance > 0 ? `${(telemetry.distance / 10).toFixed(0)}cm` : "-"}</span></span>
           {telemetry.yaw != null && (
             <span className="text-zinc-500 col-span-2">yaw <span className="text-orange-400">{telemetry.yaw.toFixed(0)}°</span> roll <span className="text-cyan-400">{telemetry.roll?.toFixed(1)}°</span></span>
           )}

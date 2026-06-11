@@ -30,8 +30,7 @@ interface Telemetry {
   mqtt?: boolean;
   deviceName?: string;
   distance?: number;
-  sensor_ok?: boolean;
-  safeDist?: number;
+
   mpu_ok?: boolean;
   roll?: number;
   pitch?: number;
@@ -1771,14 +1770,7 @@ export default function VisionPage() {
 
                 <span className="text-zinc-500">heap <span className="text-fuchsia-400">{telemetry.heap ? `${(telemetry.heap / 1024).toFixed(0)}KB` : '-'}</span></span>
                 <span className="text-zinc-500">uptime <span className="text-white">{telemetry.uptime ? `${Math.floor(telemetry.uptime / 60)}m${telemetry.uptime % 60}s` : '-'}</span></span>
-                <span className="text-zinc-500">jarak <span className="text-red-400">{telemetry.distance != null && telemetry.distance > 0 ? `${(telemetry.distance / 10).toFixed(0)}cm` : '-'}</span>{telemetry.sensor_ok === false && <span className="text-zinc-600 ml-1">⚇</span>}</span>
-                <span className="text-zinc-500 col-span-1 flex items-center gap-1">stop
-                  <input type="range" min="3" max="100" step="1"
-                    value={Math.round((telemetry.safeDist ?? 200) / 10)}
-                    onChange={(e) => sendConfig({ safeDist: parseInt(e.target.value) * 10 })}
-                    className="w-12 h-1 accent-red-500" />
-                  <span className="text-red-400 text-[7px] font-mono w-6 text-right">{(telemetry.safeDist ?? 200) / 10}cm</span>
-                </span>
+                <span className="text-zinc-500">jarak <span className="text-red-400">{telemetry.distance != null && telemetry.distance > 0 ? `${(telemetry.distance / 10).toFixed(0)}cm` : '-'}</span></span>
                 <span className="text-zinc-500">{telemetry.ip ?? '-'}</span>
                 <span className="text-zinc-500">yaw <span className="text-orange-400">{telemetry.yaw != null ? `${telemetry.yaw.toFixed(0)}°` : '-'}</span></span>
                 <span className="text-zinc-500">roll <span className="text-cyan-400">{telemetry.roll != null ? `${telemetry.roll.toFixed(1)}°` : '-'}</span>{' '}pitch <span className="text-cyan-400">{telemetry.pitch != null ? `${telemetry.pitch.toFixed(1)}°` : '-'}</span></span>
