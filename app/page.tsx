@@ -184,6 +184,8 @@ export default function VisionPage() {
   const gyroOffsetRef = useRef(0);
   const useGyroRef = useRef(true);
   const [useGyro, setUseGyro] = useState(true);
+  const gyroInvRef = useRef(false);
+  const [gyroInv, setGyroInv] = useState(false);
 
   const sendMotor = useCallback((l: number, r: number) => {
     setLeftMotor(l);
@@ -747,8 +749,10 @@ export default function VisionPage() {
     const cb = (e: DeviceOrientationEvent) => {
       if (e.alpha === null) return;
       let deg = (e as any).webkitCompassHeading ?? e.alpha;
+      if (gyroInvRef.current) deg = 360 - deg;
       gyroRawRef.current = deg;
       gyroRef.current = ((deg - gyroOffsetRef.current) % 360 + 360) % 360;
+      gyroRef.current = gyroRef.current * Math.PI / 180;
       gyroRef.current = gyroRef.current * Math.PI / 180;
       if (useGyroRef.current) {
         headingRef.current = gyroRef.current;
@@ -1907,6 +1911,8 @@ export default function VisionPage() {
             <span className="text-zinc-700">|</span>
             <button onClick={() => { useGyroRef.current = false; setUseGyro(false); }}
               className={"px-1 rounded " + (!useGyro ? "text-yellow-400 underline bg-yellow-400/10" : "text-zinc-600 hover:text-zinc-400")}>MPU</button>
+            <button onClick={() => { gyroInvRef.current = !gyroInvRef.current; setGyroInv(gyroInvRef.current); }}
+              className={"ml-0.5 px-1 rounded " + (gyroInv ? "text-yellow-400 bg-yellow-400/10" : "text-zinc-600 hover:text-zinc-400")}>↔</button>
             <span className="ml-1 text-zinc-500">{useGyro ? (gyroRef.current * 180 / Math.PI).toFixed(0) : (telemetry.yaw ?? 0).toFixed(0)}°</span>
             <button onClick={() => { gyroOffsetRef.current = gyroRawRef.current; headingRef.current = 0; sendESP({ headingReset: true }); }}
               className="ml-1 text-zinc-600 hover:text-white">↺</button>
