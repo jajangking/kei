@@ -1,5 +1,6 @@
 #include "motor.h"
 #include "pins.h"
+#include "config.h"
 
 int targetLeft = 0;
 int targetRight = 0;
@@ -48,7 +49,7 @@ void setMotor(int left, int right) {
 
 void rampMotors() {
   if (currentLeft == targetLeft && currentRight == targetRight) return;
-  extern int rampRate;
+  int rampRate = runtimeCfg.rampRate;
   if (rampRate >= 255) {
     currentLeft = targetLeft; currentRight = targetRight;
     writeA(currentLeft); writeB(currentRight);
