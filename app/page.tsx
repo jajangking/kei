@@ -186,22 +186,28 @@ export default function VisionPage() {
   const sendMotor = useCallback((l: number, r: number) => {
     setLeftMotor(l);
     setRightMotor(r);
-    if (!useGyroRef.current) {
+    {
       const h = headingRef.current;
       const p = posRef.current;
-      const diff = Math.abs(l - r);
-      const sum = Math.abs(l + r);
-      if (diff > 30 && sum < 80) {
-        headingRef.current += (l - r) / 510 * 0.06;
-      } else if (sum > 30 && diff < 80) {
+      if (!useGyroRef.current) {
+        const diff = Math.abs(l - r);
+        const sum = Math.abs(l + r);
+        if (diff > 30 && sum < 80) {
+          headingRef.current += (l - r) / 510 * 0.06;
+        } else if (sum > 30 && diff < 80) {
+          const avg = (l + r) / 510;
+          p.x += Math.sin(h) * avg * 2;
+          p.y -= Math.cos(h) * avg * 2;
+        } else if (diff > 30 && sum > 30) {
+          headingRef.current += (l - r) / 510 * 0.03;
+          const avg = (l + r) / 510;
+          p.x += Math.sin(h) * avg * 1.5;
+          p.y -= Math.cos(h) * avg * 1.5;
+        }
+      } else {
         const avg = (l + r) / 510;
         p.x += Math.sin(h) * avg * 2;
         p.y -= Math.cos(h) * avg * 2;
-      } else if (diff > 30 && sum > 30) {
-        headingRef.current += (l - r) / 510 * 0.03;
-        const avg = (l + r) / 510;
-        p.x += Math.sin(h) * avg * 1.5;
-        p.y -= Math.cos(h) * avg * 1.5;
       }
     }
     motorRunningRef.current = l !== 0 || r !== 0;
