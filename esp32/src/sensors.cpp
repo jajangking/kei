@@ -22,13 +22,15 @@ static int vlFailCount = 0;
 
 static void resetI2C() {
   Wire.end();
-  delay(10);
+  delay(20);
   Wire.begin(SENSOR_SDA, SENSOR_SCL);
-  Wire.setClock(400000);
+  Wire.setClock(100000);  // turun ke 100kHz biar stabil
   Wire.setTimeout(50);
   i2cFailCount = 0;
   vlFailCount = 0;
+  delay(50);
   initVL53L0X();
+  delay(20);
   initMPU6050();
 }
 
@@ -43,33 +45,39 @@ static bool probeAddress(byte addr) {
 
 bool initVL53L0X() {
   diagLog = "[VL53L0X] init...";
+  vlReady = false;
 
-  // XSHUT pin — pull HIGH to enable sensor
   pinMode(VL_XSHUT_PIN, OUTPUT);
-  digitalWrite(VL_XSHUT_PIN, HIGH);
-  delay(10);
 
-  // Try address 0x29 (default), then 0x30 (alternative)
-  byte addrs[] = {0x29, 0x30};
-  byte foundAddr = 0;
-  for (int i = 0; i < 2; i++) {
-    if (probeAddress(addrs[i])) { foundAddr = addrs[i]; break; }
+  for (int attempt = 0; attempt < 3; attempt++) {
+    // Hard reset sensor via XSHUT
+    digitalWrite(VL_XSHUT_PIN, LOW);
+    delay(5);
+    digitalWrite(VL_XSHUT_PIN, HIGH);
+    delay(50);
+
+    byte addrs[] = {0x29, 0x30};
+    byte foundAddr = 0;
+    for (int i = 0; i < 2; i++) {
+      if (probeAddress(addrs[i])) { foundAddr = addrs[i]; break; }
+    }
+
+    if (foundAddr == 0) {
+      diagLog += "\n[VL53L0X] attempt " + String(attempt + 1) + " — not found";
+      continue;
+    }
+    diagLog += "\n[VL53L0X] attempt " + String(attempt + 1) + " — found at 0x" + String(foundAddr, HEX);
+
+    if (lox.begin()) {
+      Wire.setClock(100000);
+      diagLog += " — OK";
+      vlReady = true;
+      return true;
+    }
+    diagLog += " — begin() gagal";
   }
 
-  if (foundAddr == 0) {
-    diagLog += "\n[VL53L0X] not found on I2C (tried 0x29, 0x30) — skip";
-    sensorDead = true;
-    return false;
-  }
-  diagLog += "\n[VL53L0X] found at 0x" + String(foundAddr, HEX);
-
-  if (lox.begin()) {
-    Wire.setClock(400000);
-    diagLog += " — OK";
-    vlReady = true;
-    return true;
-  }
-  diagLog += "\n[VL53L0X] begin() gagal — skip forever";
+  diagLog += "\n[VL53L0X] semua attempt gagal — skip";
   sensorDead = true;
   return false;
 }
@@ -160,26 +168,29 @@ static int calSampleCount = 0;
 static float calSum = 0;
 
 bool initMPU6050() {
-  Wire.beginTransmission(MPU_ADDR);
-  if (Wire.endTransmission() != 0) {
-    Serial.println("[MPU] not found");
-    mpuReady = false;
-    return false;
+  for (int attempt = 0; attempt < 3; attempt++) {
+    Wire.beginTransmission(MPU_ADDR);
+    if (Wire.endTransmission() == 0) {
+      writeMPU(MPU_PWR1, 0);
+      delay(100);
+
+      calInProgress = true;
+      calSampleCount = 0;
+      calSum = 0;
+      gzOffset = 0;
+
+      mpuReady = true;
+      lastMPU = millis();
+      Serial.println("[MPU] OK (cal background)");
+      return true;
+    }
+    Serial.printf("[MPU] attempt %d — not found\n", attempt + 1);
+    delay(50);
   }
 
-  writeMPU(MPU_PWR1, 0);
-  delay(100);
-
-  // gyro kalibrasi background — first 200 readMPU6050() calls akan samples
-  calInProgress = true;
-  calSampleCount = 0;
-  calSum = 0;
-  gzOffset = 0;
-
-  mpuReady = true;
-  lastMPU = millis();
-  Serial.println("[MPU] OK (cal background)");
-  return true;
+  Serial.println("[MPU] not found after 3 attempts");
+  mpuReady = false;
+  return false;
 }
 
 bool isMPUReady() { return mpuReady; }

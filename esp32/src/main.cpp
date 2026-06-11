@@ -286,7 +286,7 @@ void setup() {
   playStartupMelody();
 
   Wire.begin(PIN_SDA, PIN_SCL);
-  Wire.setClock(400000);
+  Wire.setClock(100000); // 100kHz biar stabil dari noise servo
   Wire.setTimeout(50);
 
   initMotors();
