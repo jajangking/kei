@@ -83,35 +83,6 @@ Key details:
 
 On the main page, "Cari" button probes subnets `192.168.42.x`, `192.168.1.x`, `192.168.0.x`, `10.0.2.x`, `10.223.x`, `172.20.10.x`, and `kei.local` via mDNS.
 
-## Next: Tahap 2 — Perception (`app/autonomy/perception.ts`)
-
-Layer persepsi di atas detection mentah — output scene understanding buat explore & navigasi.
-
-### TODO
-- [ ] **Semantic scene analysis**
-  - [ ] Classify path vs wall vs obstacle dari grid brightness + bounding boxes
-  - [ ] Output: `freeSectors: boolean[]` (8 sektor, mana yang aman dilewati)
-  - [ ] Output: `pathClear: bool` (apakah depan aman)
-- [ ] **Depth estimation**
-  - [ ] Dari bounding box size per label → perbaiki `scanner.ts` distance calc
-  - [ ] Kalibrasi: objek X px pada jarak Y cm → mapping table
-- [ ] **Object tracking stabil**
-  - [ ] Track object by position + label (bukan cuma label match kayak sekarang)
-  - [ ] Kalau object hilang 1-2 frame, tetap remember posisinya
-- [ ] **Scene memory**
-  - [ ] Peta 2D sederhana (grid occupancy) dari scan + detections
-  - [ ] Update pas explore jalan
-  - [ ] Bisa dipake buat return path yang lebih cerdas
-
-### Explore Stabil — Tuning Prioritas
-- [ ] **Edge threshold real test** — cari nilai optimal di hardware (lantai vs meja)
-- [ ] **Avoid sequence adaptive** — stop → mundur sampai edge/wall clear, baru belok
-- [ ] **Timeout safety** — kalau stuck di avoid > 5 detik → reset phase, coba arah lain
-- [ ] **Scan saat explore** — gak perlu stop-and-scan penuh, cukup scan 3 sektor depan
-- [ ] **Return path with heading** — simpan `{x, y, heading}` biar backtrack lebih akurat
-- [ ] **Goal navigation** — klik map → heading + distance → navigate
-- [ ] **Explore + Follow hybrid** — kalau detect object menarik, follow; after lost, resume explore
-
 ## HTML dev workflow
 
 Dashboard HTML (`PAGE_INDEX`) ada di `esp32/data/index.html` — edit aja di situ, jalanin `python scripts/html2h.py` buat sync ke `src/page_index.h`, tinggal rebuild firmware. Bisa juga buka langsung `index.html` di browser pake mock data (tinggal ganti `/telemetry` sama `/cmd` endpoint).
