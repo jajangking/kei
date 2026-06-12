@@ -1,3 +1,5 @@
+# ATURAN: Jangan pernah commit/push ke git tanpa perintah eksplisit dari user!
+
 # Kei — robot vision + AI voice assistant
 
 Monorepo with two packages:

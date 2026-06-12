@@ -141,6 +141,7 @@ String buildTelemetryJson() {
   j += ",\"ip\":\"" + cachedIP + "\"";
   j += ",\"fw\":\"" + String(FW_VERSION) + "\"";
   j += ",\"distance\":" + String(readDistance());
+  j += ",\"sensor_ok\":" + String(isSensorReady() ? "true" : "false");
 
   j += ",\"mpu_ok\":" + String(isMPUReady() ? "true" : "false");
   j += ",\"roll\":" + String(round(getRoll() * 10) / 10);

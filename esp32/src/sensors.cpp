@@ -11,6 +11,7 @@ static int lastGoodDist = -1;
 static int lastGoodRaw = -1;
 static String diagLog = "";
 
+static bool sensorDead = false;
 static int i2cFailCount = 0;
 
 // Rate-limiter
@@ -74,6 +75,7 @@ static bool probeAddress(byte addr) {
 }
 
 bool initVL53L0X() {
+  if (sensorDead) return false;
   diagLog = "[VL53L0X] init...";
   vlReady = false;
 
@@ -108,6 +110,7 @@ bool initVL53L0X() {
   }
 
   diagLog += "\n[VL53L0X] semua attempt gagal — skip";
+  sensorDead = true;
   return false;
 }
 
@@ -143,6 +146,7 @@ int readDistance() {
 bool isSensorReady() { return vlReady; }
 String getSensorDiagnostic() { return diagLog; }
 void retrySensor() {
+  sensorDead = false;
   vlReady = false;
   vlFailCount = 0;
   // Pulse XSHUT LOW→HIGH to hard-reset the sensor
@@ -186,12 +190,13 @@ static bool readMPURaw(byte reg, byte* buf, int len) {
 }
 
 static int16_t read16(byte reg) {
-  byte buf[2];
+  byte buf[2] = {0};
   readMPURaw(reg, buf, 2);
   return (buf[0] << 8) | buf[1];
 }
 
-static bool calInProgress = false;
+enum CalState { CAL_IDLE, CAL_BUSY, CAL_DONE };
+static CalState calState = CAL_IDLE;
 static int calSampleCount = 0;
 static float calSum = 0;
 
@@ -202,7 +207,7 @@ bool initMPU6050() {
       writeMPU(MPU_PWR1, 0);
       delay(100);
 
-      calInProgress = true;
+      calState = CAL_BUSY;
       calSampleCount = 0;
       calSum = 0;
       gzOffset = 0;
@@ -218,6 +223,7 @@ bool initMPU6050() {
 
   Serial.println("[MPU] not found after 3 attempts");
   mpuReady = false;
+  calState = CAL_IDLE;
   return false;
 }
 
@@ -226,7 +232,7 @@ bool isMPUReady() { return mpuReady; }
 void readMPU6050() {
   if (!mpuReady) return;
   unsigned long now = millis();
-  int minInterval = calInProgress ? 5 : 30; // kalibrasi lebih cepet
+  int minInterval = (calState == CAL_BUSY) ? 5 : 30;
   if (now - lastMPU < minInterval) return;
   if (now - lastMPU > 500) lastMPU = now - 10; // clamp dt kalo lama
 
@@ -245,12 +251,12 @@ void readMPU6050() {
   gz = (buf[12] << 8) | buf[13];
 
   // Gyro kalibrasi background
-  if (calInProgress) {
+  if (calState == CAL_BUSY) {
     calSum += gz / 131.0;
     calSampleCount++;
     if (calSampleCount >= CAL_SAMPLES) {
       gzOffset = calSum / CAL_SAMPLES;
-      calInProgress = false;
+      calState = CAL_DONE;
       Serial.printf("[MPU] gyroZ offset: %.2f\n", gzOffset);
     }
     lastMPU = now;
@@ -281,8 +287,9 @@ void resetYaw() { yaw = 0; }
 String getMPUDiagnostic() {
   String s; s.reserve(256);
   s = "[MPU] ready=" + String(mpuReady ? "true" : "false");
-  s += " cal=" + String(calInProgress ? "busy" : "done");
-  if (calInProgress) s += " " + String(calSampleCount) + "/" + String(CAL_SAMPLES);
+  const char* calLabel = (calState == CAL_IDLE) ? "idle" : (calState == CAL_BUSY) ? "busy" : "done";
+  s += " cal=" + String(calLabel);
+  if (calState == CAL_BUSY) s += " " + String(calSampleCount) + "/" + String(CAL_SAMPLES);
   s += " offsetZ=" + String(gzOffset, 2);
   s += " ax=" + String(ax) + " ay=" + String(ay) + " az=" + String(az);
   s += " gx=" + String(gx) + " gy=" + String(gy) + " gz=" + String(gz);

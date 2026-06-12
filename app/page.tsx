@@ -214,8 +214,6 @@ export default function VisionPage() {
         p.x += Math.sin(h) * avg * 2;
         p.y -= Math.cos(h) * avg * 2;
       }
-      p.x = Math.max(0, Math.min(600, p.x));
-      p.y = Math.max(0, Math.min(600, p.y));
     }
     motorRunningRef.current = l !== 0 || r !== 0;
     const ws = wsRef.current;
