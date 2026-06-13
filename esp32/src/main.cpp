@@ -10,6 +10,7 @@
 #include "wifi.h"
 #include "server.h"
 #include "sensors.h"
+#include "led.h"
 
 void handleMessage(const String &msg);
 
@@ -149,6 +150,7 @@ String buildTelemetryJson() {
   j += ",\"yaw\":" + String(round(getYaw() * 10) / 10);
   j += ",\"gyroZ\":" + String(round(getGyroZ() * 10) / 10);
   j += ",\"servo\":" + String(getServoAngle());
+  j += ",\"led\":" + String(getLEDs());
   j += ",\"rssi\":" + String(cachedRssi);
   j += ",\"heap\":" + String(ESP.getFreeHeap());
   j += ",\"uptime\":" + String((millis() - startTime) / 1000);
@@ -221,6 +223,16 @@ void handleMessage(const String &msg) {
 
   if (doc["headingReset"] == true) { resetYaw(); return; }
   if (doc["servo"].is<int>()) { setServoAngle(constrain(doc["servo"].as<int>(), 0, 180)); return; }
+  if (doc["led"].is<JsonArray>()) {
+    JsonArray arr = doc["led"].as<JsonArray>();
+    int mask = 0;
+    size_t n = arr.size();
+    if (n > LED_COUNT) n = LED_COUNT;
+    for (size_t i = 0; i < n; i++)
+      if (arr[i].as<bool>()) mask |= (1 << i);
+    setLEDs(mask);
+    return;
+  }
   if (doc["deviceName"].is<String>()) { saveDeviceName(doc["deviceName"].as<String>()); return; }
   if (doc["reboot"] == true) { delay(100); ESP.restart(); return; }
   if (doc["retrySensor"] == true) { retrySensor(); return; }
@@ -267,6 +279,14 @@ void loop() {
   // Apply motors
   if (!emergencyStop) rampMotors();
 
+  // Auto-lighting
+  int spdFwd = max(currentLeft, currentRight);
+  int spdRev = min(currentLeft, currentRight);
+  int autoMask = 0;
+  if (spdFwd > 30) autoMask |= 0x03; // putih nyala pas maju
+  if (spdRev < -30) autoMask |= 0x0C; // merah nyala pas mundur
+  setLEDs(autoMask);
+
   // Telemetry
   if (millis() - lastTelemetry > 1000) {
     lastTelemetry = millis();
@@ -295,6 +315,7 @@ void setup() {
   initVL53L0X();
   initMPU6050();
   initServo();
+  initLEDs();
   loadAllConfig();
 
   if (powerSave) {
