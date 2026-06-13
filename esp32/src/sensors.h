@@ -3,9 +3,11 @@
 
 #include <Arduino.h>
 
-#define SENSOR_SDA 21
-#define SENSOR_SCL 22
-#define VL_XSHUT_PIN 15
+// MPU6050 di Wire0 (pin SDA=21, SCL=22) — didefinisi di pins.h
+// VL53L0X di Wire1 (pin terpisah)
+#define VL_SDA      16
+#define VL_SCL      17
+#define VL_XSHUT_PIN 19
 
 // VL53L0X
 bool initVL53L0X();
@@ -26,11 +28,11 @@ float getGyroZ();
 void resetYaw();
 String getMPUDiagnostic();
 
-// I2C scan
+// I2C scan (Wire0)
 String scanI2C();
 
 // Servo
-#define SERVO_PIN 5
+#define SERVO_PIN 18
 void initServo();
 void setServoAngle(int deg); // 0-180
 int getServoAngle();

@@ -286,9 +286,9 @@ void setup() {
   ledcSetup(PWM_BUZZ, 1000, PWM_RES); ledcAttachPin(PIN_BUZZ, PWM_BUZZ); ledcWrite(PWM_BUZZ, 0);
   playStartupMelody();
 
-  Wire.begin(PIN_SDA, PIN_SCL);
-  Wire.setClock(100000); // 100kHz biar stabil dari noise servo
-  Wire.setTimeout(50);
+  Wire.begin(PIN_SDA, PIN_SCL);   // Wire0 — MPU6050 doang
+  Wire.setClock(100000);
+  Wire.setTimeout(10);             // 10ms, gak perlu lama — VL udah di Wire1
 
   initMotors();
   delay(100); // power rail stabil sebelum sensor init

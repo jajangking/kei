@@ -3,7 +3,13 @@
 #include <Adafruit_VL53L0X.h>
 
 // ============================================================
-// VL53L0X
+// MPU — pin I2C untuk Wire0 (bareng servo, terpisah dari VL)
+// ============================================================
+#define MPU_SDA 21
+#define MPU_SCL 22
+
+// ============================================================
+// VL53L0X — Wire1 (bus I2C dedicated)
 // ============================================================
 static Adafruit_VL53L0X lox;
 static bool vlReady = false;
@@ -12,63 +18,72 @@ static int lastGoodRaw = -1;
 static String diagLog = "";
 
 static bool sensorDead = false;
-static int i2cFailCount = 0;
+static int vlFailCount = 0;
 
-// Rate-limiter
 #define VL_READ_INTERVAL 200
 #define VL_FAIL_BACKOFF  1000
 static unsigned long lastVLRead = 0;
-static int vlFailCount = 0;
 
-static void I2C_ClearBus() {
-  // Toggle SCL 9x to release stuck SDA (ref: pololu/vl53l0x-arduino#50)
-  pinMode(SENSOR_SCL, OUTPUT);
-  pinMode(SENSOR_SDA, INPUT_PULLUP);
+static void I2C_ClearBus(int sda, int scl) {
+  pinMode(scl, OUTPUT);
+  pinMode(sda, INPUT_PULLUP);
   for (int i = 0; i < 9; i++) {
-    digitalWrite(SENSOR_SCL, LOW);
+    digitalWrite(scl, LOW);
     delayMicroseconds(10);
-    digitalWrite(SENSOR_SCL, HIGH);
+    digitalWrite(scl, HIGH);
     delayMicroseconds(10);
   }
-  // Send STOP condition
-  pinMode(SENSOR_SDA, OUTPUT);
-  digitalWrite(SENSOR_SDA, LOW);
+  pinMode(sda, OUTPUT);
+  digitalWrite(sda, LOW);
   delayMicroseconds(10);
-  digitalWrite(SENSOR_SCL, HIGH);
+  digitalWrite(scl, HIGH);
   delayMicroseconds(10);
-  digitalWrite(SENSOR_SDA, HIGH);
+  digitalWrite(sda, HIGH);
   delayMicroseconds(10);
-  // Restore to INPUT (Wire.begin() will reconfigure)
-  pinMode(SENSOR_SDA, INPUT);
-  pinMode(SENSOR_SCL, INPUT);
+  pinMode(sda, INPUT);
+  pinMode(scl, INPUT);
 }
 
+// ============================================================
+// Wire0 — MPU6050 + servo noise isolation
+// ============================================================
 static void servoDetachForI2C();
 static void servoAttachAfterI2C();
 
-static void resetI2C() {
+static void resetWire0() {
   servoDetachForI2C();
 
   Wire.end();
   delay(20);
-  I2C_ClearBus();
-  Wire.begin(SENSOR_SDA, SENSOR_SCL);
+  I2C_ClearBus(MPU_SDA, MPU_SCL);
+  Wire.begin(MPU_SDA, MPU_SCL);
   Wire.setClock(100000);
-  Wire.setTimeout(50);
-  i2cFailCount = 0;
-  vlFailCount = 0;
+  Wire.setTimeout(10);
   delay(50);
-  initVL53L0X();
-  delay(20);
   initMPU6050();
 
   servoAttachAfterI2C();
 }
 
+// ============================================================
+// Wire1 — VL53L0X
+// ============================================================
+static void resetWire1() {
+  Wire1.end();
+  delay(20);
+  I2C_ClearBus(VL_SDA, VL_SCL);
+  Wire1.begin(VL_SDA, VL_SCL);
+  Wire1.setClock(100000);
+  Wire1.setTimeout(10);
+  vlFailCount = 0;
+  delay(50);
+  initVL53L0X();
+}
+
 static bool probeAddress(byte addr) {
   for (int r = 0; r < 3; r++) {
-    Wire.beginTransmission(addr);
-    if (Wire.endTransmission() == 0) return true;
+    Wire1.beginTransmission(addr);
+    if (Wire1.endTransmission() == 0) return true;
     delay(50);
   }
   return false;
@@ -81,8 +96,14 @@ bool initVL53L0X() {
 
   pinMode(VL_XSHUT_PIN, OUTPUT);
 
+  // Inisialisasi Wire1 (bus dedicated VL)
+  Wire1.begin(VL_SDA, VL_SCL);
+  Wire1.setClock(100000);
+  Wire1.setTimeout(10);
+
+  delay(50);
+
   for (int attempt = 0; attempt < 3; attempt++) {
-    // Hard reset sensor via XSHUT
     digitalWrite(VL_XSHUT_PIN, LOW);
     delay(5);
     digitalWrite(VL_XSHUT_PIN, HIGH);
@@ -100,8 +121,8 @@ bool initVL53L0X() {
     }
     diagLog += "\n[VL53L0X] attempt " + String(attempt + 1) + " — found at 0x" + String(foundAddr, HEX);
 
-    if (lox.begin()) {
-      Wire.setClock(100000);
+    if (lox.begin(foundAddr, &Wire1)) {
+      Wire1.setClock(100000);
       diagLog += " — OK";
       vlReady = true;
       return true;
@@ -125,11 +146,10 @@ int readDistanceRaw() {
   VL53L0X_RangingMeasurementData_t m;
   lox.rangingTest(&m, false);
   if (m.RangeStatus != 0 || m.RangeMilliMeter > 4000) {
-    if (++vlFailCount >= 10) { resetI2C(); return -1; }
+    if (++vlFailCount >= 10) { resetWire1(); return -1; }
     return -1;
   }
   vlFailCount = 0;
-  i2cFailCount = 0;
   lastGoodRaw = (int)m.RangeMilliMeter;
   return lastGoodRaw;
 }
@@ -149,7 +169,7 @@ void retrySensor() {
   sensorDead = false;
   vlReady = false;
   vlFailCount = 0;
-  // Pulse XSHUT LOW→HIGH to hard-reset the sensor
+  pinMode(VL_XSHUT_PIN, OUTPUT);
   digitalWrite(VL_XSHUT_PIN, LOW);
   delay(10);
   digitalWrite(VL_XSHUT_PIN, HIGH);
@@ -158,7 +178,7 @@ void retrySensor() {
 }
 
 // ============================================================
-// MPU6050
+// MPU6050 — Wire0 (SDA=21, SCL=22)
 // ============================================================
 #define MPU_ADDR 0x68
 #define MPU_PWR1 0x6B
@@ -171,6 +191,7 @@ static float roll = 0, pitch = 0, yaw = 0;
 static float gyroZ = 0;
 static unsigned long lastMPU = 0;
 static float gzOffset = 0;
+static int i2cFailCount = 0;
 #define CAL_SAMPLES 100
 
 static void writeMPU(byte reg, byte val) {
@@ -187,12 +208,6 @@ static bool readMPURaw(byte reg, byte* buf, int len) {
   int n = Wire.available();
   for (int i = 0; i < len && i < n; i++) buf[i] = Wire.read();
   return n == len;
-}
-
-static int16_t read16(byte reg) {
-  byte buf[2] = {0};
-  readMPURaw(reg, buf, 2);
-  return (buf[0] << 8) | buf[1];
 }
 
 enum CalState { CAL_IDLE, CAL_BUSY, CAL_DONE };
@@ -234,11 +249,11 @@ void readMPU6050() {
   unsigned long now = millis();
   int minInterval = (calState == CAL_BUSY) ? 5 : 30;
   if (now - lastMPU < minInterval) return;
-  if (now - lastMPU > 500) lastMPU = now - 10; // clamp dt kalo lama
+  if (now - lastMPU > 500) lastMPU = now - 10;
 
   byte buf[14] = {0};
   if (!readMPURaw(MPU_ACCEL, buf, 14)) {
-    if (++i2cFailCount >= 20) { resetI2C(); }
+    if (++i2cFailCount >= 20) { resetWire0(); }
     return;
   }
   i2cFailCount = 0;
@@ -250,7 +265,6 @@ void readMPU6050() {
   gy = (buf[10] << 8) | buf[11];
   gz = (buf[12] << 8) | buf[13];
 
-  // Gyro kalibrasi background
   if (calState == CAL_BUSY) {
     calSum += gz / 131.0;
     calSampleCount++;
@@ -260,7 +274,7 @@ void readMPU6050() {
       Serial.printf("[MPU] gyroZ offset: %.2f\n", gzOffset);
     }
     lastMPU = now;
-    return; // skip roll/pitch/yaw selama kalibrasi
+    return;
   }
 
   float accX = ax / 16384.0;
@@ -298,7 +312,7 @@ String getMPUDiagnostic() {
 
 String scanI2C() {
   String s; s.reserve(256);
-  s = "[I2C] scan...\n";
+  s = "[I2C] scan Wire0...\n";
   byte err, addr;
   int n = 0;
   for (addr = 1; addr < 127; addr++) {
@@ -310,19 +324,31 @@ String scanI2C() {
     }
   }
   if (n == 0) s += " none found";
-  s += "\n[I2C] " + String(n) + " device(s)";
+  s += "\n[I2C] " + String(n) + " device(s) on Wire0";
+
+  s += "\n[I2C] scan Wire1...\n";
+  n = 0;
+  for (addr = 1; addr < 127; addr++) {
+    Wire1.beginTransmission(addr);
+    err = Wire1.endTransmission();
+    if (err == 0) {
+      s += " 0x" + String(addr, HEX);
+      n++;
+    }
+  }
+  if (n == 0) s += " none found";
+  s += "\n[I2C] " + String(n) + " device(s) on Wire1";
   return s;
 }
 
 // ============================================================
-// Servo — LEDC channel 8 (low-speed, grup beda dari motor)
+// Servo — LEDC channel 8
 // ============================================================
 #define SERVO_CH 8
 #define SERVO_FREQ 50
 #define SERVO_RES 12
 
 static int servoAngle = 90;
-
 static bool servoAttached = false;
 
 void initServo() {

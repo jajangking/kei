@@ -16,9 +16,6 @@
 
 #define PIN_SDA   21
 #define PIN_SCL   22
-#define VL_XSHUT  15
-
-#define PIN_SERVO 5
 
 #define PWM_MOT_A  0
 #define PWM_MOT_B  1
