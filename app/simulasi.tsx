@@ -16,6 +16,8 @@ interface TeleEntry {
   score: number;
   lastSeen: number;
   area: number;
+  size?: number;
+  color?: string;
 }
 
 interface Props {
@@ -110,17 +112,22 @@ export default function Simulasi({
       for (const entry of teleMap) {
         const age = (now - entry.lastSeen) / 1000;
         const alpha = Math.max(0.15, 1 - age / 30);
+        if (alpha < 0.01) continue;
         const isTrackedTarget = isTracking && trackTarget && entry.label === trackTarget.label;
-        const color = isTrackedTarget ? '#ef4444' : '#22c55e';
+        const color = entry.color || (isTrackedTarget ? '#ef4444' : '#22c55e');
+        const baseR = entry.size != null ? 2 + entry.size * 6 : 4;
+        const r = isTrackedTarget ? baseR + 3 : baseR + entry.score * 2;
 
         ctx.globalAlpha = alpha;
         ctx.fillStyle = color;
         ctx.beginPath();
-        ctx.arc(entry.x, entry.y, isTrackedTarget ? 7 : 4 + entry.score * 2, 0, Math.PI * 2);
+        ctx.arc(entry.x, entry.y, r, 0, Math.PI * 2);
         ctx.fill();
 
-        ctx.fillStyle = `rgba(255,255,255,${alpha * 0.5})`;
-        ctx.fillText(entry.label, entry.x - 10, entry.y - 10);
+        if (entry.label !== "wall") {
+          ctx.fillStyle = `rgba(255,255,255,${alpha * 0.5})`;
+          ctx.fillText(entry.label, entry.x - 10, entry.y - 10);
+        }
       }
       ctx.globalAlpha = 1;
 

@@ -1409,6 +1409,14 @@ export default function VisionPage() {
 
           </div>
         )}
+        <a href="/simulasi"
+          className="absolute top-1.5 right-[132px] z-30 h-7 rounded-full bg-black/50 backdrop-blur-md border border-white/10 flex items-center gap-1 px-2 hover:bg-black/70 active:scale-90">
+          <svg className="size-2.5 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <circle cx="12" cy="12" r="9" />
+            <circle cx="12" cy="12" r="3" />
+          </svg>
+          <span className="text-[6px] font-mono tracking-wider text-zinc-400">SIM</span>
+        </a>
         <a href="/remote"
           className="absolute top-1.5 right-[72px] z-30 h-7 rounded-full bg-black/50 backdrop-blur-md border border-white/10 flex items-center gap-1 px-2 hover:bg-black/70 active:scale-90">
           <svg className="size-2.5 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
