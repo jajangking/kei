@@ -38,6 +38,8 @@ interface Telemetry {
   gyroZ?: number;
   servo?: number;
   behavior?: string;
+  led?: number;
+  led_mode?: number;
 }
 
 export default function VisionPage() {
@@ -1818,6 +1820,49 @@ export default function VisionPage() {
                 {telemetry.deviceName && (
                   <span className="text-zinc-500 col-span-2">nama <span className="text-fuchsia-400">{telemetry.deviceName}</span></span>
                 )}
+              </div>
+              {/* LED control */}
+              <div className="rounded-xl bg-zinc-900/80 ring-1 ring-white/10 px-3 py-1.5">
+                <div className="text-[7px] font-semibold text-zinc-500 tracking-wider mb-1">LED</div>
+                <div className="flex flex-wrap gap-1 mb-1">
+                  {['P1','P2','M1','M2'].map((lbl, i) => {
+                    const on = ((telemetry.led ?? 0) >> i) & 1;
+                    return (
+                      <button key={i} onClick={() => {
+                        const mask = (telemetry.led ?? 0) ^ (1 << i);
+                        sendESP({ led: [(mask>>0)&1,(mask>>1)&1,(mask>>2)&1,(mask>>3)&1] });
+                      }}
+                        className="px-2 py-0.5 rounded text-[8px] font-mono font-bold border active:scale-90"
+                        style={{
+                          backgroundColor: on ? (i < 2 ? '#3b82f6' : '#ef4444') : 'transparent',
+                          borderColor: on ? (i < 2 ? '#3b82f6' : '#ef4444') : 'rgba(255,255,255,0.15)',
+                          color: on ? '#000' : 'rgba(255,255,255,0.4)',
+                        }}>
+                        {lbl}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {[
+                    { lbl: 'HAZARD', mode: 1, cmd: { led_hazard: (telemetry.led_mode ?? 0) !== 1 } },
+                    { lbl: '◀ KIRI', mode: 2, cmd: { led_signal: (telemetry.led_mode ?? 0) === 2 ? 'off' : 'left' } },
+                    { lbl: 'KANAN ▶', mode: 3, cmd: { led_signal: (telemetry.led_mode ?? 0) === 3 ? 'off' : 'right' } },
+                  ].map(b => {
+                    const active = (telemetry.led_mode ?? 0) === b.mode;
+                    return (
+                      <button key={b.lbl} onClick={() => sendESP(b.cmd)}
+                        className="px-2 py-0.5 rounded text-[8px] font-mono font-bold border active:scale-90"
+                        style={{
+                          backgroundColor: active ? '#f59e0b' : 'transparent',
+                          borderColor: active ? '#f59e0b' : 'rgba(255,255,255,0.15)',
+                          color: active ? '#000' : 'rgba(255,255,255,0.4)',
+                        }}>
+                        {b.lbl}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
               {/* servo + heading controls */}
               {telemetry.servo != null && (

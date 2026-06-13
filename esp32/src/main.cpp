@@ -151,6 +151,7 @@ String buildTelemetryJson() {
   j += ",\"gyroZ\":" + String(round(getGyroZ() * 10) / 10);
   j += ",\"servo\":" + String(getServoAngle());
   j += ",\"led\":" + String(getLEDs());
+  j += ",\"led_mode\":" + String(getLEDMode());
   j += ",\"rssi\":" + String(cachedRssi);
   j += ",\"heap\":" + String(ESP.getFreeHeap());
   j += ",\"uptime\":" + String((millis() - startTime) / 1000);
@@ -230,7 +231,19 @@ void handleMessage(const String &msg) {
     if (n > LED_COUNT) n = LED_COUNT;
     for (size_t i = 0; i < n; i++)
       if (arr[i].as<bool>()) mask |= (1 << i);
+    setLEDMode(LED_MODE_AUTO);
     setLEDs(mask);
+    return;
+  }
+  if (doc["led_hazard"].is<bool>()) {
+    setLEDMode(doc["led_hazard"].as<bool>() ? LED_MODE_HAZARD : LED_MODE_AUTO);
+    return;
+  }
+  if (doc["led_signal"].is<const char*>()) {
+    const char* s = doc["led_signal"].as<const char*>();
+    if (strcmp(s, "left") == 0) setLEDMode(LED_MODE_SIGNAL_L);
+    else if (strcmp(s, "right") == 0) setLEDMode(LED_MODE_SIGNAL_R);
+    else setLEDMode(LED_MODE_AUTO);
     return;
   }
   if (doc["deviceName"].is<String>()) { saveDeviceName(doc["deviceName"].as<String>()); return; }
@@ -279,13 +292,16 @@ void loop() {
   // Apply motors
   if (!emergencyStop) rampMotors();
 
-  // Auto-lighting
-  int spdFwd = max(currentLeft, currentRight);
-  int spdRev = min(currentLeft, currentRight);
-  int autoMask = 0;
-  if (spdFwd > 30) autoMask |= 0x03; // putih nyala pas maju
-  if (spdRev < -30) autoMask |= 0x0C; // merah nyala pas mundur
-  setLEDs(autoMask);
+  // Auto-lighting (only in auto mode)
+  if (getLEDMode() == LED_MODE_AUTO) {
+    int spdFwd = max(currentLeft, currentRight);
+    int spdRev = min(currentLeft, currentRight);
+    int autoMask = 0;
+    if (spdFwd > 30) autoMask |= 0x03;
+    if (spdRev < -30) autoMask |= 0x0C;
+    setLEDs(autoMask);
+  }
+  updateLEDs();
 
   // Telemetry
   if (millis() - lastTelemetry > 1000) {
