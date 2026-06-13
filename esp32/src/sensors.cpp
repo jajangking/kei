@@ -121,7 +121,7 @@ bool initVL53L0X() {
     }
     diagLog += "\n[VL53L0X] attempt " + String(attempt + 1) + " — found at 0x" + String(foundAddr, HEX);
 
-    if (lox.begin(foundAddr, &Wire1)) {
+    if (lox.begin(foundAddr, false, &Wire1)) {
       Wire1.setClock(100000);
       diagLog += " — OK";
       vlReady = true;
