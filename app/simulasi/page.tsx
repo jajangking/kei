@@ -109,6 +109,16 @@ export default function SimulasiPage() {
   }, []);
   const telemetryRef = useRef<any>(null);
   const [telemetryTick, setTelemetryTick] = useState(0); // trigger UI re-render
+  const [servoAngle, setServoAngle] = useState(90);
+  const servoRef = useRef(90);
+  const sendServo = useCallback((deg: number) => {
+    const a = Math.round(Math.max(0, Math.min(180, deg)));
+    setServoAngle(a);
+    servoRef.current = a;
+    if (modeRef.current === "NYATA" && wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ servo: a }));
+    }
+  }, []);
 
   // Gear system
   const GEAR_LIMITS = [0, 80, 170, 255];
@@ -151,6 +161,9 @@ export default function SimulasiPage() {
   const scanHeadingRef = useRef(0);
   const scanCompleteRef = useRef(false);
   const scanFrameCountRef = useRef(0);
+  // Servo sweep history for multi-direction sensor snapshot
+  type ServoRead = { angle: number; dist: number };
+  const servoHistoryRef = useRef<ServoRead[]>([]);
 
   const snap = (v: number) => Math.round(v / GRID_STEP) * GRID_STEP;
 
@@ -254,18 +267,44 @@ export default function SimulasiPage() {
   const getSensorSnapshot = useCallback((): SensorSnapshot => {
     if (modeRef.current === "NYATA") {
       const tele = telemetryRef.current;
-      const front = tele?.distance != null && tele.distance >= 0
+      const rawDist = tele?.distance != null && tele.distance >= 0
         ? Math.min(tele.distance / 10, MAX_SENSE)
         : -1;
+      const front = rawDist;
       const gyro = (tele?.gyroZ ?? 0) * 0.002;
-      const wall = front >= 0 && front < 50;
+
+      // Record this reading into servo history
+      if (rawDist > 0) {
+        servoHistoryRef.current.push({ angle: servoRef.current, dist: rawDist });
+        if (servoHistoryRef.current.length > 100) servoHistoryRef.current.shift();
+      }
+
+      // Sample history to fill all 7 directions
+      const sample = (targetAngle: number, fallback: number): number => {
+        const h = servoHistoryRef.current;
+        if (h.length === 0) return fallback;
+        let best = h[0];
+        let bestDiff = Math.abs(best.angle - targetAngle);
+        for (let i = 1; i < h.length; i++) {
+          const d = Math.abs(h[i].angle - targetAngle);
+          if (d < bestDiff) { bestDiff = d; best = h[i]; }
+        }
+        return bestDiff < 30 ? best.dist : fallback;
+      };
+
+      const farL = sample(0, front);
+      const midL = sample(30, front);
+      const nearL = sample(60, front);
+      const nearR = sample(120, front);
+      const midR = sample(150, front);
+      const farR = sample(180, front);
       return {
-        farLeft: front, midLeft: front, nearLeft: front,
+        farLeft: farL, midLeft: midL, nearLeft: nearL,
         front,
-        nearRight: front, midRight: front, farRight: front,
+        nearRight: nearR, midRight: midR, farRight: farR,
         gyro,
-        wallLeft: wall,
-        wallRight: wall,
+        wallLeft: nearL >= 0 && nearL < 50,
+        wallRight: nearR >= 0 && nearR < 50,
       };
     }
     const farL = castRayAngle(-0.75);
@@ -379,6 +418,15 @@ export default function SimulasiPage() {
     const d = castLaser();
     distanceRef.current = d;
     setSensorDist(d > 0 ? `${(d / 10).toFixed(0)}cm` : "---");
+
+    // LATIHAN: record animated servo sweep into history
+    const sweepAngle = 90 + Math.sin(Date.now() / 1000 * 0.6) * 70;
+    const servoRad = (sweepAngle - 90) * Math.PI / 180;
+    const sweepDist = castRayAngle(servoRad, false);
+    if (sweepDist > 0) {
+      servoHistoryRef.current.push({ angle: sweepAngle, dist: sweepDist });
+      if (servoHistoryRef.current.length > 100) servoHistoryRef.current.shift();
+    }
 
     const l = leftMotorRef.current;
     const r = rightMotorRef.current;
@@ -604,17 +652,34 @@ export default function SimulasiPage() {
       }
     }
 
+    // ---- Servo mount indicator ----
+    if (modeRef.current === "NYATA") {
+      const servoOff = (servoRef.current - 90) * Math.PI / 180;
+      const mountX = p.x + Math.sin(h + servoOff * 0.3) * 4;
+      const mountY = p.y - Math.cos(h + servoOff * 0.3) * 4;
+      ctx.strokeStyle = "rgba(255,255,255,0.15)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(mountX, mountY);
+      ctx.stroke();
+    }
+
     // ---- VL53L0X sensor visualization ----
     if (modeRef.current === "NYATA") {
-      // Real ESP mode: only 1 front sensor, draw clear real-time ray
+      const servoRad = (servoRef.current - 90) * Math.PI / 180;
+      const rayAngle = h + servoRad;
       const distVal = distanceRef.current;
       if (distVal > 0) {
         const rayLen = Math.min(distVal, MAX_SENSE);
-        const ex = p.x + Math.sin(h) * rayLen;
-        const ey = p.y - Math.cos(h) * rayLen;
+        const ex = p.x + Math.sin(rayAngle) * rayLen;
+        const ey = p.y - Math.cos(rayAngle) * rayLen;
         ctx.fillStyle = "rgba(239, 68, 68, 0.08)";
         ctx.beginPath();
-        ctx.arc(p.x, p.y, Math.min(rayLen, 100), h - LIDAR_FOV / 2 - Math.PI / 2, h + LIDAR_FOV / 2 - Math.PI / 2);
+        ctx.arc(p.x, p.y, Math.min(rayLen, 100), rayAngle - LIDAR_FOV / 2 - Math.PI / 2, rayAngle + LIDAR_FOV / 2 - Math.PI / 2);
         ctx.closePath();
         ctx.fill();
         ctx.strokeStyle = "rgba(239, 68, 68, 0.9)";
@@ -629,40 +694,50 @@ export default function SimulasiPage() {
         ctx.fill();
         ctx.fillStyle = "rgba(239, 68, 68, 0.9)";
         ctx.font = "bold 10px monospace";
-        ctx.fillText(`ESP: ${distVal.toFixed(0)}cm`, ex + 6, ey - 6);
+        ctx.fillText(`S:${servoRef.current}° ${distVal.toFixed(0)}cm`, ex + 6, ey - 6);
       } else {
         ctx.fillStyle = "rgba(239, 68, 68, 0.5)";
         ctx.font = "bold 9px monospace";
         ctx.fillText("menunggu ESP...", p.x + 10, p.y - 10);
       }
     } else {
-      // ---- Simulated servo sweep rays ----
+      // ---- Servo sweep history (LATIHAN) ----
       if (!editMode) {
-        const scanAngles = autoStateRef.current === "SCAN"
-          ? [-1, -0.5, 0, 0.5, 1]
-          : [-0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75];
-        for (const a of scanAngles) {
-          const d = castRayAngle(a, false);
-          if (d > 0) {
-            const rayLen = Math.min(d, MAX_SENSE);
-            const ex = p.x + Math.sin(h + a) * rayLen;
-            const ey = p.y - Math.cos(h + a) * rayLen;
-            const isCenter = Math.abs(a) < 0.01;
-            ctx.strokeStyle = isCenter
-              ? "rgba(239, 68, 68, 0.25)"
-              : "rgba(250, 204, 21, 0.12)";
-            ctx.lineWidth = isCenter ? 1.5 : 1;
-            ctx.setLineDash(isCenter ? [] : [3, 4]);
+        // Animated servo: sweep back and forth
+        const sweepT = Date.now() / 1000;
+        const sweepAngle = 90 + Math.sin(sweepT * 0.6) * 70; // 20°–160°
+        const servoRad = (sweepAngle - 90) * Math.PI / 180;
+        const distAtServo = castRayAngle(servoRad, false);
+
+        // Draw servo sweep cone (ghost arcs at past positions)
+        for (const past of servoHistoryRef.current.slice(-8)) {
+          const pa = (past.angle - 90) * Math.PI / 180;
+          if (past.dist > 0) {
+            const plen = Math.min(past.dist, MAX_SENSE);
+            const pex = p.x + Math.sin(h + pa) * plen;
+            const pey = p.y - Math.cos(h + pa) * plen;
+            ctx.fillStyle = "rgba(34, 211, 238, 0.04)";
             ctx.beginPath();
-            ctx.moveTo(p.x, p.y);
-            ctx.lineTo(ex, ey);
-            ctx.stroke();
-            ctx.setLineDash([]);
-            ctx.fillStyle = "rgba(250, 204, 21, 0.2)";
-            ctx.beginPath();
-            ctx.arc(ex, ey, 2, 0, Math.PI * 2);
+            ctx.arc(pex, pey, 1.5, 0, Math.PI * 2);
             ctx.fill();
           }
+        }
+
+        // Draw current servo ray
+        if (distAtServo > 0) {
+          const rayLen = Math.min(distAtServo, MAX_SENSE);
+          const ex = p.x + Math.sin(h + servoRad) * rayLen;
+          const ey = p.y - Math.cos(h + servoRad) * rayLen;
+          ctx.strokeStyle = "rgba(34, 211, 238, 0.4)";
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(p.x, p.y);
+          ctx.lineTo(ex, ey);
+          ctx.stroke();
+          ctx.fillStyle = "rgba(34, 211, 238, 0.5)";
+          ctx.beginPath();
+          ctx.arc(ex, ey, 2.5, 0, Math.PI * 2);
+          ctx.fill();
         }
       }
 
@@ -1274,12 +1349,24 @@ export default function SimulasiPage() {
                         <span>jarak: {t.distance > 0 ? `${(t.distance / 10).toFixed(0)}cm` : "—"}</span>
                         <span>gyro: {t.gyroZ?.toFixed(1) ?? "—"}°/s</span>
                         <span>arah: {t.yaw?.toFixed(0) ?? "—"}°</span>
-                        <span>servo: {t.servo ?? "—"}°</span>
                         <span>baterai: {t.battery ?? "—"}</span>
                         <span>RSSI: {t.rssi ?? "—"}dBm</span>
                       </>
                     );
                   })()}
+                  {/* Servo control */}
+                  <div className="flex items-center gap-1 mt-1">
+                    <span className="text-zinc-600">S:</span>
+                    <input
+                      type="range"
+                      min="0"
+                      max="180"
+                      value={servoAngle}
+                      onChange={e => sendServo(Number(e.target.value))}
+                      className="w-16 h-1.5 accent-cyan-500 cursor-pointer"
+                    />
+                    <span className="text-cyan-400 w-5 text-center">{servoAngle}°</span>
+                  </div>
                 </div>
               )}
             </div>
