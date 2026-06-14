@@ -102,7 +102,11 @@ export default function SimulasiPage() {
   const modeRef = useRef<"LATIHAN" | "NYATA">("LATIHAN");
   const wsRef = useRef<WebSocket | null>(null);
   const [espConnected, setEspConnected] = useState(false);
-  const [espIp, setEspIp] = useState("");
+  const [espIp, setEspIp] = useState(() => typeof window !== "undefined" ? localStorage.getItem("kei_esp_ip") || "" : "");
+  const saveEspIp = useCallback((ip: string) => {
+    setEspIp(ip);
+    localStorage.setItem("kei_esp_ip", ip);
+  }, []);
   const telemetryRef = useRef<any>(null);
   const [telemetryTick, setTelemetryTick] = useState(0); // trigger UI re-render
 
@@ -1086,7 +1090,7 @@ export default function SimulasiPage() {
               <div className="flex gap-1">
                 <input
                   value={espIp}
-                  onChange={e => setEspIp(e.target.value)}
+                  onChange={e => saveEspIp(e.target.value)}
                   placeholder="192.168.1.x"
                   className="w-24 px-1.5 py-0.5 rounded-md bg-zinc-800 border border-zinc-700 text-[9px] font-mono text-zinc-300 outline-none"
                 />
