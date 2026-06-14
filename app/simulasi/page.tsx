@@ -1,7 +1,6 @@
 "use client";
 
 import { useRef, useEffect, useCallback, useState } from "react";
-import { LearningDB, type SensorSnapshot, type MotorCmd } from "@/app/lib/learn";
 
 const GRID_STEP = 50;
 const TRAIL_LEN = 40;
@@ -23,12 +22,25 @@ const PRESETS: Record<string, Obstacle[]> = {
     { x: 150, y: 100, w: 50, h: 150 },
   ],
   LABIRIN: [
-    { x: -200, y: -150, w: 50, h: 500 },
-    { x: 200, y: -150, w: 50, h: 200 },
-    { x: 100, y: 50, w: 50, h: 300 },
-    { x: -150, y: 250, w: 200, h: 50 },
-    { x: -50, y: 350, w: 200, h: 50 },
-    { x: -150, y: 400, w: 50, h: 100 },
+    // Outer Border
+    { x: -300, y: -50, w: 50, h: 650 }, // Left
+    { x: 250, y: -50, w: 50, h: 650 }, // Right
+    { x: -300, y: 600, w: 600, h: 50 }, // Top
+    { x: -300, y: -50, w: 250, h: 50 }, // Bottom Left
+    { x: 50, y: -50, w: 250, h: 50 },   // Bottom Right (Entry at 0,0)
+
+    // Inner Walls - complex path
+    { x: -150, y: 50, w: 300, h: 50 },
+    { x: -150, y: 100, w: 50, h: 100 },
+    { x: 50, y: 150, w: 100, h: 50 },
+    { x: 50, y: 200, w: 50, h: 100 },
+    { x: -250, y: 250, w: 200, h: 50 },
+    { x: -50, y: 250, w: 50, h: 150 },
+    { x: 50, y: 350, w: 200, h: 50 },
+    { x: -200, y: 400, w: 50, h: 100 },
+    { x: -100, y: 450, w: 250, h: 50 },
+    { x: 100, y: 500, w: 50, h: 100 },
+    { x: -250, y: 520, w: 250, h: 30 },
   ],
   RINTANGAN: [
     { x: 100, y: 80, w: 60, h: 60 },
@@ -93,9 +105,20 @@ export default function SimulasiPage() {
   const distanceRef = useRef(-1);
   const [sensorDist, setSensorDist] = useState("---");
   const gyroRef = useRef(0);
-  const lastSnapRef = useRef<SensorSnapshot | null>(null);
-  const lastCmdRef = useRef<MotorCmd | null>(null);
-  const didAutoPredictRef = useRef(false);
+  const scanFrameCountRef = useRef(0);
+
+  // Virtual Hardware State (matching real robot)
+  const [buzzerActive, setBuzzerActive] = useState(false);
+  const [leds, setLeds] = useState([0, 0, 0, 0]); // P1, P2, M1, M2
+  const lastBuzzerRef = useRef(0);
+
+  // Physical State for smoother movement
+  const velRef = useRef({ x: 0, y: 0 });
+  const angVelRef = useRef(0);
+  const ACCEL = 0.08;       // Slower acceleration (was 0.15)
+  const FRICTION = 0.80;    // Stronger braking (was 0.85)
+  const ANG_ACCEL = 0.04;   // Smoother turning
+  const ANG_FRICTION = 0.7; // Stronger turn braking (was 0.8)
 
   // ESP32 NYATA mode
   const [mode, setMode] = useState<"LATIHAN" | "NYATA">("LATIHAN");
@@ -120,48 +143,7 @@ export default function SimulasiPage() {
     }
   }, []);
 
-  // Gear system
-  const GEAR_LIMITS = [0, 80, 170, 255];
-  const [gear, setGear] = useState(3);
-  const gearRef = useRef(3);
-
-  const applyGear = useCallback((l: number, r: number): [number, number] => {
-    const limit = GEAR_LIMITS[gearRef.current];
-    if (limit === 0) {
-      // N: only rotation allowed (motors opposite direction)
-      if (l * r > 0) return [0, 0];
-      return [
-        Math.max(-80, Math.min(80, l)),
-        Math.max(-80, Math.min(80, r)),
-      ];
-    }
-    return [
-      Math.max(-limit, Math.min(limit, l)),
-      Math.max(-limit, Math.min(limit, r)),
-    ];
-  }, []);
-
-  // Supervised learning (Belajar)
-  const learnDbRef = useRef<LearningDB | null>(null);
-  const [belajarMode, setBelajarMode] = useState(false);
-  const belajarRef = useRef(false);
-  const [expInfo, setExpInfo] = useState("");
-
-  // State machine for autonomous mode
-  type AutoState = "DRIVE" | "SCAN" | "TURN" | "BACKUP";
-  const autoStateRef = useRef<AutoState>("DRIVE");
-  const scanTimerRef = useRef(0);
-  const scanDirRef = useRef(0); // clearest angle offset from scan
-  const [stateLabel, setStateLabel] = useState("");
-  const smoothRef = useRef({ left: 0, right: 0 });
-
-  // Sector map: heading → distance
-  type Sector = { heading: number; dist: number };
-  const sectorMapRef = useRef<Sector[]>([]);
-  const scanHeadingRef = useRef(0);
-  const scanCompleteRef = useRef(false);
-  const scanFrameCountRef = useRef(0);
-  // Servo sweep history for multi-direction sensor snapshot
+  // Servo sweep history
   type ServoRead = { angle: number; dist: number };
   const servoHistoryRef = useRef<ServoRead[]>([]);
 
@@ -183,15 +165,14 @@ export default function SimulasiPage() {
   }, []);
 
   const setMotors = useCallback((l: number, r: number) => {
-    const [cl, cr] = applyGear(l, r);
-    leftMotorRef.current = cl;
-    rightMotorRef.current = cr;
-    setLeftMotor(cl);
-    setRightMotor(cr);
+    leftMotorRef.current = l;
+    rightMotorRef.current = r;
+    setLeftMotor(l);
+    setRightMotor(r);
     if (modeRef.current === "NYATA" && wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ leftMotor: cl, rightMotor: cr }));
+      wsRef.current.send(JSON.stringify({ leftMotor: l, rightMotor: r }));
     }
-  }, [applyGear]);
+  }, []);
 
   const handleJoyMove = useCallback((clientX: number, clientY: number) => {
     const el = joystickRef.current;
@@ -204,9 +185,19 @@ export default function SimulasiPage() {
     let dy = clientY - cy;
     const dist = Math.hypot(dx, dy);
     if (dist > maxR) { dx = (dx / dist) * maxR; dy = (dy / dist) * maxR; }
-    setJoyPos({ x: dx, y: dy });
-    const nx = dx / maxR;
-    const ny = -dy / maxR;
+    
+    let nx = dx / maxR;
+    let ny = -dy / maxR;
+    
+    // Deadzone (titik 0) 10% agar lebih stabil saat inisiasi
+    if (Math.hypot(nx, ny) < 0.1) {
+      nx = 0;
+      ny = 0;
+      setJoyPos({ x: 0, y: 0 });
+    } else {
+      setJoyPos({ x: dx, y: dy });
+    }
+
     let l = (ny + nx) * 255;
     let r = (ny - nx) * 255;
     l = Math.max(-255, Math.min(255, Math.round(l)));
@@ -262,67 +253,6 @@ export default function SimulasiPage() {
   };
 
   const castLaser = () => castRayAngle(0);
-
-  // ESP sensor snapshot for NYATA mode
-  const getSensorSnapshot = useCallback((): SensorSnapshot => {
-    if (modeRef.current === "NYATA") {
-      const tele = telemetryRef.current;
-      const rawDist = tele?.distance != null && tele.distance >= 0
-        ? Math.min(tele.distance / 10, MAX_SENSE)
-        : -1;
-      const front = rawDist;
-      const gyro = (tele?.gyroZ ?? 0) * 0.002;
-
-      // Record this reading into servo history
-      if (rawDist > 0) {
-        servoHistoryRef.current.push({ angle: servoRef.current, dist: rawDist });
-        if (servoHistoryRef.current.length > 100) servoHistoryRef.current.shift();
-      }
-
-      // Sample history to fill all 7 directions
-      const sample = (targetAngle: number, fallback: number): number => {
-        const h = servoHistoryRef.current;
-        if (h.length === 0) return fallback;
-        let best = h[0];
-        let bestDiff = Math.abs(best.angle - targetAngle);
-        for (let i = 1; i < h.length; i++) {
-          const d = Math.abs(h[i].angle - targetAngle);
-          if (d < bestDiff) { bestDiff = d; best = h[i]; }
-        }
-        return bestDiff < 30 ? best.dist : fallback;
-      };
-
-      const farL = sample(0, front);
-      const midL = sample(30, front);
-      const nearL = sample(60, front);
-      const nearR = sample(120, front);
-      const midR = sample(150, front);
-      const farR = sample(180, front);
-      return {
-        farLeft: farL, midLeft: midL, nearLeft: nearL,
-        front,
-        nearRight: nearR, midRight: midR, farRight: farR,
-        gyro,
-        wallLeft: nearL >= 0 && nearL < 50,
-        wallRight: nearR >= 0 && nearR < 50,
-      };
-    }
-    const farL = castRayAngle(-0.75);
-    const midL = castRayAngle(-0.5);
-    const nearL = castRayAngle(-0.25);
-    const front = castRayAngle(0);
-    const nearR = castRayAngle(0.25);
-    const midR = castRayAngle(0.5);
-    const farR = castRayAngle(0.75);
-    return {
-      farLeft: farL, midLeft: midL, nearLeft: nearL,
-      front,
-      nearRight: nearR, midRight: midR, farRight: farR,
-      gyro: gyroRef.current,
-      wallLeft: nearL >= 0 && nearL < 50,
-      wallRight: nearR >= 0 && nearR < 50,
-    };
-  }, []);
 
   // WebSocket connection to ESP32
   const connectESP = useCallback((ip: string) => {
@@ -415,55 +345,76 @@ export default function SimulasiPage() {
       return;
     }
 
-    const d = castLaser();
-    distanceRef.current = d;
-    setSensorDist(d > 0 ? `${(d / 10).toFixed(0)}cm` : "---");
-
     // LATIHAN: record animated servo sweep into history
     const sweepAngle = 90 + Math.sin(Date.now() / 1000 * 0.6) * 70;
     const servoRad = (sweepAngle - 90) * Math.PI / 180;
-    const sweepDist = castRayAngle(servoRad, false);
-    if (sweepDist > 0) {
-      servoHistoryRef.current.push({ angle: sweepAngle, dist: sweepDist });
+    const d = castRayAngle(servoRad, false); // Sensor follows servo
+
+    distanceRef.current = d;
+    setSensorDist(d > 0 ? `${(d / 10).toFixed(0)}cm` : "---");
+
+    // Update sweep history for visualization
+    if (d > 0) {
+      servoHistoryRef.current.push({ angle: sweepAngle, dist: d });
       if (servoHistoryRef.current.length > 100) servoHistoryRef.current.shift();
     }
 
     const l = leftMotorRef.current;
     const r = rightMotorRef.current;
-    if (l === 0 && r === 0) { gyroRef.current *= 0.9; return; }
 
-    // Differential drive
-    const MAX_SPEED = 2;
-    const vl = Math.max(-1, Math.min(1, l / 255));
-    const vr = Math.max(-1, Math.min(1, r / 255));
-    const V = (vl + vr) / 2 * MAX_SPEED;
-    const w = (vl - vr) / WHEEL_BASE * MAX_SPEED;
-    gyroRef.current = w;
+    // Virtual Buzzer Logic (Matching real robot: beep if <= 5cm in CURRENT sensor direction)
+    if (d > 0 && d <= 50) {
+      const now = Date.now();
+      if (now - lastBuzzerRef.current > 200) {
+        setBuzzerActive(p => !p);
+        lastBuzzerRef.current = now;
+      }
+    } else {
+      setBuzzerActive(false);
+    }
+    
+    // Physical simulation
+    const vl_target = Math.max(-1, Math.min(1, l / 255));
+    const vr_target = Math.max(-1, Math.min(1, r / 255));
+    
+    const V_target = (vl_target + vr_target) / 2 * 1.5; // Slightly lower top speed (was 2.0)
+    const w_target = (vl_target - vr_target) / WHEEL_BASE * 1.2; // Calibrated turn speed
 
-    const dx = V * Math.sin(h);
-    const dy = -V * Math.cos(h);
-    const dh = w;
+    // Apply acceleration/momentum
+    const targetVx = V_target * Math.sin(h);
+    const targetVy = -V_target * Math.cos(h);
+
+    velRef.current.x += (targetVx - velRef.current.x) * ACCEL;
+    velRef.current.y += (targetVy - velRef.current.y) * ACCEL;
+    angVelRef.current += (w_target - angVelRef.current) * ANG_ACCEL;
+
+    // Apply friction
+    if (l === 0 && r === 0) {
+      velRef.current.x *= FRICTION;
+      velRef.current.y *= FRICTION;
+      angVelRef.current *= ANG_FRICTION;
+    }
+
+    const dx = velRef.current.x;
+    const dy = velRef.current.y;
+    const dh = angVelRef.current;
+    gyroRef.current = dh;
 
     // Collision check per axis
     if (!collides(p.x + dx, p.y)) p.x += dx;
-    if (!collides(p.x, p.y + dy)) p.y += dy;
-    headingRef.current = h + dh;
+    else velRef.current.x *= -0.2; // Bounce slightly
 
-    // Record experience when user drives in belajar mode
-    if (belajarRef.current && joyActiveRef.current) {
-      if (!learnDbRef.current) learnDbRef.current = new LearningDB();
-      const snap = getSensorSnapshot();
-      const rating: -1 | 1 = (d < 0 || d > 50) ? 1 : -1;
-      learnDbRef.current.record(snap, { left: l, right: r }, rating);
-      setExpInfo(`exp:${learnDbRef.current.size}`);
-    }
+    if (!collides(p.x, p.y + dy)) p.y += dy;
+    else velRef.current.y *= -0.2; // Bounce slightly
+
+    headingRef.current = h + dh;
 
     const trail = trailRef.current;
     if (trail.length === 0 || Math.hypot(trail[trail.length - 1].x - p.x, trail[trail.length - 1].y - p.y) > 3) {
       trail.push({ x: p.x, y: p.y });
       if (trail.length > TRAIL_LEN) trail.shift();
     }
-  }, [getSensorSnapshot]);
+  }, []);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -548,7 +499,7 @@ export default function SimulasiPage() {
     // ---- Obstacles (only seen in drive mode; all visible in edit mode or NYATA) ----
     for (const o of obstaclesRef.current) {
       if (!editMode && !o.seen && modeRef.current !== "NYATA") continue;
-      const alpha = editMode || belajarRef.current || modeRef.current === "NYATA" ? (o.seen ? 0.6 : 0.15) : 0.6;
+      const alpha = editMode || modeRef.current === "NYATA" ? (o.seen ? 0.6 : 0.15) : 0.6;
       ctx.fillStyle = `rgba(239, 68, 68, ${alpha})`;
       ctx.fillRect(o.x, o.y, o.w, o.h);
       ctx.strokeStyle = `rgba(239, 68, 68, ${alpha + 0.2})`;
@@ -631,26 +582,6 @@ export default function SimulasiPage() {
       ctx.fill();
     }
 
-    // ---- Sector map (scan memory) for NYATA ----
-    if (modeRef.current === "NYATA" && autoStateRef.current === "SCAN" && sectorMapRef.current.length > 0) {
-      for (const sec of sectorMapRef.current) {
-        const d = Math.min(Math.max(sec.dist, 0), MAX_SENSE);
-        const ex = p.x + Math.sin(sec.heading) * d;
-        const ey = p.y - Math.cos(sec.heading) * d;
-        ctx.strokeStyle = "rgba(34, 211, 238, 0.2)";
-        ctx.lineWidth = 1;
-        ctx.setLineDash([2, 4]);
-        ctx.beginPath();
-        ctx.moveTo(p.x, p.y);
-        ctx.lineTo(ex, ey);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.fillStyle = "rgba(34, 211, 238, 0.25)";
-        ctx.beginPath();
-        ctx.arc(ex, ey, 2.5, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
 
     // ---- Servo mount indicator ----
     if (modeRef.current === "NYATA") {
@@ -741,59 +672,98 @@ export default function SimulasiPage() {
         }
       }
 
-      // ---- VL53L0X laser ray (front) ----
+      // ---- VL53L0X laser ray (sweeping with servo) ----
+      const sweepT = Date.now() / 1000;
+      const sweepAngle = 90 + Math.sin(sweepT * 0.6) * 70;
+      const servoRad = (sweepAngle - 90) * Math.PI / 180;
       const distVal = distanceRef.current;
+      
       if (distVal > 0) {
+        const rayAngle = h + servoRad;
         const rayLen = Math.min(distVal, MAX_SENSE);
-        const ex = p.x + Math.sin(h) * rayLen;
-        const ey = p.y - Math.cos(h) * rayLen;
+        const ex = p.x + Math.sin(rayAngle) * rayLen;
+        const ey = p.y - Math.cos(rayAngle) * rayLen;
+        
         ctx.fillStyle = "rgba(239, 68, 68, 0.03)";
         ctx.beginPath();
         ctx.moveTo(p.x, p.y);
-        ctx.arc(p.x, p.y, Math.min(rayLen, 100), h - LIDAR_FOV / 2 - Math.PI / 2, h + LIDAR_FOV / 2 - Math.PI / 2);
+        ctx.arc(p.x, p.y, Math.min(rayLen, 100), rayAngle - LIDAR_FOV / 2 - Math.PI / 2, rayAngle + LIDAR_FOV / 2 - Math.PI / 2);
         ctx.closePath();
         ctx.fill();
+        
         ctx.strokeStyle = "rgba(239, 68, 68, 0.7)";
         ctx.lineWidth = 1.5;
         ctx.beginPath();
         ctx.moveTo(p.x, p.y);
         ctx.lineTo(ex, ey);
         ctx.stroke();
+        
         ctx.fillStyle = "rgba(239, 68, 68, 0.9)";
         ctx.beginPath();
         ctx.arc(ex, ey, 2.5, 0, Math.PI * 2);
         ctx.fill();
+        
         ctx.fillStyle = "rgba(239, 68, 68, 0.7)";
         ctx.font = "bold 9px monospace";
         ctx.fillText(`${(distVal / 10).toFixed(1)}cm`, ex + 5, ey - 5);
       }
     }
 
-    // ---- Robot (2WD chassis) ----
+    // ---- Robot (Physical-Sync Representation) ----
     ctx.save();
     ctx.translate(p.x, p.y);
-    ctx.rotate(h - Math.PI / 2);
-    const hw = ROBOT_W / 2;
-    const hh = ROBOT_H / 2;
+    ctx.rotate(h);
+
     // Chassis body
-    ctx.fillStyle = "#3b82f6";
-    ctx.fillRect(-hw, -hh, ROBOT_W, ROBOT_H);
-    ctx.strokeStyle = "rgba(255,255,255,0.4)";
-    ctx.lineWidth = 1;
-    ctx.strokeRect(-hw, -hh, ROBOT_W, ROBOT_H);
-    // Front direction indicator
-    ctx.fillStyle = "rgba(255,255,255,0.25)";
-    ctx.fillRect(-3, -hh - 3, 6, 4);
-    // Left wheel
-    ctx.fillStyle = "#1a1a2e";
-    ctx.fillRect(-hw - 2, -hh * 0.35, 2, hh * 0.7);
-    // Right wheel
-    ctx.fillRect(hw, -hh * 0.35, 2, hh * 0.7);
-    // Castor ball (belakang)
-    ctx.fillStyle = "rgba(255,255,255,0.15)";
+    ctx.fillStyle = "#fff";
     ctx.beginPath();
-    ctx.arc(0, hh * 0.5, 2, 0, Math.PI * 2);
+    ctx.arc(0, 0, ROBOT_R, 0, Math.PI * 2);
     ctx.fill();
+    ctx.strokeStyle = "rgba(0,0,0,0.1)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // LEDs (P1, P2, M1, M2) - matching physical robot layout
+    const ledColors = ["#3b82f6", "#3b82f6", "#ef4444", "#ef4444"];
+    leds.forEach((on, i) => {
+      if (!on) return;
+      ctx.fillStyle = ledColors[i];
+      // P1/P2 at front (negative y), M1/M2 at back (positive y)
+      const lx = (i % 2 === 0 ? -1 : 1) * 8;
+      const ly = (i < 2 ? -1 : 1) * 12;
+      ctx.beginPath();
+      ctx.arc(lx, ly, 3, 0, Math.PI * 2);
+      ctx.fill();
+      // Glow
+      ctx.save();
+      ctx.shadowBlur = 10;
+      ctx.shadowColor = ledColors[i];
+      ctx.beginPath();
+      ctx.arc(lx, ly, 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    });
+
+    // Buzzer indicator (Visual waves when active)
+    if (buzzerActive) {
+      ctx.strokeStyle = "#fbbf24";
+      ctx.lineWidth = 2;
+      const waveOffset = (Date.now() / 100) % 5;
+      for (let i = 0; i < 2; i++) {
+        ctx.beginPath();
+        ctx.arc(0, 0, ROBOT_R + 5 + i * 5 + waveOffset, -Math.PI / 4 - Math.PI / 2, Math.PI / 4 - Math.PI / 2);
+        ctx.stroke();
+      }
+    }
+
+    // Direction indicator (Center line)
+    ctx.strokeStyle = "rgba(0,0,0,0.4)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(0, -ROBOT_R);
+    ctx.stroke();
+
     ctx.restore();
 
     // Heading line
@@ -814,35 +784,12 @@ export default function SimulasiPage() {
     ctx.fillText(`L:${l} R:${r}`, 8, vh - 8);
     ctx.fillStyle = "rgba(255,255,255,0.07)";
     ctx.fillText(`x:${p.x.toFixed(0)} y:${p.y.toFixed(0)} h:${(h * 180 / Math.PI).toFixed(0)}°`, 8, vh - 18);
-    const gearLabel = gear === 0 ? "N" : String(gear);
-    const gearHint = gear === 0 ? "PUTAR" : `${GEAR_LIMITS[gear]}`;
-    ctx.fillStyle = gear === 0 ? "rgba(239,68,68,0.3)" : "rgba(34,197,94,0.3)";
-    ctx.font = "bold 14px monospace";
-    ctx.fillText(gearLabel, vw / 2 - 5, 18);
-    ctx.font = "6px monospace";
-    ctx.fillText(gearHint, vw / 2 - 8, 26);
     ctx.fillStyle = "rgba(239, 68, 68, 0.15)";
     ctx.fillText(`VL53L0X: ${sensorDist}`, 8, vh - 28);
     ctx.fillStyle = "rgba(255,255,255,0.06)";
     const dotCount = scanDotsRef.current.length;
     ctx.fillText(`zoom:${s.toFixed(1)} dots:${dotCount}`, 8, vh - 38);
-    // Show sector map size when scanning
-    if (autoStateRef.current === "SCAN" && sectorMapRef.current.length > 0) {
-      ctx.fillStyle = "rgba(34, 211, 238, 0.12)";
-      ctx.fillText(`sektor:${sectorMapRef.current.length}`, 8, vh - 48);
-    }
-
-    // State machine label
-    if (belajarRef.current && !editMode) {
-      ctx.fillStyle = autoStateRef.current === "DRIVE"
-        ? "rgba(34,197,94,0.25)"
-        : autoStateRef.current === "SCAN"
-          ? "rgba(250,204,21,0.25)"
-          : "rgba(239,68,68,0.25)";
-      ctx.font = "bold 11px monospace";
-      ctx.fillText(autoStateRef.current, vw - 80, 16);
-    }
-  }, [obstacleCount, sensorDist, editMode, editTool, gear]);
+  }, [obstacleCount, sensorDist, editMode, editTool]);
 
   // Pointer handlers for canvas
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -916,13 +863,6 @@ export default function SimulasiPage() {
       keys.add(e.key.toLowerCase());
       if (["arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(e.key.toLowerCase())) e.preventDefault();
       if (e.key === "Tab") { e.preventDefault(); setEditMode(p => !p); }
-      // Gear shift: Q/E or number keys
-      if (e.key === "q") { const g = Math.max(0, gearRef.current - 1); setGear(g); gearRef.current = g; }
-      if (e.key === "e") { const g = Math.min(3, gearRef.current + 1); setGear(g); gearRef.current = g; }
-      if (e.key === "1") { setGear(1); gearRef.current = 1; }
-      if (e.key === "2") { setGear(2); gearRef.current = 2; }
-      if (e.key === "3") { setGear(3); gearRef.current = 3; }
-      if (e.key === "n") { setGear(0); gearRef.current = 0; }
     };
     const handleKeyUp = (e: KeyboardEvent) => {
       keys.delete(e.key.toLowerCase());
@@ -934,180 +874,11 @@ export default function SimulasiPage() {
 
     // Physics + render loop
     let running = true;
-    const setAutoState = (s: AutoState) => {
-      if (autoStateRef.current !== s) {
-        autoStateRef.current = s;
-        setStateLabel(s);
-        scanTimerRef.current = 0;
-      }
-    };
-    const scanSector = (angleOffset: number) => castRayAngle(angleOffset);
 
     const loop = () => {
       if (!running) return;
 
-      if (belajarRef.current && !joyActiveRef.current && !editMode && !(modeRef.current === "NYATA" && !telemetryRef.current)) {
-        if (!learnDbRef.current) learnDbRef.current = new LearningDB();
-
-        const snap = getSensorSnapshot();
-        const front = snap.front;
-
-        switch (autoStateRef.current) {
-          case "DRIVE": {
-            // Try NN prediction first (learned driving)
-            const nnCmd = learnDbRef.current.predict(snap);
-            let targetL: number, targetR: number;
-            if (nnCmd) {
-              targetL = nnCmd.left;
-              targetR = nnCmd.right;
-            } else {
-              // Fallback: proportional speed
-              let speed = 200;
-              if (front >= 0 && front < 100) {
-                speed = Math.round(front * 2.5);
-                speed = Math.max(60, Math.min(200, speed));
-              }
-              targetL = speed;
-              targetR = speed;
-            }
-
-            // Smooth motor command (EMA)
-            const s = smoothRef.current;
-            const alpha = 0.35;
-            s.left = Math.round(s.left * (1 - alpha) + targetL * alpha);
-            s.right = Math.round(s.right * (1 - alpha) + targetR * alpha);
-            setMotors(s.left, s.right);
-
-            didAutoPredictRef.current = true;
-            lastSnapRef.current = snap;
-            lastCmdRef.current = { left: s.left, right: s.right };
-
-            if (front >= 0 && front < 25) {
-              setAutoState("SCAN");
-              setMotors(0, 0);
-              s.left = 0; s.right = 0;
-            }
-            break;
-          }
-
-          case "SCAN": {
-            setMotors(0, 0);
-            didAutoPredictRef.current = false;
-            smoothRef.current = { left: 0, right: 0 };
-            scanTimerRef.current++;
-
-            if (modeRef.current === "NYATA") {
-              // NYATA: sweep by rotating and recording distances at each heading
-              if (scanTimerRef.current === 1) {
-                scanDotsRef.current = []; // fresh map setiap scan
-                sectorMapRef.current = [];
-                scanHeadingRef.current = headingRef.current;
-                scanCompleteRef.current = false;
-              }
-              const tickInSweep = scanTimerRef.current;
-              if (tickInSweep % 4 === 0 && !scanCompleteRef.current) {
-                sectorMapRef.current.push({ heading: headingRef.current, dist: front });
-              }
-              // Small rotation step to sweep
-              if (tickInSweep < 24) {
-                setMotors(80, -80);
-              } else {
-                setMotors(0, 0);
-                if (!scanCompleteRef.current) {
-                  scanCompleteRef.current = true;
-                  // Pick best sector from map
-                  let bestH = headingRef.current;
-                  let bestD = -1;
-                  for (const s of sectorMapRef.current) {
-                    if (s.dist > bestD) { bestD = s.dist; bestH = s.heading; }
-                  }
-                  scanDirRef.current = bestH;
-
-                  if (bestD < 0 || bestD > 40) {
-                    setAutoState("TURN");
-                  } else {
-                    setAutoState("BACKUP");
-                  }
-                }
-              }
-            } else {
-              // LATIHAN: instant ray scan
-              if (scanTimerRef.current === 1) {
-                const angles = [-1, -0.5, 0, 0.5, 1];
-                let bestAngle = 0;
-                let bestDist = -1;
-                for (const a of angles) {
-                  const d = scanSector(a);
-                  if (d > bestDist) { bestDist = d; bestAngle = a; }
-                }
-                scanDirRef.current = bestAngle;
-              }
-              if (scanTimerRef.current > 6) {
-                const d = front;
-                if (d < 0 || d > 40) {
-                  setAutoState("TURN");
-                } else {
-                  setAutoState("BACKUP");
-                }
-              }
-            }
-            break;
-          }
-
-          case "TURN": {
-            didAutoPredictRef.current = false;
-            scanTimerRef.current++;
-
-            // Use sector map to decide turn direction
-            let targetH = scanDirRef.current;
-            const currentH = headingRef.current;
-            let diff = targetH - currentH;
-            while (diff > Math.PI) diff -= 2 * Math.PI;
-            while (diff < -Math.PI) diff += 2 * Math.PI;
-
-            const turnSpeed = Math.min(150, Math.max(60, Math.round(Math.abs(diff) * 50)));
-            if (Math.abs(diff) > 0.1) {
-              const sign = diff > 0 ? 1 : -1;
-              const s = smoothRef.current;
-              const targetL = -turnSpeed * sign;
-              const targetR = turnSpeed * sign;
-              const alpha = 0.4;
-              s.left = Math.round(s.left * (1 - alpha) + targetL * alpha);
-              s.right = Math.round(s.right * (1 - alpha) + targetR * alpha);
-              setMotors(s.left, s.right);
-            } else {
-              setMotors(0, 0);
-              smoothRef.current = { left: 0, right: 0 };
-            }
-
-            const f = modeRef.current === "NYATA" ? getSensorSnapshot().front : castRayAngle(0);
-            if ((f < 0 || f > 50) && (scanTimerRef.current > 5 || Math.abs(diff) < 0.15)) {
-              setAutoState("DRIVE");
-              smoothRef.current = { left: 0, right: 0 };
-            }
-            if (scanTimerRef.current > 50) {
-              setAutoState("DRIVE");
-              smoothRef.current = { left: 0, right: 0 };
-            }
-            break;
-          }
-
-          case "BACKUP": {
-            const s = smoothRef.current;
-            s.left = Math.round(s.left * 0.5 + -120 * 0.5);
-            s.right = Math.round(s.right * 0.5 + -80 * 0.5);
-            setMotors(s.left, s.right);
-            didAutoPredictRef.current = false;
-            scanTimerRef.current++;
-
-            if (scanTimerRef.current > 16) {
-              setAutoState("SCAN");
-              smoothRef.current = { left: 0, right: 0 };
-            }
-            break;
-          }
-        }
-      } else if (!joyActiveRef.current && !editMode) {
+      if (!joyActiveRef.current && !editMode && !(modeRef.current === "NYATA" && !telemetryRef.current)) {
         let lm = 0, rm = 0;
         if (keys.has("w") || keys.has("arrowup")) { lm = 255; rm = 255; }
         if (keys.has("s") || keys.has("arrowdown")) { lm = -255; rm = -255; }
@@ -1115,20 +886,8 @@ export default function SimulasiPage() {
         if (keys.has("d") || keys.has("arrowright")) { lm = 255; rm = -255; }
         if (keys.has(" ")) { lm = 0; rm = 0; }
         setMotors(lm, rm);
-        didAutoPredictRef.current = false;
       }
       tick();
-
-      // Auto-rate the last autonomous DRIVE action
-      if (didAutoPredictRef.current && lastSnapRef.current && lastCmdRef.current) {
-        didAutoPredictRef.current = false;
-        const dist = distanceRef.current;
-        const rating: -1 | 1 = (dist < 0 || dist > 50) ? 1 : -1;
-        learnDbRef.current?.record(lastSnapRef.current, lastCmdRef.current, rating);
-        setExpInfo(`exp:${learnDbRef.current?.size ?? 0}`);
-        lastSnapRef.current = null;
-        lastCmdRef.current = null;
-      }
 
       draw();
       requestAnimationFrame(loop);
@@ -1141,7 +900,21 @@ export default function SimulasiPage() {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, [tick, draw, setMotors, editMode, applyGear]);
+  }, [tick, draw, setMotors, editMode]);
+
+  // Sync joystick visual knob with keyboard/motor state
+  useEffect(() => {
+    if (joyActiveRef.current) return;
+    const el = joystickRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const maxR = rect.width / 2 - 10;
+    if (maxR <= 0) return;
+
+    const ny = (leftMotor + rightMotor) / 510;
+    const nx = (leftMotor - rightMotor) / 510;
+    setJoyPos({ x: nx * maxR, y: -ny * maxR });
+  }, [leftMotor, rightMotor]);
 
   return (
     <main className="fixed inset-0 bg-black select-none touch-none">
@@ -1239,67 +1012,6 @@ export default function SimulasiPage() {
         </div>
       )}
 
-      {/* AI toolbar */}
-      {!editMode && (
-        <div className="fixed top-3 right-3 flex flex-col gap-1.5 items-end">
-          {/* Belajar (supervised learning) */}
-          <button
-            onClick={() => {
-              const next = !belajarMode;
-              setBelajarMode(next);
-              belajarRef.current = next;
-              if (!learnDbRef.current) learnDbRef.current = new LearningDB();
-              setExpInfo(`exp:${learnDbRef.current.size}`);
-              if (next) {
-                autoStateRef.current = "DRIVE";
-                setStateLabel("DRIVE");
-                scanTimerRef.current = 0;
-              }
-            }}
-            className={`px-2 py-1 rounded-full text-[9px] font-mono font-bold border active:scale-90 ${
-              belajarMode
-                ? "bg-purple-600 border-purple-500 text-white"
-                : "bg-zinc-800 border-zinc-700 text-zinc-400 hover:text-white"
-            }`}
-          >
-            BELAJAR {belajarMode ? "ON" : "OFF"}
-          </button>
-
-          {belajarMode && (
-            <>
-              <div className="text-[7px] font-mono text-zinc-600 bg-zinc-900/40 px-2 py-0.5 rounded-full">
-                {expInfo}
-              </div>
-              <div className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded-full ${
-                stateLabel === "DRIVE" ? "text-emerald-400 bg-emerald-900/40" :
-                stateLabel === "SCAN" ? "text-yellow-400 bg-yellow-900/40" :
-                stateLabel === "TURN" ? "text-orange-400 bg-orange-900/40" :
-                "text-red-400 bg-red-900/40"
-              }`}>
-                {stateLabel || "—"}
-              </div>
-              <button
-                onClick={() => {
-                  learnDbRef.current?.forget();
-                  setExpInfo("lupa!");
-                  scanDotsRef.current = [];
-                  obstaclesRef.current.forEach(o => { o.seen = false; });
-                }}
-                className="px-2 py-0.5 rounded-full bg-red-900/40 border border-red-800/50 text-red-400 text-[7px] font-mono active:scale-90"
-              >
-                LUPA
-              </button>
-              <button
-                onClick={() => { scanDotsRef.current = []; }}
-                className="px-2 py-0.5 rounded-full bg-yellow-900/40 border border-yellow-800/50 text-yellow-400 text-[7px] font-mono active:scale-90"
-              >
-                HAPUS DOT
-              </button>
-            </>
-          )}
-        </div>
-      )}
-
       {/* Mode + ESP toolbar */}
       {!editMode && (
         <div className="fixed top-3 left-3 flex flex-col gap-1.5 items-start">
@@ -1371,27 +1083,6 @@ export default function SimulasiPage() {
               )}
             </div>
           )}
-        </div>
-      )}
-
-      {/* Gear controls */}
-      {!editMode && (
-        <div className="fixed bottom-48 left-1/2 -translate-x-1/2 flex gap-2">
-          {[0, 1, 2, 3].map(g => (
-            <button
-              key={g}
-              onClick={() => { setGear(g); gearRef.current = g; }}
-              className={`size-8 rounded-full text-[11px] font-mono font-bold border active:scale-90 transition-colors ${
-                gear === g
-                  ? g === 0
-                    ? "bg-red-600 border-red-500 text-white"
-                    : "bg-emerald-600 border-emerald-500 text-white"
-                  : "bg-zinc-800 border-zinc-700 text-zinc-500"
-              }`}
-            >
-              {g === 0 ? "N" : g}
-            </button>
-          ))}
         </div>
       )}
 
