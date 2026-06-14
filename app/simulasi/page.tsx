@@ -168,8 +168,7 @@ export default function SimulasiPage() {
     setLeftMotor(cl);
     setRightMotor(cr);
     if (modeRef.current === "NYATA" && wsRef.current?.readyState === WebSocket.OPEN) {
-      // Swap left/right karena motor channel A/B terbalik di hardware
-      wsRef.current.send(JSON.stringify({ leftMotor: cr, rightMotor: cl }));
+      wsRef.current.send(JSON.stringify({ leftMotor: cl, rightMotor: cr }));
     }
   }, [applyGear]);
 
