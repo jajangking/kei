@@ -121,9 +121,9 @@ bool initVL53L0X() {
     }
     diagLog += "\n[VL53L0X] attempt " + String(attempt + 1) + " — found at 0x" + String(foundAddr, HEX);
 
-    if (lox.begin(foundAddr, false, &Wire1)) {
+    if (lox.begin(foundAddr, false, &Wire1, (Adafruit_VL53L0X::VL53L0X_Sense_config_t)Adafruit_VL53L0X::VL53L0X_SENSE_LONG_RANGE)) {
       Wire1.setClock(100000);
-      diagLog += " — OK";
+      diagLog += " — OK (LONG_RANGE)";
       vlReady = true;
       return true;
     }
