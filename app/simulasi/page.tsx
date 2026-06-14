@@ -104,6 +104,7 @@ export default function SimulasiPage() {
   const [espConnected, setEspConnected] = useState(false);
   const [espIp, setEspIp] = useState("");
   const telemetryRef = useRef<any>(null);
+  const [telemetryTick, setTelemetryTick] = useState(0); // trigger UI re-render
 
   // Gear system
   const GEAR_LIMITS = [0, 80, 170, 255];
@@ -281,7 +282,10 @@ export default function SimulasiPage() {
     ws.onclose = () => setEspConnected(false);
     ws.onerror = () => setEspConnected(false);
     ws.onmessage = (e: MessageEvent) => {
-      try { telemetryRef.current = JSON.parse(e.data as string); } catch {}
+      try {
+        telemetryRef.current = JSON.parse(e.data as string);
+        setTelemetryTick(t => t + 1);
+      } catch {}
     };
     wsRef.current = ws;
   }, []);
