@@ -1,6 +1,7 @@
 #include "sensors.h"
 #include <Wire.h>
 #include <Adafruit_VL53L0X.h>
+#include <vl53l0x_api.h>
 
 // ============================================================
 // MPU — pin I2C untuk Wire0 (bareng servo, terpisah dari VL)
@@ -123,6 +124,16 @@ bool initVL53L0X() {
 
     if (lox.begin(foundAddr, false, &Wire1)) {
       Wire1.setClock(100000);
+
+      // Long-range mode: timing budget 200ms + relaksasi limit
+      uint32_t budget = 0;
+      if (VL53L0X_GetMeasurementTimingBudgetMicroSeconds(&lox.vl53l0x, &budget) == VL53L0X_ERROR_NONE) {
+        budget = 200000; // 200ms
+        VL53L0X_SetMeasurementTimingBudgetMicroSeconds(&lox.vl53l0x, budget);
+        VL53L0X_SetLimitCheckEnable(&lox.vl53l0x, VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE, 0);
+        diagLog += " budget=" + String(budget / 1000) + "ms";
+      }
+
       diagLog += " — OK";
       vlReady = true;
       return true;
@@ -145,7 +156,9 @@ int readDistanceRaw() {
 
   VL53L0X_RangingMeasurementData_t m;
   lox.rangingTest(&m, false);
-  if (m.RangeStatus != 0 || m.RangeMilliMeter > 4000) {
+  // Accept status 0 (good), 1 (sigma fail), 2 (signal fail) — still valid distance
+  // Reject 3 (too close), 4 (too far), 5 (hw fail), 6 (no wrap), 7 (wrapped)
+  if (m.RangeStatus > 2 || m.RangeMilliMeter > 4000) {
     if (++vlFailCount >= 10) { resetWire1(); return -1; }
     return -1;
   }
