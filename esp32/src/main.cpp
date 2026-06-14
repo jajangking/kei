@@ -303,8 +303,8 @@ void loop() {
   }
   updateLEDs();
 
-  // Telemetry
-  if (millis() - lastTelemetry > 1000) {
+  // Telemetry (200ms biar realtime)
+  if (millis() - lastTelemetry > 200) {
     lastTelemetry = millis();
     sendTelemetry();
   }
