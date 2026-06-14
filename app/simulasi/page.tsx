@@ -879,14 +879,22 @@ export default function SimulasiPage() {
 
         switch (autoStateRef.current) {
           case "DRIVE": {
-            // Proportional speed: slow down as we approach obstacle
-            let speed = 200;
-            if (front >= 0 && front < 100) {
-              speed = Math.round(front * 2.5); // 250 at 100cm, 62 at 25cm
-              speed = Math.max(60, Math.min(200, speed));
+            // Try NN prediction first (learned driving)
+            const nnCmd = learnDbRef.current.predict(snap);
+            let targetL: number, targetR: number;
+            if (nnCmd) {
+              targetL = nnCmd.left;
+              targetR = nnCmd.right;
+            } else {
+              // Fallback: proportional speed
+              let speed = 200;
+              if (front >= 0 && front < 100) {
+                speed = Math.round(front * 2.5);
+                speed = Math.max(60, Math.min(200, speed));
+              }
+              targetL = speed;
+              targetR = speed;
             }
-            const targetL = speed;
-            const targetR = speed;
 
             // Smooth motor command (EMA)
             const s = smoothRef.current;
