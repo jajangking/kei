@@ -1,7 +1,12 @@
 export type SensorSnapshot = {
+  farLeft: number;
+  midLeft: number;
+  nearLeft: number;
   front: number;
-  left: number;
-  right: number;
+  nearRight: number;
+  midRight: number;
+  farRight: number;
+  gyro: number; // simulated MPU gyro Z-axis
   wallLeft: boolean;
   wallRight: boolean;
 };
@@ -18,12 +23,12 @@ type Experience = {
   t: number;
 };
 
-const STORAGE_KEY = "kei_learn_db";
-const INPUT_DIM = 5;
-const HIDDEN_DIM = 6;
+const STORAGE_KEY = "kei_learn_db2";
+const INPUT_DIM = 10;
+const HIDDEN_DIM = 12;
 const OUTPUT_DIM = 2;
-const LR = 0.01;
-const MAX_EXP = 500;
+const LR = 0.05;
+const MAX_EXP = 200;
 
 // Neural network weights
 type Network = {
@@ -45,11 +50,17 @@ function createNetwork(): Network {
   return { w1, b1, w2, b2 };
 }
 
-function normalize(s: SensorSnapshot): number[] {
+function normalize(s: SensorSnapshot, maxRange = 400): number[] {
+  const norm = (v: number) => v < 0 ? 1 : Math.min(v / maxRange, 1);
   return [
-    Math.min(s.front / 200, 1),
-    Math.min(s.left / 200, 1),
-    Math.min(s.right / 200, 1),
+    norm(s.farLeft),
+    norm(s.midLeft),
+    norm(s.nearLeft),
+    norm(s.front),
+    norm(s.nearRight),
+    norm(s.midRight),
+    norm(s.farRight),
+    s.gyro / 2, // normalize gyro to roughly [-0.5, 0.5]
     s.wallLeft ? 1 : 0,
     s.wallRight ? 1 : 0,
   ];
@@ -179,21 +190,22 @@ export class LearningDB {
   record(s: SensorSnapshot, a: MotorCmd, r: -1 | 0 | 1 = 0) {
     this.exps.push({ s, a, r, t: Date.now() });
     if (this.exps.length > MAX_EXP) this.exps.splice(0, this.exps.length - MAX_EXP);
-    // Train only every 5 records to avoid lag
-    if (this.exps.length % 5 === 0) this.train();
+    this.train();
     this.save();
   }
 
   // Run training epochs
-  train(epochs = 4) {
+  train(epochs = 8) {
     if (this.exps.length < 3) return;
-    const rated = this.exps.filter(e => e.r !== 0);
-    const pool = rated.length >= 3 ? rated : this.exps;
+    // Sample recent 100 for responsiveness
+    const batch = this.exps.length > 100 ? this.exps.slice(-100) : this.exps;
+    const rated = batch.filter(e => e.r !== 0);
+    const pool = rated.length >= 5 ? rated : batch;
     for (let e = 0; e < epochs; e++) {
       trainOnce(this.net, pool, exp => {
         if (exp.r === 0) return 0.3;
-        if (exp.r === 1) return 1;
-        return 0.1;
+        if (exp.r === 1) return 1.0;
+        return 0.5; // negative — still learn but lower weight
       });
     }
   }

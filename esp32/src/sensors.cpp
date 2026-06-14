@@ -158,8 +158,7 @@ int readDistance() {
   if (!vlReady) return -1;
   int r = readDistanceRaw();
   if (r < 0) { lastGoodDist = -1; return -1; }
-  if (lastGoodDist < 0) lastGoodDist = r;
-  else lastGoodDist = (lastGoodDist * 2 + r) / 3;
+  lastGoodDist = r;
   return lastGoodDist;
 }
 

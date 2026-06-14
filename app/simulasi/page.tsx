@@ -6,14 +6,65 @@ import { LearningDB, type SensorSnapshot, type MotorCmd } from "@/app/lib/learn"
 const GRID_STEP = 50;
 const TRAIL_LEN = 40;
 const MAX_SENSE = 400;
-const HCSR04_FOV = 15 * Math.PI / 180;
+const LIDAR_FOV = 7 * Math.PI / 180; // VL53L0X narrow beam ~14° total
 
-interface Obstacle {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
+// Robot chassis 2WD (mm → 1 unit = 1cm roughly)
+const ROBOT_W = 22;
+const ROBOT_H = 16;
+const ROBOT_R = 13;
+const WHEEL_BASE = 14;
+
+type Obstacle = { x: number; y: number; w: number; h: number; seen?: boolean };
+
+const PRESETS: Record<string, Obstacle[]> = {
+  DINDING: [
+    { x: -200, y: 250, w: 400, h: 50 },
+    { x: -200, y: 100, w: 50, h: 150 },
+    { x: 150, y: 100, w: 50, h: 150 },
+  ],
+  LABIRIN: [
+    { x: -200, y: -150, w: 50, h: 500 },
+    { x: 200, y: -150, w: 50, h: 200 },
+    { x: 100, y: 50, w: 50, h: 300 },
+    { x: -150, y: 250, w: 200, h: 50 },
+    { x: -50, y: 350, w: 200, h: 50 },
+    { x: -150, y: 400, w: 50, h: 100 },
+  ],
+  RINTANGAN: [
+    { x: 100, y: 80, w: 60, h: 60 },
+    { x: -120, y: 120, w: 50, h: 50 },
+    { x: 50, y: 200, w: 50, h: 80 },
+    { x: -80, y: 280, w: 80, h: 60 },
+    { x: 160, y: 180, w: 40, h: 40 },
+    { x: -180, y: 50, w: 50, h: 50 },
+    { x: -40, y: -50, w: 60, h: 60 },
+    { x: 30, y: 360, w: 100, h: 50 },
+    { x: -200, y: 200, w: 50, h: 50 },
+    { x: 150, y: 350, w: 50, h: 50 },
+    { x: -50, y: 150, w: 40, h: 40 },
+    { x: 200, y: 250, w: 50, h: 50 },
+  ],
+  BUNTU: [
+    { x: -250, y: -50, w: 50, h: 450 },
+    { x: 250, y: -50, w: 50, h: 450 },
+    { x: -250, y: 350, w: 500, h: 50 },
+    { x: -100, y: 150, w: 50, h: 200 },
+    { x: 100, y: 200, w: 50, h: 150 },
+  ],
+  SLALOM: [
+    { x: -50, y: 80, w: 300, h: 50 },
+    { x: -280, y: 180, w: 300, h: 50 },
+    { x: -50, y: 280, w: 320, h: 50 },
+    { x: -300, y: 380, w: 300, h: 50 },
+    { x: -50, y: 480, w: 350, h: 50 },
+  ],
+  HUTAN: Array.from({ length: 30 }, (_, i) => ({
+    x: Math.round((Math.random() - 0.5) * 700),
+    y: Math.round(Math.random() * 500 + 30),
+    w: 30 + Math.round(Math.random() * 30),
+    h: 30 + Math.round(Math.random() * 30),
+  })),
+};
 
 type EditTool = "place" | "delete";
 
@@ -33,12 +84,26 @@ export default function SimulasiPage() {
   const [rightMotor, setRightMotor] = useState(0);
   const [editMode, setEditMode] = useState(false);
   const [editTool, setEditTool] = useState<EditTool>("place");
+  const [showPresets, setShowPresets] = useState(false);
+  const scanDotsRef = useRef<Array<{ x: number; y: number }>>([]);
   const obstaclesRef = useRef<Obstacle[]>([]);
   const drawStartRef = useRef<{ x: number; y: number } | null>(null);
   const drawEndRef = useRef<{ x: number; y: number } | null>(null);
   const [obstacleCount, setObstacleCount] = useState(0);
   const distanceRef = useRef(-1);
   const [sensorDist, setSensorDist] = useState("---");
+  const gyroRef = useRef(0);
+  const lastSnapRef = useRef<SensorSnapshot | null>(null);
+  const lastCmdRef = useRef<MotorCmd | null>(null);
+  const didAutoPredictRef = useRef(false);
+
+  // ESP32 NYATA mode
+  const [mode, setMode] = useState<"LATIHAN" | "NYATA">("LATIHAN");
+  const modeRef = useRef<"LATIHAN" | "NYATA">("LATIHAN");
+  const wsRef = useRef<WebSocket | null>(null);
+  const [espConnected, setEspConnected] = useState(false);
+  const [espIp, setEspIp] = useState("");
+  const telemetryRef = useRef<any>(null);
 
   // Gear system
   const GEAR_LIMITS = [0, 80, 170, 255];
@@ -67,6 +132,13 @@ export default function SimulasiPage() {
   const belajarRef = useRef(false);
   const [expInfo, setExpInfo] = useState("");
 
+  // State machine for autonomous mode
+  type AutoState = "DRIVE" | "SCAN" | "TURN" | "BACKUP";
+  const autoStateRef = useRef<AutoState>("DRIVE");
+  const scanTimerRef = useRef(0);
+  const scanDirRef = useRef(0); // clearest angle offset from scan
+  const [stateLabel, setStateLabel] = useState("");
+
   const snap = (v: number) => Math.round(v / GRID_STEP) * GRID_STEP;
 
   const screenToWorld = useCallback((clientX: number, clientY: number) => {
@@ -90,6 +162,10 @@ export default function SimulasiPage() {
     rightMotorRef.current = cr;
     setLeftMotor(cl);
     setRightMotor(cr);
+    if (modeRef.current === "NYATA" && wsRef.current?.readyState === WebSocket.OPEN) {
+      // Swap left/right karena motor channel A/B terbalik di hardware
+      wsRef.current.send(JSON.stringify({ leftMotor: cr, rightMotor: cl }));
+    }
   }, [applyGear]);
 
   const handleJoyMove = useCallback((clientX: number, clientY: number) => {
@@ -119,7 +195,7 @@ export default function SimulasiPage() {
     setJoyPos({ x: 0, y: 0 });
   }, [setMotors]);
 
-  const collides = (x: number, y: number, radius = 6) => {
+  const collides = (x: number, y: number, radius = ROBOT_R) => {
     for (const o of obstaclesRef.current) {
       if (x + radius > o.x && x - radius < o.x + o.w && y + radius > o.y && y - radius < o.y + o.h) return true;
     }
@@ -137,67 +213,155 @@ export default function SimulasiPage() {
     return tmin > 0 ? tmin : -1;
   };
 
-  const castRayAngle = (angleOffset: number) => {
+  const castRayAngle = (angleOffset: number, markSeen = true) => {
     const p = posRef.current;
     const h = headingRef.current + angleOffset;
     const rx = Math.sin(h);
     const ry = -Math.cos(h);
     let closest = -1;
+    let hitObs: Obstacle | null = null;
     for (const o of obstaclesRef.current) {
       const d = rayIntersect(p.x, p.y, rx, ry, o);
-      if (d > 0 && (closest < 0 || d < closest)) closest = d;
+      if (d > 0 && (closest < 0 || d < closest)) { closest = d; hitObs = o; }
+    }
+    if (markSeen && hitObs) {
+      hitObs.seen = true;
+      const hx = p.x + rx * closest;
+      const hy = p.y + ry * closest;
+      const dots = scanDotsRef.current;
+      if (dots.length === 0 || Math.hypot(dots[dots.length - 1].x - hx, dots[dots.length - 1].y - hy) > 8) {
+        dots.push({ x: hx, y: hy });
+      }
     }
     return closest > 0 ? Math.min(closest, MAX_SENSE) : -1;
   };
 
-  const castHCSR04 = () => castRayAngle(0);
+  const castLaser = () => castRayAngle(0);
 
-  // Physics tick
+  // ESP sensor snapshot for NYATA mode
+  const getSensorSnapshot = useCallback((): SensorSnapshot => {
+    if (modeRef.current === "NYATA") {
+      const tele = telemetryRef.current;
+      const front = tele?.distance != null && tele.distance >= 0
+        ? Math.min(tele.distance / 10, MAX_SENSE)
+        : -1;
+      const gyro = (tele?.gyroZ ?? 0) * 0.002;
+      const wall = front >= 0 && front < 50;
+      return {
+        farLeft: front, midLeft: front, nearLeft: front,
+        front,
+        nearRight: front, midRight: front, farRight: front,
+        gyro,
+        wallLeft: wall,
+        wallRight: wall,
+      };
+    }
+    const farL = castRayAngle(-0.75);
+    const midL = castRayAngle(-0.5);
+    const nearL = castRayAngle(-0.25);
+    const front = castRayAngle(0);
+    const nearR = castRayAngle(0.25);
+    const midR = castRayAngle(0.5);
+    const farR = castRayAngle(0.75);
+    return {
+      farLeft: farL, midLeft: midL, nearLeft: nearL,
+      front,
+      nearRight: nearR, midRight: midR, farRight: farR,
+      gyro: gyroRef.current,
+      wallLeft: nearL >= 0 && nearL < 50,
+      wallRight: nearR >= 0 && nearR < 50,
+    };
+  }, []);
+
+  // WebSocket connection to ESP32
+  const connectESP = useCallback((ip: string) => {
+    wsRef.current?.close();
+    const ws = new WebSocket(`ws://${ip}:81/`);
+    ws.onopen = () => setEspConnected(true);
+    ws.onclose = () => setEspConnected(false);
+    ws.onerror = () => setEspConnected(false);
+    ws.onmessage = (e: MessageEvent) => {
+      try { telemetryRef.current = JSON.parse(e.data as string); } catch {}
+    };
+    wsRef.current = ws;
+  }, []);
+
+  const disconnectESP = useCallback(() => {
+    wsRef.current?.close();
+    wsRef.current = null;
+    setEspConnected(false);
+  }, []);
+
+  // Physics tick (differential drive kinematics)
   const tick = useCallback(() => {
     const p = posRef.current;
     const h = headingRef.current;
 
-    const d = castHCSR04();
+    if (modeRef.current === "NYATA") {
+      const tele = telemetryRef.current;
+      const d = (tele?.distance != null && tele.distance >= 0)
+        ? Math.min(tele.distance / 10, MAX_SENSE)
+        : -1;
+      distanceRef.current = d;
+      setSensorDist(d > 0 ? `${d.toFixed(0)}cm` : "---");
+      gyroRef.current = (tele?.gyroZ ?? 0) * 0.002;
+
+      // Update heading from ESP MPU yaw
+      const y = tele?.yaw;
+      if (y != null) headingRef.current = y * Math.PI / 180;
+
+      // Dead reckoning from motor commands (visualization only)
+      const l = leftMotorRef.current;
+      const r = rightMotorRef.current;
+      if (l !== 0 || r !== 0) {
+        const vl = Math.max(-1, Math.min(1, l / 255));
+        const vr = Math.max(-1, Math.min(1, r / 255));
+        const V = (vl + vr) / 2 * 0.4; // scale for real robot visual
+        const dx = V * Math.sin(headingRef.current);
+        const dy = -V * Math.cos(headingRef.current);
+        p.x += dx;
+        p.y += dy;
+
+        const trail = trailRef.current;
+        if (trail.length === 0 || Math.hypot(trail[trail.length - 1].x - p.x, trail[trail.length - 1].y - p.y) > 3) {
+          trail.push({ x: p.x, y: p.y });
+          if (trail.length > TRAIL_LEN) trail.shift();
+        }
+      }
+      return;
+    }
+
+    const d = castLaser();
     distanceRef.current = d;
     setSensorDist(d > 0 ? `${(d / 10).toFixed(0)}cm` : "---");
 
     const l = leftMotorRef.current;
     const r = rightMotorRef.current;
-    if (l === 0 && r === 0) return;
-    const diff = Math.abs(l - r);
-    const sum = Math.abs(l + r);
+    if (l === 0 && r === 0) { gyroRef.current *= 0.9; return; }
 
-    let newH = h;
-    let dx = 0, dy = 0;
-    if (diff > 30 && sum < 80) {
-      newH += (l - r) / 510 * 0.06;
-    } else if (sum > 30 && diff < 80) {
-      const avg = (l + r) / 510;
-      dx = Math.sin(h) * avg * 2;
-      dy = -Math.cos(h) * avg * 2;
-    } else if (diff > 30 && sum > 30) {
-      newH += (l - r) / 510 * 0.03;
-      const avg = (l + r) / 510;
-      dx = Math.sin(h) * avg * 1.5;
-      dy = -Math.cos(h) * avg * 1.5;
-    }
+    // Differential drive
+    const MAX_SPEED = 2;
+    const vl = Math.max(-1, Math.min(1, l / 255));
+    const vr = Math.max(-1, Math.min(1, r / 255));
+    const V = (vl + vr) / 2 * MAX_SPEED;
+    const w = (vl - vr) / WHEEL_BASE * MAX_SPEED;
+    gyroRef.current = w;
 
+    const dx = V * Math.sin(h);
+    const dy = -V * Math.cos(h);
+    const dh = w;
+
+    // Collision check per axis
     if (!collides(p.x + dx, p.y)) p.x += dx;
     if (!collides(p.x, p.y + dy)) p.y += dy;
-    headingRef.current = newH;
+    headingRef.current = h + dh;
 
     // Record experience when user drives in belajar mode
     if (belajarRef.current && joyActiveRef.current) {
       if (!learnDbRef.current) learnDbRef.current = new LearningDB();
-      const front = castRayAngle(0);
-      const left = castRayAngle(-0.5);
-      const right = castRayAngle(0.5);
-      const snap: SensorSnapshot = {
-        front, left, right,
-        wallLeft: left >= 0 && left < 50,
-        wallRight: right >= 0 && right < 50,
-      };
-      learnDbRef.current.record(snap, { left: l, right: r }, 1);
+      const snap = getSensorSnapshot();
+      const rating: -1 | 1 = (d < 0 || d > 50) ? 1 : -1;
+      learnDbRef.current.record(snap, { left: l, right: r }, rating);
       setExpInfo(`exp:${learnDbRef.current.size}`);
     }
 
@@ -206,7 +370,7 @@ export default function SimulasiPage() {
       trail.push({ x: p.x, y: p.y });
       if (trail.length > TRAIL_LEN) trail.shift();
     }
-  }, []);
+  }, [getSensorSnapshot]);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -265,13 +429,28 @@ export default function SimulasiPage() {
       ctx.stroke();
     }
 
-    // ---- Obstacles ----
+    // ---- Scan dots (sensor hit points) ----
+    for (const dot of scanDotsRef.current) {
+      ctx.fillStyle = "rgba(250, 204, 21, 0.3)";
+      ctx.beginPath();
+      ctx.arc(dot.x, dot.y, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // ---- Obstacles (only seen in drive mode; all visible in edit mode or NYATA) ----
     for (const o of obstaclesRef.current) {
-      ctx.fillStyle = "rgba(239, 68, 68, 0.5)";
+      if (!editMode && !o.seen && modeRef.current !== "NYATA") continue;
+      const alpha = editMode || belajarRef.current || modeRef.current === "NYATA" ? (o.seen ? 0.6 : 0.15) : 0.6;
+      ctx.fillStyle = `rgba(239, 68, 68, ${alpha})`;
       ctx.fillRect(o.x, o.y, o.w, o.h);
-      ctx.strokeStyle = "rgba(239, 68, 68, 0.8)";
+      ctx.strokeStyle = `rgba(239, 68, 68, ${alpha + 0.2})`;
       ctx.lineWidth = 1;
       ctx.strokeRect(o.x, o.y, o.w, o.h);
+      if (o.seen && !editMode) {
+        // Subtle glow on seen obstacles
+        ctx.fillStyle = "rgba(250, 204, 21, 0.04)";
+        ctx.fillRect(o.x - 2, o.y - 2, o.w + 4, o.h + 4);
+      }
     }
 
     // Draw preview while placing obstacle
@@ -326,8 +505,9 @@ export default function SimulasiPage() {
     if (motorActive && Math.abs(l + r) > 30) {
       const avg = (l + r) / 510;
       const dir = avg > 0 ? 1 : -1;
-      const ax = p.x + Math.sin(h) * 35 * dir;
-      const ay = p.y - Math.cos(h) * 35 * dir;
+      const alen = ROBOT_H + 12;
+      const ax = p.x + Math.sin(h) * alen * dir;
+      const ay = p.y - Math.cos(h) * alen * dir;
       ctx.strokeStyle = `rgba(34, 197, 94, ${Math.abs(avg) * 0.5})`;
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -337,53 +517,127 @@ export default function SimulasiPage() {
       ctx.fillStyle = `rgba(34, 197, 94, ${Math.abs(avg) * 0.5})`;
       ctx.beginPath();
       ctx.moveTo(ax, ay);
-      ctx.lineTo(ax - Math.sin(h + 0.5) * 8 * dir, ay + Math.cos(h + 0.5) * 8 * dir);
-      ctx.lineTo(ax - Math.sin(h - 0.5) * 8 * dir, ay + Math.cos(h - 0.5) * 8 * dir);
+      ctx.lineTo(ax - Math.sin(h + 0.4) * 6 * dir, ay + Math.cos(h + 0.4) * 6 * dir);
+      ctx.lineTo(ax - Math.sin(h - 0.4) * 6 * dir, ay + Math.cos(h - 0.4) * 6 * dir);
       ctx.closePath();
       ctx.fill();
     }
 
-    // ---- HC-SR04 sensor ray ----
-    const distVal = distanceRef.current;
-    if (distVal > 0) {
-      const rayLen = Math.min(distVal, MAX_SENSE);
-      const ex = p.x + Math.sin(h) * rayLen;
-      const ey = p.y - Math.cos(h) * rayLen;
-      ctx.fillStyle = "rgba(239, 68, 68, 0.04)";
-      ctx.beginPath();
-      ctx.moveTo(p.x, p.y);
-      ctx.arc(p.x, p.y, Math.min(rayLen, 120), h - HCSR04_FOV / 2 - Math.PI / 2, h + HCSR04_FOV / 2 - Math.PI / 2);
-      ctx.closePath();
-      ctx.fill();
-      ctx.strokeStyle = "rgba(239, 68, 68, 0.6)";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(p.x, p.y);
-      ctx.lineTo(ex, ey);
-      ctx.stroke();
-      ctx.fillStyle = "rgba(239, 68, 68, 0.8)";
-      ctx.beginPath();
-      ctx.arc(ex, ey, 3, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "rgba(239, 68, 68, 0.7)";
-      ctx.font = "bold 9px monospace";
-      ctx.fillText(`${(distVal / 10).toFixed(0)}cm`, ex + 5, ey - 5);
+    // ---- VL53L0X sensor visualization ----
+    if (modeRef.current === "NYATA") {
+      // Real ESP mode: only 1 front sensor, draw clear real-time ray
+      const distVal = distanceRef.current;
+      if (distVal > 0) {
+        const rayLen = Math.min(distVal, MAX_SENSE);
+        const ex = p.x + Math.sin(h) * rayLen;
+        const ey = p.y - Math.cos(h) * rayLen;
+        ctx.fillStyle = "rgba(239, 68, 68, 0.08)";
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, Math.min(rayLen, 100), h - LIDAR_FOV / 2 - Math.PI / 2, h + LIDAR_FOV / 2 - Math.PI / 2);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = "rgba(239, 68, 68, 0.9)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(ex, ey);
+        ctx.stroke();
+        ctx.fillStyle = "rgba(239, 68, 68, 1)";
+        ctx.beginPath();
+        ctx.arc(ex, ey, 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "rgba(239, 68, 68, 0.9)";
+        ctx.font = "bold 10px monospace";
+        ctx.fillText(`ESP: ${distVal.toFixed(0)}cm`, ex + 6, ey - 6);
+      } else {
+        ctx.fillStyle = "rgba(239, 68, 68, 0.5)";
+        ctx.font = "bold 9px monospace";
+        ctx.fillText("menunggu ESP...", p.x + 10, p.y - 10);
+      }
+    } else {
+      // ---- Simulated servo sweep rays ----
+      if (!editMode) {
+        const scanAngles = autoStateRef.current === "SCAN"
+          ? [-1, -0.5, 0, 0.5, 1]
+          : [-0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75];
+        for (const a of scanAngles) {
+          const d = castRayAngle(a, false);
+          if (d > 0) {
+            const rayLen = Math.min(d, MAX_SENSE);
+            const ex = p.x + Math.sin(h + a) * rayLen;
+            const ey = p.y - Math.cos(h + a) * rayLen;
+            const isCenter = Math.abs(a) < 0.01;
+            ctx.strokeStyle = isCenter
+              ? "rgba(239, 68, 68, 0.25)"
+              : "rgba(250, 204, 21, 0.12)";
+            ctx.lineWidth = isCenter ? 1.5 : 1;
+            ctx.setLineDash(isCenter ? [] : [3, 4]);
+            ctx.beginPath();
+            ctx.moveTo(p.x, p.y);
+            ctx.lineTo(ex, ey);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.fillStyle = "rgba(250, 204, 21, 0.2)";
+            ctx.beginPath();
+            ctx.arc(ex, ey, 2, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+      }
+
+      // ---- VL53L0X laser ray (front) ----
+      const distVal = distanceRef.current;
+      if (distVal > 0) {
+        const rayLen = Math.min(distVal, MAX_SENSE);
+        const ex = p.x + Math.sin(h) * rayLen;
+        const ey = p.y - Math.cos(h) * rayLen;
+        ctx.fillStyle = "rgba(239, 68, 68, 0.03)";
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.arc(p.x, p.y, Math.min(rayLen, 100), h - LIDAR_FOV / 2 - Math.PI / 2, h + LIDAR_FOV / 2 - Math.PI / 2);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = "rgba(239, 68, 68, 0.7)";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(ex, ey);
+        ctx.stroke();
+        ctx.fillStyle = "rgba(239, 68, 68, 0.9)";
+        ctx.beginPath();
+        ctx.arc(ex, ey, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "rgba(239, 68, 68, 0.7)";
+        ctx.font = "bold 9px monospace";
+        ctx.fillText(`${(distVal / 10).toFixed(1)}cm`, ex + 5, ey - 5);
+      }
     }
 
-    // ---- Robot ----
+    // ---- Robot (2WD chassis) ----
     ctx.save();
     ctx.translate(p.x, p.y);
     ctx.rotate(h - Math.PI / 2);
+    const hw = ROBOT_W / 2;
+    const hh = ROBOT_H / 2;
+    // Chassis body
     ctx.fillStyle = "#3b82f6";
-    ctx.beginPath();
-    ctx.moveTo(14, 0);
-    ctx.lineTo(-8, -9);
-    ctx.lineTo(-8, 9);
-    ctx.closePath();
-    ctx.fill();
-    ctx.strokeStyle = "#fff";
+    ctx.fillRect(-hw, -hh, ROBOT_W, ROBOT_H);
+    ctx.strokeStyle = "rgba(255,255,255,0.4)";
     ctx.lineWidth = 1;
-    ctx.stroke();
+    ctx.strokeRect(-hw, -hh, ROBOT_W, ROBOT_H);
+    // Front direction indicator
+    ctx.fillStyle = "rgba(255,255,255,0.25)";
+    ctx.fillRect(-3, -hh - 3, 6, 4);
+    // Left wheel
+    ctx.fillStyle = "#1a1a2e";
+    ctx.fillRect(-hw - 2, -hh * 0.35, 2, hh * 0.7);
+    // Right wheel
+    ctx.fillRect(hw, -hh * 0.35, 2, hh * 0.7);
+    // Castor ball (belakang)
+    ctx.fillStyle = "rgba(255,255,255,0.15)";
+    ctx.beginPath();
+    ctx.arc(0, hh * 0.5, 2, 0, Math.PI * 2);
+    ctx.fill();
     ctx.restore();
 
     // Heading line
@@ -392,7 +646,7 @@ export default function SimulasiPage() {
     ctx.setLineDash([4, 4]);
     ctx.beginPath();
     ctx.moveTo(p.x, p.y);
-    ctx.lineTo(p.x + Math.sin(h) * 40, p.y - Math.cos(h) * 40);
+    ctx.lineTo(p.x + Math.sin(h) * (ROBOT_H + 15), p.y - Math.cos(h) * (ROBOT_H + 15));
     ctx.stroke();
     ctx.setLineDash([]);
 
@@ -412,9 +666,20 @@ export default function SimulasiPage() {
     ctx.font = "6px monospace";
     ctx.fillText(gearHint, vw / 2 - 8, 26);
     ctx.fillStyle = "rgba(239, 68, 68, 0.15)";
-    ctx.fillText(`HC-SR04: ${sensorDist}`, 8, vh - 28);
+    ctx.fillText(`VL53L0X: ${sensorDist}`, 8, vh - 28);
     ctx.fillStyle = "rgba(255,255,255,0.06)";
     ctx.fillText(`zoom:${s.toFixed(1)} obst:${obstacleCount}`, 8, vh - 38);
+
+    // State machine label
+    if (belajarRef.current && !editMode) {
+      ctx.fillStyle = autoStateRef.current === "DRIVE"
+        ? "rgba(34,197,94,0.25)"
+        : autoStateRef.current === "SCAN"
+          ? "rgba(250,204,21,0.25)"
+          : "rgba(239,68,68,0.25)";
+      ctx.font = "bold 11px monospace";
+      ctx.fillText(autoStateRef.current, vw - 80, 16);
+    }
   }, [obstacleCount, sensorDist, editMode, editTool, gear]);
 
   // Pointer handlers for canvas
@@ -507,26 +772,105 @@ export default function SimulasiPage() {
 
     // Physics + render loop
     let running = true;
+    const setAutoState = (s: AutoState) => {
+      if (autoStateRef.current !== s) {
+        autoStateRef.current = s;
+        setStateLabel(s);
+        scanTimerRef.current = 0;
+      }
+    };
+    const scanSector = (angleOffset: number) => castRayAngle(angleOffset);
+
     const loop = () => {
       if (!running) return;
-      if (belajarRef.current && !joyActiveRef.current && !editMode) {
-        // Supervised learning prediction
+
+      if (belajarRef.current && !joyActiveRef.current && !editMode && !(modeRef.current === "NYATA" && !telemetryRef.current)) {
         if (!learnDbRef.current) learnDbRef.current = new LearningDB();
-        const front = castRayAngle(0);
-        const left = castRayAngle(-0.5);
-        const right = castRayAngle(0.5);
-        const snap: SensorSnapshot = {
-          front, left, right,
-          wallLeft: left >= 0 && left < 50,
-          wallRight: right >= 0 && right < 50,
-        };
-        const cmd = learnDbRef.current.predict(snap);
-        if (cmd) {
-          const [cl, cr] = applyGear(cmd.left, cmd.right);
-          leftMotorRef.current = cl;
-          rightMotorRef.current = cr;
-          setLeftMotor(cl);
-          setRightMotor(cr);
+
+        const snap = getSensorSnapshot();
+        const front = snap.front;
+
+        switch (autoStateRef.current) {
+          case "DRIVE": {
+            const rawCmd = learnDbRef.current.predict(snap) ?? { left: 255, right: 255 };
+            setMotors(rawCmd.left, rawCmd.right);
+
+            // Record applied motor values for auto-rating (including bad predictions)
+            lastSnapRef.current = snap;
+            lastCmdRef.current = { left: leftMotorRef.current, right: rightMotorRef.current };
+            didAutoPredictRef.current = true;
+
+            // Wall too close → override motors, but the bad prediction is already recorded
+            // Auto-rating after tick will give -1 because front is still < 25
+            if (front >= 0 && front < 25) {
+              setAutoState("SCAN");
+              setMotors(0, 0);
+            }
+            break;
+          }
+
+          case "SCAN": {
+            setMotors(0, 0);
+            didAutoPredictRef.current = false;
+            scanTimerRef.current++;
+
+            if (scanTimerRef.current === 1) {
+              if (modeRef.current === "NYATA") {
+                // Real robot: single front sensor only, default to right turn
+                scanDirRef.current = 1;
+              } else {
+                // Simulated servo scan: measure 5 angles
+                const angles = [-1, -0.5, 0, 0.5, 1];
+                let bestAngle = 0;
+                let bestDist = -1;
+                for (const a of angles) {
+                  const d = scanSector(a);
+                  if (d > bestDist) { bestDist = d; bestAngle = a; }
+                }
+                scanDirRef.current = bestAngle;
+              }
+              const d = front;
+              if (d < 0 || d > 60) {
+                setAutoState("TURN");
+              } else {
+                setAutoState("BACKUP");
+              }
+            }
+            break;
+          }
+
+          case "TURN": {
+            // Rotate towards clearest direction
+            if (scanDirRef.current > 0) {
+              setMotors(120, -120); // turn right
+            } else {
+              setMotors(-120, 120); // turn left
+            }
+            didAutoPredictRef.current = false;
+            scanTimerRef.current++;
+
+            // Check if front is now clear
+            const f = modeRef.current === "NYATA" ? getSensorSnapshot().front : castRayAngle(0);
+            if ((f < 0 || f > 60) && scanTimerRef.current > 3) {
+              setAutoState("DRIVE");
+            }
+            if (scanTimerRef.current > 40) {
+              setAutoState("DRIVE");
+            }
+            break;
+          }
+
+          case "BACKUP": {
+            // Reverse + slight turn
+            setMotors(-120, -80);
+            didAutoPredictRef.current = false;
+            scanTimerRef.current++;
+
+            if (scanTimerRef.current > 20) {
+              setAutoState("SCAN");
+            }
+            break;
+          }
         }
       } else if (!joyActiveRef.current && !editMode) {
         let lm = 0, rm = 0;
@@ -536,8 +880,21 @@ export default function SimulasiPage() {
         if (keys.has("d") || keys.has("arrowright")) { lm = 255; rm = -255; }
         if (keys.has(" ")) { lm = 0; rm = 0; }
         setMotors(lm, rm);
+        didAutoPredictRef.current = false;
       }
       tick();
+
+      // Auto-rate the last autonomous DRIVE action
+      if (didAutoPredictRef.current && lastSnapRef.current && lastCmdRef.current) {
+        didAutoPredictRef.current = false;
+        const dist = distanceRef.current;
+        const rating: -1 | 1 = (dist < 0 || dist > 50) ? 1 : -1;
+        learnDbRef.current?.record(lastSnapRef.current, lastCmdRef.current, rating);
+        setExpInfo(`exp:${learnDbRef.current?.size ?? 0}`);
+        lastSnapRef.current = null;
+        lastCmdRef.current = null;
+      }
+
       draw();
       requestAnimationFrame(loop);
     };
@@ -596,11 +953,46 @@ export default function SimulasiPage() {
               HAPUS
             </button>
             <button
-              onClick={() => { obstaclesRef.current = []; setObstacleCount(0); }}
+              onClick={() => {
+                obstaclesRef.current = [];
+                scanDotsRef.current = [];
+                setObstacleCount(0);
+              }}
               className="px-2 py-1 rounded-full bg-zinc-800 border border-zinc-700 text-zinc-400 text-[10px] font-mono active:scale-90"
             >
               ALL
             </button>
+            <button
+              onClick={() => setShowPresets(p => !p)}
+              className={`px-2 py-1 rounded-full text-[10px] font-mono border active:scale-90 ${
+                showPresets
+                  ? "bg-cyan-600 border-cyan-500 text-white"
+                  : "bg-zinc-800 border-zinc-700 text-zinc-400"
+              }`}
+            >
+              PRESET
+            </button>
+            {showPresets && (
+              <div className="fixed top-20 left-1/2 -translate-x-1/2 flex flex-wrap justify-center gap-1.5 max-w-[90vw] bg-zinc-900/60 backdrop-blur-sm px-3 py-2 rounded-xl border border-white/5">
+                {Object.keys(PRESETS).map(name => (
+                  <button
+                    key={name}
+                    onClick={() => {
+                      obstaclesRef.current = PRESETS[name].map(o => ({ ...o }));
+                      scanDotsRef.current = [];
+                      setObstacleCount(obstaclesRef.current.length);
+                      setShowPresets(false);
+                      posRef.current = { x: 0, y: 0 };
+                      headingRef.current = 0;
+                      trailRef.current = [];
+                    }}
+                    className="px-2.5 py-1 rounded-full bg-zinc-800/90 border border-zinc-700 text-zinc-300 hover:text-white hover:border-cyan-500 text-[9px] font-mono active:scale-90 backdrop-blur-sm"
+                  >
+                    {name}
+                  </button>
+                ))}
+              </div>
+            )}
           </>
         )}
       </div>
@@ -623,6 +1015,11 @@ export default function SimulasiPage() {
               belajarRef.current = next;
               if (!learnDbRef.current) learnDbRef.current = new LearningDB();
               setExpInfo(`exp:${learnDbRef.current.size}`);
+              if (next) {
+                autoStateRef.current = "DRIVE";
+                setStateLabel("DRIVE");
+                scanTimerRef.current = 0;
+              }
             }}
             className={`px-2 py-1 rounded-full text-[9px] font-mono font-bold border active:scale-90 ${
               belajarMode
@@ -634,8 +1031,91 @@ export default function SimulasiPage() {
           </button>
 
           {belajarMode && (
-            <div className="text-[7px] font-mono text-zinc-600 bg-zinc-900/40 px-2 py-0.5 rounded-full">
-              {expInfo}
+            <>
+              <div className="text-[7px] font-mono text-zinc-600 bg-zinc-900/40 px-2 py-0.5 rounded-full">
+                {expInfo}
+              </div>
+              <div className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded-full ${
+                stateLabel === "DRIVE" ? "text-emerald-400 bg-emerald-900/40" :
+                stateLabel === "SCAN" ? "text-yellow-400 bg-yellow-900/40" :
+                stateLabel === "TURN" ? "text-orange-400 bg-orange-900/40" :
+                "text-red-400 bg-red-900/40"
+              }`}>
+                {stateLabel || "—"}
+              </div>
+              <button
+                onClick={() => {
+                  learnDbRef.current?.forget();
+                  setExpInfo("lupa!");
+                  scanDotsRef.current = [];
+                  obstaclesRef.current.forEach(o => { o.seen = false; });
+                }}
+                className="px-2 py-0.5 rounded-full bg-red-900/40 border border-red-800/50 text-red-400 text-[7px] font-mono active:scale-90"
+              >
+                LUPA
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Mode + ESP toolbar */}
+      {!editMode && (
+        <div className="fixed top-3 left-3 flex flex-col gap-1.5 items-start">
+          <button
+            onClick={() => {
+              const next = mode === "NYATA" ? "LATIHAN" : "NYATA";
+              setMode(next);
+              modeRef.current = next;
+              if (next === "LATIHAN") disconnectESP();
+            }}
+            className={`px-2 py-1 rounded-full text-[9px] font-mono font-bold border active:scale-90 ${
+              mode === "NYATA"
+                ? "bg-cyan-600 border-cyan-500 text-white"
+                : "bg-zinc-800 border-zinc-700 text-zinc-400 hover:text-white"
+            }`}
+          >
+            {mode}
+          </button>
+          {mode === "NYATA" && (
+            <div className="flex flex-col gap-1.5 bg-zinc-900/60 backdrop-blur-sm p-2 rounded-xl border border-white/10">
+              <div className="flex gap-1">
+                <input
+                  value={espIp}
+                  onChange={e => setEspIp(e.target.value)}
+                  placeholder="192.168.1.x"
+                  className="w-24 px-1.5 py-0.5 rounded-md bg-zinc-800 border border-zinc-700 text-[9px] font-mono text-zinc-300 outline-none"
+                />
+                <button
+                  onClick={() => espConnected ? disconnectESP() : connectESP(espIp)}
+                  className={`px-2 py-0.5 rounded-full text-[8px] font-mono font-bold border active:scale-90 ${
+                    espConnected
+                      ? "bg-emerald-600 border-emerald-500 text-white"
+                      : "bg-zinc-800 border-zinc-700 text-zinc-400"
+                  }`}
+                >
+                  {espConnected ? "ON" : "HUBUNG"}
+                </button>
+              </div>
+              {espConnected && (
+                <div className="flex flex-col gap-0.5 text-[7px] font-mono text-zinc-500">
+                  <span className="text-emerald-500">WS tersambung</span>
+                  {(() => {
+                    const t = telemetryRef.current;
+                    if (!t) return null;
+                    return (
+                      <>
+                        <span>jarak: {t.distance > 0 ? `${(t.distance / 10).toFixed(0)}cm` : "—"}</span>
+                        <span>gyro: {t.gyroZ?.toFixed(1) ?? "—"}°/s</span>
+                        <span>arah: {t.yaw?.toFixed(0) ?? "—"}°</span>
+                        <span>servo: {t.servo ?? "—"}°</span>
+                        <span>baterai: {t.battery ?? "—"}</span>
+                        <span>RSSI: {t.rssi ?? "—"}dBm</span>
+                      </>
+                    );
+                  })()}
+                </div>
+              )}
             </div>
           )}
         </div>
