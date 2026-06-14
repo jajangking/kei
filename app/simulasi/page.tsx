@@ -143,6 +143,14 @@ export default function SimulasiPage() {
   const scanTimerRef = useRef(0);
   const scanDirRef = useRef(0); // clearest angle offset from scan
   const [stateLabel, setStateLabel] = useState("");
+  const smoothRef = useRef({ left: 0, right: 0 });
+
+  // Sector map: heading → distance
+  type Sector = { heading: number; dist: number };
+  const sectorMapRef = useRef<Sector[]>([]);
+  const scanHeadingRef = useRef(0);
+  const scanCompleteRef = useRef(false);
+  const scanFrameCountRef = useRef(0);
 
   const snap = (v: number) => Math.round(v / GRID_STEP) * GRID_STEP;
 
@@ -279,6 +287,7 @@ export default function SimulasiPage() {
 
   // WebSocket connection to ESP32
   const connectESP = useCallback((ip: string) => {
+    if (!ip) return;
     wsRef.current?.close();
     const ws = new WebSocket(`ws://${ip}:81/`);
     ws.onopen = () => setEspConnected(true);
@@ -316,6 +325,35 @@ export default function SimulasiPage() {
       // Update heading from ESP MPU yaw
       const y = tele?.yaw;
       if (y != null) headingRef.current = y * Math.PI / 180;
+
+      // Persistent obstacle hit points from VL53L0X (grid-quantized, filtered)
+      const dots = scanDotsRef.current;
+      const gyroMag = Math.abs(tele?.gyroZ ?? 0);
+      const scanFrameCount = scanFrameCountRef.current;
+      scanFrameCountRef.current = scanFrameCount + 1;
+      // Auto-purge dots too far from robot (position estimate drifted)
+      if (dots.length > 10) {
+        const far = dots.filter(dot => Math.hypot(dot.x - p.x, dot.y - p.y) < 600);
+        if (far.length < dots.length) {
+          scanDotsRef.current = far.length > 10 ? far : dots.slice(-50);
+        }
+      }
+      if (d > 0 && gyroMag < 30 && scanFrameCount % 4 === 0) {
+        const hdg = headingRef.current;
+        const gridSize = 25;
+        const hitX = Math.round((p.x + Math.sin(hdg) * d) / gridSize) * gridSize;
+        const hitY = Math.round((p.y - Math.cos(hdg) * d) / gridSize) * gridSize;
+        // Only add if not a duplicate of recent dots
+        let dup = false;
+        const cur = scanDotsRef.current;
+        for (let i = Math.max(0, cur.length - 20); i < cur.length; i++) {
+          if (cur[i].x === hitX && cur[i].y === hitY) { dup = true; break; }
+        }
+        if (!dup) {
+          cur.push({ x: hitX, y: hitY });
+          if (cur.length > 300) cur.splice(0, cur.length - 300);
+        }
+      }
 
       // Dead reckoning from motor commands (visualization only)
       const l = leftMotorRef.current;
@@ -437,11 +475,26 @@ export default function SimulasiPage() {
     }
 
     // ---- Scan dots (sensor hit points) ----
-    for (const dot of scanDotsRef.current) {
-      ctx.fillStyle = "rgba(250, 204, 21, 0.3)";
-      ctx.beginPath();
-      ctx.arc(dot.x, dot.y, 2.5, 0, Math.PI * 2);
-      ctx.fill();
+    const dots = scanDotsRef.current;
+    for (let i = 0; i < dots.length; i++) {
+      const dot = dots[i];
+      if (modeRef.current === "NYATA") {
+        // NYATA: small squares dengan fade (lebih baru = lebih terang)
+        const recent = i > dots.length - 50;
+        ctx.fillStyle = recent ? "rgba(250, 204, 21, 0.6)" : "rgba(250, 204, 21, 0.15)";
+        ctx.fillRect(dot.x - 3, dot.y - 3, 6, 6);
+        if (recent) {
+          ctx.strokeStyle = "rgba(250, 204, 21, 0.3)";
+          ctx.lineWidth = 1;
+          ctx.strokeRect(dot.x - 3, dot.y - 3, 6, 6);
+        }
+      } else {
+        // LATIHAN: small circles
+        ctx.fillStyle = "rgba(250, 204, 21, 0.35)";
+        ctx.beginPath();
+        ctx.arc(dot.x, dot.y, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
 
     // ---- Obstacles (only seen in drive mode; all visible in edit mode or NYATA) ----
@@ -528,6 +581,27 @@ export default function SimulasiPage() {
       ctx.lineTo(ax - Math.sin(h - 0.4) * 6 * dir, ay + Math.cos(h - 0.4) * 6 * dir);
       ctx.closePath();
       ctx.fill();
+    }
+
+    // ---- Sector map (scan memory) for NYATA ----
+    if (modeRef.current === "NYATA" && autoStateRef.current === "SCAN" && sectorMapRef.current.length > 0) {
+      for (const sec of sectorMapRef.current) {
+        const d = Math.min(Math.max(sec.dist, 0), MAX_SENSE);
+        const ex = p.x + Math.sin(sec.heading) * d;
+        const ey = p.y - Math.cos(sec.heading) * d;
+        ctx.strokeStyle = "rgba(34, 211, 238, 0.2)";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 4]);
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(ex, ey);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = "rgba(34, 211, 238, 0.25)";
+        ctx.beginPath();
+        ctx.arc(ex, ey, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
 
     // ---- VL53L0X sensor visualization ----
@@ -675,7 +749,13 @@ export default function SimulasiPage() {
     ctx.fillStyle = "rgba(239, 68, 68, 0.15)";
     ctx.fillText(`VL53L0X: ${sensorDist}`, 8, vh - 28);
     ctx.fillStyle = "rgba(255,255,255,0.06)";
-    ctx.fillText(`zoom:${s.toFixed(1)} obst:${obstacleCount}`, 8, vh - 38);
+    const dotCount = scanDotsRef.current.length;
+    ctx.fillText(`zoom:${s.toFixed(1)} dots:${dotCount}`, 8, vh - 38);
+    // Show sector map size when scanning
+    if (autoStateRef.current === "SCAN" && sectorMapRef.current.length > 0) {
+      ctx.fillStyle = "rgba(34, 211, 238, 0.12)";
+      ctx.fillText(`sektor:${sectorMapRef.current.length}`, 8, vh - 48);
+    }
 
     // State machine label
     if (belajarRef.current && !editMode) {
@@ -799,19 +879,30 @@ export default function SimulasiPage() {
 
         switch (autoStateRef.current) {
           case "DRIVE": {
-            const rawCmd = learnDbRef.current.predict(snap) ?? { left: 255, right: 255 };
-            setMotors(rawCmd.left, rawCmd.right);
+            // Proportional speed: slow down as we approach obstacle
+            let speed = 200;
+            if (front >= 0 && front < 100) {
+              speed = Math.round(front * 2.5); // 250 at 100cm, 62 at 25cm
+              speed = Math.max(60, Math.min(200, speed));
+            }
+            const targetL = speed;
+            const targetR = speed;
 
-            // Record applied motor values for auto-rating (including bad predictions)
-            lastSnapRef.current = snap;
-            lastCmdRef.current = { left: leftMotorRef.current, right: rightMotorRef.current };
+            // Smooth motor command (EMA)
+            const s = smoothRef.current;
+            const alpha = 0.35;
+            s.left = Math.round(s.left * (1 - alpha) + targetL * alpha);
+            s.right = Math.round(s.right * (1 - alpha) + targetR * alpha);
+            setMotors(s.left, s.right);
+
             didAutoPredictRef.current = true;
+            lastSnapRef.current = snap;
+            lastCmdRef.current = { left: s.left, right: s.right };
 
-            // Wall too close → override motors, but the bad prediction is already recorded
-            // Auto-rating after tick will give -1 because front is still < 25
             if (front >= 0 && front < 25) {
               setAutoState("SCAN");
               setMotors(0, 0);
+              s.left = 0; s.right = 0;
             }
             break;
           }
@@ -819,14 +910,46 @@ export default function SimulasiPage() {
           case "SCAN": {
             setMotors(0, 0);
             didAutoPredictRef.current = false;
+            smoothRef.current = { left: 0, right: 0 };
             scanTimerRef.current++;
 
-            if (scanTimerRef.current === 1) {
-              if (modeRef.current === "NYATA") {
-                // Real robot: single front sensor only, default to right turn
-                scanDirRef.current = 1;
+            if (modeRef.current === "NYATA") {
+              // NYATA: sweep by rotating and recording distances at each heading
+              if (scanTimerRef.current === 1) {
+                scanDotsRef.current = []; // fresh map setiap scan
+                sectorMapRef.current = [];
+                scanHeadingRef.current = headingRef.current;
+                scanCompleteRef.current = false;
+              }
+              const tickInSweep = scanTimerRef.current;
+              if (tickInSweep % 4 === 0 && !scanCompleteRef.current) {
+                sectorMapRef.current.push({ heading: headingRef.current, dist: front });
+              }
+              // Small rotation step to sweep
+              if (tickInSweep < 24) {
+                setMotors(80, -80);
               } else {
-                // Simulated servo scan: measure 5 angles
+                setMotors(0, 0);
+                if (!scanCompleteRef.current) {
+                  scanCompleteRef.current = true;
+                  // Pick best sector from map
+                  let bestH = headingRef.current;
+                  let bestD = -1;
+                  for (const s of sectorMapRef.current) {
+                    if (s.dist > bestD) { bestD = s.dist; bestH = s.heading; }
+                  }
+                  scanDirRef.current = bestH;
+
+                  if (bestD < 0 || bestD > 40) {
+                    setAutoState("TURN");
+                  } else {
+                    setAutoState("BACKUP");
+                  }
+                }
+              }
+            } else {
+              // LATIHAN: instant ray scan
+              if (scanTimerRef.current === 1) {
                 const angles = [-1, -0.5, 0, 0.5, 1];
                 let bestAngle = 0;
                 let bestDist = -1;
@@ -836,45 +959,67 @@ export default function SimulasiPage() {
                 }
                 scanDirRef.current = bestAngle;
               }
-              const d = front;
-              if (d < 0 || d > 60) {
-                setAutoState("TURN");
-              } else {
-                setAutoState("BACKUP");
+              if (scanTimerRef.current > 6) {
+                const d = front;
+                if (d < 0 || d > 40) {
+                  setAutoState("TURN");
+                } else {
+                  setAutoState("BACKUP");
+                }
               }
             }
             break;
           }
 
           case "TURN": {
-            // Rotate towards clearest direction
-            if (scanDirRef.current > 0) {
-              setMotors(120, -120); // turn right
-            } else {
-              setMotors(-120, 120); // turn left
-            }
             didAutoPredictRef.current = false;
             scanTimerRef.current++;
 
-            // Check if front is now clear
-            const f = modeRef.current === "NYATA" ? getSensorSnapshot().front : castRayAngle(0);
-            if ((f < 0 || f > 60) && scanTimerRef.current > 3) {
-              setAutoState("DRIVE");
+            // Use sector map to decide turn direction
+            let targetH = scanDirRef.current;
+            const currentH = headingRef.current;
+            let diff = targetH - currentH;
+            while (diff > Math.PI) diff -= 2 * Math.PI;
+            while (diff < -Math.PI) diff += 2 * Math.PI;
+
+            const turnSpeed = Math.min(150, Math.max(60, Math.round(Math.abs(diff) * 50)));
+            if (Math.abs(diff) > 0.1) {
+              const sign = diff > 0 ? 1 : -1;
+              const s = smoothRef.current;
+              const targetL = -turnSpeed * sign;
+              const targetR = turnSpeed * sign;
+              const alpha = 0.4;
+              s.left = Math.round(s.left * (1 - alpha) + targetL * alpha);
+              s.right = Math.round(s.right * (1 - alpha) + targetR * alpha);
+              setMotors(s.left, s.right);
+            } else {
+              setMotors(0, 0);
+              smoothRef.current = { left: 0, right: 0 };
             }
-            if (scanTimerRef.current > 40) {
+
+            const f = modeRef.current === "NYATA" ? getSensorSnapshot().front : castRayAngle(0);
+            if ((f < 0 || f > 50) && (scanTimerRef.current > 5 || Math.abs(diff) < 0.15)) {
               setAutoState("DRIVE");
+              smoothRef.current = { left: 0, right: 0 };
+            }
+            if (scanTimerRef.current > 50) {
+              setAutoState("DRIVE");
+              smoothRef.current = { left: 0, right: 0 };
             }
             break;
           }
 
           case "BACKUP": {
-            // Reverse + slight turn
-            setMotors(-120, -80);
+            const s = smoothRef.current;
+            s.left = Math.round(s.left * 0.5 + -120 * 0.5);
+            s.right = Math.round(s.right * 0.5 + -80 * 0.5);
+            setMotors(s.left, s.right);
             didAutoPredictRef.current = false;
             scanTimerRef.current++;
 
-            if (scanTimerRef.current > 20) {
+            if (scanTimerRef.current > 16) {
               setAutoState("SCAN");
+              smoothRef.current = { left: 0, right: 0 };
             }
             break;
           }
@@ -1060,6 +1205,12 @@ export default function SimulasiPage() {
                 className="px-2 py-0.5 rounded-full bg-red-900/40 border border-red-800/50 text-red-400 text-[7px] font-mono active:scale-90"
               >
                 LUPA
+              </button>
+              <button
+                onClick={() => { scanDotsRef.current = []; }}
+                className="px-2 py-0.5 rounded-full bg-yellow-900/40 border border-yellow-800/50 text-yellow-400 text-[7px] font-mono active:scale-90"
+              >
+                HAPUS DOT
               </button>
             </>
           )}
