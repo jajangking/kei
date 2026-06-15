@@ -1,6 +1,9 @@
 "use client";
 
 import { useRef, useEffect, useCallback, useState } from "react";
+import { ObjectDetector, FaceDetector, FilesetResolver, type Detection } from "@mediapipe/tasks-vision";
+import { loadDB, saveDB, registerFace, renameFace, deleteFace, recognize, type FaceRecord } from "../facerecog";
+import VoiceGroq from "../voicegroq";
 
 const GRID_STEP = 50;
 const TRAIL_LEN = 40;
@@ -170,6 +173,17 @@ export default function SimulasiPage() {
   const navLastSectorRef = useRef(-1);
   const navSameSectorCountRef = useRef(0);
 
+  // M4: Groq AI Hybrid
+  const [modul4Active, setModul4Active] = useState(false);
+  const modul4ActiveRef = useRef(false);
+  const aiSuggestionRef = useRef(-1);
+  const aiSuggestionWeightRef = useRef(0);
+  const aiLastCallRef = useRef(0);
+  const aiCallCountRef = useRef(0);
+  const [aiStatus, setAiStatus] = useState("—");
+  const [groqApiKey, setGroqApiKey] = useState("");
+  const groqApiKeyRef = useRef("");
+
   // Occupancy Grid (0=unknown, 1=free, 2=wall)
   const occupancyRef = useRef<Map<string, number>>(new Map());
   const frontierRef = useRef<Set<string>>(new Set());
@@ -200,6 +214,7 @@ export default function SimulasiPage() {
     { time: new Date().toLocaleTimeString("id-ID", { hour12: false }), msg: "Monitor log aktif", type: "info" }
   ]);
   const [showLog, setShowLog] = useState(false);
+  const [showVoice, setShowVoice] = useState(false);
   const [logTick, setLogTick] = useState(0);
   const logEvent = useCallback((msg: string, type: LogEntry["type"] = "info") => {
     const now = new Date();
@@ -397,6 +412,62 @@ export default function SimulasiPage() {
     }
     frontierRef.current = frontier;
   };
+
+  // M4: Build context for Groq AI
+  const buildAiContext = () => {
+    const sd = sectorDataRef.current;
+    const sectors = sd.map((d, i) => `${SECTORS[i].id}:${d > 0 ? (d/10).toFixed(0) : "?"}cm`).join(",");
+    const occ = occupancyRef.current;
+    let wallCount = 0, freeCount = 0;
+    for (const v of occ.values()) { if (v === 2) wallCount++; else if (v === 1) freeCount++; }
+    return `pos=(${posRef.current.x.toFixed(0)},${posRef.current.y.toFixed(0)}) ` +
+      `h=${(headingRef.current * 180 / Math.PI).toFixed(0)}° ` +
+      `phase=${navPhaseRef.current} ` +
+      `sectors=[${sectors}] ` +
+      `grid=${freeCount}free/${wallCount}wall ` +
+      `frontier=${frontierRef.current.size} ` +
+      `stuck=${navSameSectorCountRef.current}`;
+  };
+
+  // M4: Call Groq AI (rate-limited)
+  const callGroqAI = useCallback(async () => {
+    const now = Date.now();
+    if (now - aiLastCallRef.current < 15000) return; // max 1 call per 15s
+    aiLastCallRef.current = now;
+    aiCallCountRef.current++;
+    const ctx = buildAiContext();
+    setAiStatus("🤔");
+    try {
+      const key = groqApiKeyRef.current;
+      if (!key) { setAiStatus("no key"); return; }
+      const res = await fetch("/api/groq/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [{ role: "user", content: ctx }],
+          apiKey: key,
+          systemPrompt: `Kamu navigator robot labirin. Beri saran SEKTOR tujuan (S1-S14) berdasarkan data sensor. Robot ukuran 26cm, hindari koridor sempit. Format jawaban: [SEKTOR:S7] — hanya itu, tanpa teks lain.`,
+          model: "llama-3.3-70b-versatile",
+        }),
+      });
+      const text = await res.text();
+      const m = text.match(/\[SEKTOR:S?(\d+)\]/i);
+      if (m) {
+        const idx = parseInt(m[1]) - 1;
+        if (idx >= 0 && idx < SECTORS.length) {
+          aiSuggestionRef.current = idx;
+          aiSuggestionWeightRef.current = 50;
+          setAiStatus(`AI→${SECTORS[idx].id}`);
+          speakTTS(ttsAiSaran(SECTORS[idx].id));
+          // Decay weight over time
+          setTimeout(() => { aiSuggestionWeightRef.current = Math.max(0, aiSuggestionWeightRef.current - 10); }, 5000);
+          setTimeout(() => { aiSuggestionWeightRef.current = 0; }, 15000);
+        }
+      } else {
+        setAiStatus("?");
+      }
+    } catch { setAiStatus("err"); }
+  }, []);
 
   // Find safe spawn point (not inside obstacles)
   const findSafeSpawn = useCallback(() => {
@@ -679,6 +750,8 @@ export default function SimulasiPage() {
         setNavTarget(`SCAN ${filled}/${SECTORS.length}`);
         l = 0; r = 0;
         if (filled >= SECTORS.length) {
+          // Trigger AI suggestion if M4 active
+          if (modul4ActiveRef.current) callGroqAI();
           let bestIdx = -1;
           let bestDist = -1;
           const gx = Math.round(posRef.current.x / 50);
@@ -710,7 +783,9 @@ export default function SimulasiPage() {
               if (fdeg >= sec.min - 90 && fdeg <= sec.max - 90) frontierBonus += 1;
             }
             frontierBonus = Math.min(frontierBonus * 8, 60);
-            const score = sd[i] + learnBonus + exploreBonus + frontierBonus + clearancePenalty;
+            // AI suggestion bonus (hybrid)
+            const aiBonus = (modul4ActiveRef.current && aiSuggestionRef.current === i) ? aiSuggestionWeightRef.current : 0;
+            const score = sd[i] + learnBonus + exploreBonus + frontierBonus + clearancePenalty + aiBonus;
             if (score > bestDist) { bestDist = score; bestIdx = i; }
           }
           if (bestIdx >= 0 && bestDist >= NAV_THRESH) {
@@ -731,6 +806,7 @@ export default function SimulasiPage() {
             angVelRef.current = 0;
             navPhaseRef.current = "turn";
             logEvent(`M3→${SECTORS[bestIdx].id} ${(bestDist/10).toFixed(0)}cm`, "nav");
+            speakTTS(pick(ttsBelok));
           } else {
             // No good sector — corner deadlock; weighted fallback with frontier
             let fallbackIdx = -1;
@@ -762,7 +838,8 @@ export default function SimulasiPage() {
                 if (fdeg >= sec.min - 90 && fdeg <= sec.max - 90) frontierBonus += 1;
               }
               frontierBonus = Math.min(frontierBonus * 8, 60);
-              const score = raw + learnBonus + exploreBonus + frontierBonus + clearancePenalty;
+              const aiBonus = (modul4ActiveRef.current && aiSuggestionRef.current === i) ? aiSuggestionWeightRef.current : 0;
+              const score = raw + learnBonus + exploreBonus + frontierBonus + clearancePenalty + aiBonus;
               if (score > fallbackDist) { fallbackDist = score; fallbackIdx = i; }
             }
             if (fallbackIdx >= 0 && sd[fallbackIdx] > 0) {
@@ -775,6 +852,7 @@ export default function SimulasiPage() {
               angVelRef.current = 0;
               navPhaseRef.current = "turn";
               logEvent(`M3 CORNER→${SECTORS[fallbackIdx].id} ${(sd[fallbackIdx]/10).toFixed(0)}cm`, "warn");
+              speakTTS(pick(ttsCariLain));
             } else {
               // Buntu total — force TURNAROUND
               navPhaseRef.current = "turnaround";
@@ -782,6 +860,7 @@ export default function SimulasiPage() {
               navTickRef.current = 0;
               navScanResetRef.current = false;
               logEvent("M3 BUNTU — TURNAROUND paksa", "error");
+              speakTTS(pick(ttsBuntu));
             }
           }
         }
@@ -806,7 +885,7 @@ export default function SimulasiPage() {
           for (let i = 0; i < sectorDataRef.current.length; i++) sectorDataRef.current[i] = -1;
           setSectorData([...sectorDataRef.current]);
           logEvent("M3 MAJU", "nav");
-        } else {
+          speakTTS(pick(ttsMaju));
           const speed = 60;
           if (err > 0) { l = speed; r = -speed; }
           else { l = -speed; r = speed; }
@@ -856,6 +935,7 @@ export default function SimulasiPage() {
               navTurnaroundHeadingRef.current = headingDeg;
               navTickRef.current = 0;
               logEvent("M3 CORNER LOOP — TURNAROUND", "error");
+              speakTTS(pick(ttsMacet));
             } else {
               navPhaseRef.current = "reverse";
               navTickRef.current = 0;
@@ -864,6 +944,7 @@ export default function SimulasiPage() {
             velRef.current = { x: 0, y: 0 };
             angVelRef.current = 0;
             logEvent("M3 STUCK mundur", "warn");
+            speakTTS(pick(ttsMundur));
           } else {
             navStuckCountRef.current = 0;
             navSameCornerCountRef.current = 0;
@@ -885,6 +966,7 @@ export default function SimulasiPage() {
             sweepPointsRef.current = [];
             lastSweepAngleRef.current = -1;
             logEvent("M3 STOP", "nav");
+            speakTTS(pick(ttsStop));
           }
         } else {
           const cDist = sd[CENTER_IDX] || 0;
@@ -921,12 +1003,14 @@ export default function SimulasiPage() {
             navTurnaroundHeadingRef.current = headingDeg;
             navTickRef.current = 0;
             logEvent("M3 TURNAROUND 180°", "nav");
+            speakTTS(pick(ttsPutarBalik));
           } else {
             navPhaseRef.current = "scan";
             navScanResetRef.current = false;
             sweepPointsRef.current = [];
             lastSweepAngleRef.current = -1;
             logEvent("M3 REVERSE selesai", "nav");
+            speakTTS(pick(ttsAman));
           }
         } else {
           l = -80; r = -60;
@@ -945,6 +1029,7 @@ export default function SimulasiPage() {
           sweepPointsRef.current = [];
           lastSweepAngleRef.current = -1;
           logEvent("M3 TURNAROUND selesai", "nav");
+          speakTTS(pick(ttsLanjut));
         } else {
           l = 80; r = -80;
         }
@@ -1350,6 +1435,31 @@ export default function SimulasiPage() {
       }
     }
 
+    // ---- Camera detections projected on map ----
+    if (camActive && detectionsRef.current.length > 0) {
+      const cx = cw / 2, cy = ch / 2;
+      for (const d of detectionsRef.current) {
+        const bb = d.boundingBox;
+        const isFace = d.categories[0]?.categoryName === "face";
+        const label = d.categories[0]?.categoryName || "?";
+        // Estimate position: center of camera FOV, projected ~100cm ahead
+        const fovCenter = (bb.originX + bb.width / 2) / 640 - 0.5;
+        const estDist = Math.max(30, 150 - bb.height * 0.3);
+        const angle = h + fovCenter * 0.8;
+        const mx2 = p.x + Math.sin(angle) * estDist;
+        const my2 = p.y - Math.cos(angle) * estDist;
+        const sx = (mx2 - p.x) * s + cx;
+        const sy = (my2 - p.y) * s + cy;
+        ctx.fillStyle = isFace ? "rgba(217, 70, 239, 0.5)" : "rgba(59, 130, 246, 0.4)";
+        ctx.beginPath();
+        ctx.arc(sx, sy, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = isFace ? "#d946ef" : "#60a5fa";
+        ctx.font = "bold 7px monospace";
+        ctx.fillText(isFace ? (recognizedFaceRef.current?.name || "wajah") : label, sx + 4, sy - 4);
+      }
+    }
+
     // ---- Memory: explored cells (faint green) ----
     if (modul3Active && memoryRef.current.size > 0) {
       const cx = cw / 2, cy = ch / 2;
@@ -1474,6 +1584,10 @@ export default function SimulasiPage() {
       ctx.fillText(`NAV:${navTarget} mem:${memoryRef.current.size} ±${bestS},${worstS}`, 8, vh - 68);
       ctx.fillStyle = "rgba(250, 204, 21, 0.15)";
       ctx.fillText(`GRID:${occupancyRef.current.size} frontier:${frontierRef.current.size}`, 8, vh - 78);
+      if (modul4Active) {
+        ctx.fillStyle = "rgba(139, 92, 246, 0.2)";
+        ctx.fillText(`AI:${aiStatus} call#${aiCallCountRef.current}`, 8, vh - 88);
+      }
     }
   }, [obstacleCount, sensorDist, editMode, editTool, modul1Active, modul1Braking, modul1Threshold, modul2Active, sectorData, modul3Active, navTarget]);
 
@@ -1623,6 +1737,227 @@ export default function SimulasiPage() {
   useEffect(() => { modul1ThresholdRef.current = modul1Threshold; }, [modul1Threshold]);
   useEffect(() => { modul1BrakingRef.current = modul1Braking; }, [modul1Braking]);
   useEffect(() => { modul2ActiveRef.current = modul2Active; }, [modul2Active]);
+  useEffect(() => { modul4ActiveRef.current = modul4Active; }, [modul4Active]);
+  useEffect(() => {
+    const saved = localStorage.getItem("kei_groq_key");
+    if (saved) { setGroqApiKey(saved); groqApiKeyRef.current = saved; }
+  }, []);
+  useEffect(() => { groqApiKeyRef.current = groqApiKey; }, [groqApiKey]);
+
+  // M5: Camera + Vision AI
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const overlayRef = useRef<HTMLCanvasElement>(null);
+  const [camActive, setCamActive] = useState(false);
+  const [facingMode, setFacingMode] = useState<"user" | "environment">("environment");
+  const detectorRef = useRef<ObjectDetector | null>(null);
+  const faceDetectorRef = useRef<FaceDetector | null>(null);
+  const [modelReady, setModelReady] = useState(false);
+  const [modelLoading, setModelLoading] = useState(false);
+  const [detectionCount, setDetectionCount] = useState(0);
+  const detectionsRef = useRef<Detection[]>([]);
+  const faceDetectionsRef = useRef<Detection[]>([]);
+  const [recognizedFace, setRecognizedFace] = useState("");
+  const recognizedFaceRef = useRef<{ name: string } | null>(null);
+  const [showCamera, setShowCamera] = useState(false);
+  const detectTimerRef = useRef(0);
+  const trackInfoRef = useRef("");
+  const aiBusyRef = useRef(false);
+  const trackingRef = useRef(false);
+  const [tracking, setTracking] = useState(false);
+  const motorRef = useRef({
+    sendMotor: (l: number, r: number) => { setMotors(l, r); },
+    trackTarget: null as { label: string; lastSeen: number } | null,
+    setTrackTarget: (t: { label: string; lastSeen: number } | null) => { motorRef.current.trackTarget = t; },
+    aiMotor: null as { l: number; r: number } | null,
+  });
+  const [faceLock, setFaceLock] = useState(false);
+  const faceLockRef = useRef(false);
+
+  // Face recognition DB
+  const faceDBRef = useRef<FaceRecord[]>([]);
+  const [faceDBCount, setFaceDBCount] = useState(0);
+
+  // M6: TTS (gTTS)
+  const [ttsActive, setTtsActive] = useState(false);
+  const ttsActiveRef = useRef(false);
+  const ttsCtxRef = useRef<AudioContext | null>(null);
+  const speakTTS = useCallback(async (text: string) => {
+    if (!ttsActiveRef.current || !text) return;
+    // Skip if still speaking
+    if (ttsCtxRef.current) return;
+    try {
+      const res = await fetch(`/api/tts?text=${encodeURIComponent(text)}`);
+      if (!res.ok) return;
+      const buf = await res.arrayBuffer();
+      const ctx = new AudioContext();
+      ttsCtxRef.current = ctx;
+      const audioBuf = await ctx.decodeAudioData(buf);
+      const src = ctx.createBufferSource();
+      src.buffer = audioBuf;
+      src.connect(ctx.destination);
+      src.start();
+      src.onended = () => { if (ttsCtxRef.current === ctx) { ctx.close(); ttsCtxRef.current = null; } };
+    } catch {}
+  }, []);
+  const pick = (arr: string[]) => arr[Math.floor(Math.random() * arr.length)];
+  const ttsBelok = ["Oke kita belok", "Belok dulu ya", "Siap, belok", "Hoki, belok"];
+  const ttsCariLain = ["Cari jalan lain", "Coba lewat sini", "Alternatif aja", "Kita coba yang lain"];
+  const ttsBuntu = ["Waduh buntu, putar balik yuk", "Buntu nih, balik aja", "Gak ada jalan, putar balik", "Dead end, balik"];
+  const ttsMaju = ["Ayo maju", "Gas pol", "Jalan terus", "Lanjut maju", "Maju"];
+  const ttsMacet = ["Kayanya macet, putar aja deh", "Mampet, balik yuk", "Gak gerak, putar", "Stuck nih, balik"];
+  const ttsMundur = ["Mundur dulu", "Mundur", "Mundur pelan", "Mundur aja"];
+  const ttsStop = ["Stop dulu", "Berhenti", "Henti dulu", "Stop", "Ada halangan"];
+  const ttsPutarBalik = ["Putar balik yuk", "Balik arah", "Balik kanan", "Putar"];
+  const ttsAman = ["Udah aman", "Aman, lanjut", "Udah, gas lagi", "Udah ada jalan"];
+  const ttsLanjut = ["Udah, lanjut", "Lanjut", "Gas lagi", "Lanjutin"];
+  const ttsAiSaran = (s: string) => pick([`Menurut AI ${s} aja`, `AI bilang ${s}`, `AI saran ${s}`, `${s} kata AI`]);
+
+  // Camera webcam
+  useEffect(() => {
+    if (!camActive) {
+      streamRef.current?.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        streamRef.current?.getTracks().forEach(t => t.stop());
+        const s = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode, width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: false,
+        });
+        if (cancelled) { s.getTracks().forEach(t => t.stop()); return; }
+        streamRef.current = s;
+        if (videoRef.current) videoRef.current.srcObject = s;
+      } catch { setCamActive(false); }
+    })();
+    return () => { cancelled = true; streamRef.current?.getTracks().forEach(t => t.stop()); streamRef.current = null; };
+  }, [camActive, facingMode]);
+
+  // MediaPipe model loading
+  useEffect(() => {
+    if (!camActive) return;
+    let cancelled = false;
+    setModelLoading(true);
+    (async () => {
+      try {
+        const vision = await FilesetResolver.forVisionTasks("/wasm");
+        const [det, faceDet] = await Promise.all([
+          ObjectDetector.createFromOptions(vision, {
+            baseOptions: { modelAssetPath: "/efficientdet_lite0.tflite" },
+            scoreThreshold: 0.3,
+            maxResults: 5,
+            runningMode: "IMAGE",
+          }),
+          FaceDetector.createFromOptions(vision, {
+            baseOptions: { modelAssetPath: "/blaze_face_short_range.tflite" },
+            runningMode: "IMAGE",
+          }),
+        ]);
+        if (cancelled) return;
+        detectorRef.current = det;
+        faceDetectorRef.current = faceDet;
+        setModelReady(true);
+      } catch (e) {
+        logEvent(`Model vision error: ${e}`, "error");
+      } finally { setModelLoading(false); }
+    })();
+    return () => { cancelled = true; detectorRef.current?.close(); faceDetectorRef.current?.close(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [camActive]);
+
+  // Detection + draw overlay loop
+  const drawOverlay = useCallback(() => {
+    const canvas = overlayRef.current;
+    const video = videoRef.current;
+    if (!canvas || !video || video.videoWidth < 1) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const w = canvas.width = video.videoWidth;
+    const h = canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0, w, h);
+    const all = detectionsRef.current;
+    for (const d of all) {
+      const bb = d.boundingBox;
+      const isFace = d.categories[0]?.categoryName === "face";
+      ctx.strokeStyle = isFace ? "#d946ef" : "#3b82f6";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(bb.originX, bb.originY, bb.width, bb.height);
+      ctx.fillStyle = isFace ? "#d946ef" : "#3b82f6";
+      ctx.font = "bold 10px monospace";
+      const label = isFace ? (recognizedFaceRef.current?.name || "wajah") : `${d.categories[0]?.categoryName || "?"} ${Math.round((d.categories[0]?.score || 0) * 100)}%`;
+      ctx.fillText(label, bb.originX, bb.originY - 4);
+    }
+  }, []);
+
+  // Detection loop
+  useEffect(() => {
+    if (!camActive || !modelReady) return;
+    let running = true;
+    const detect = async () => {
+      if (!running) return;
+      const video = videoRef.current;
+      const det = detectorRef.current;
+      const faceDet = faceDetectorRef.current;
+      if (video && video.videoWidth > 0 && det && faceDet) {
+        try {
+          const [objects, faces] = await Promise.all([
+            det.detect(video),
+            faceDet.detect(video),
+          ]);
+          const all: Detection[] = [...(objects.detections || [])];
+          for (const f of faces.detections || []) {
+            all.push({ ...f, categories: [{ ...f.categories[0], categoryName: "face", score: 1 }] });
+          }
+          detectionsRef.current = all;
+          setDetectionCount(all.length);
+          // Face recognition
+          let faceName = "";
+          for (const f of faces.detections || []) {
+            const kp = f.keypoints?.map(k => [k.x, k.y]).flat() || [];
+            if (kp.length >= 12) {
+              const rec = recognize(kp, faceDBRef.current);
+              if (rec) faceName = rec.name;
+            }
+          }
+          recognizedFaceRef.current = faceName ? { name: faceName } : null;
+          if (faceName !== recognizedFace) setRecognizedFace(faceName);
+          // Face lock tracking
+          if (faceLockRef.current && faces.detections && faces.detections.length > 0) {
+            const f = faces.detections[0];
+            const fcx = (f.boundingBox?.originX || 0) + (f.boundingBox?.width || 320) / 2;
+            const fbx = 320; // frame center
+            const err = (fcx - fbx) / fbx;
+            const base = 100;
+            const steer = Math.round(err * 80);
+            setMotors(base - steer, base + steer);
+            trackInfoRef.current = faceName ? `🔒 ${faceName}` : "🔒 wajah";
+          } else if (!faceLockRef.current && !trackInfoRef.current.startsWith("🤖")) {
+            trackInfoRef.current = "";
+          }
+          drawOverlay();
+        } catch {}
+      }
+      detectTimerRef.current = window.setTimeout(detect, 200);
+    };
+    detect();
+    return () => { running = false; clearTimeout(detectTimerRef.current); };
+  }, [camActive, modelReady, drawOverlay, recognizedFace]);
+
+  // Load face DB on mount
+  useEffect(() => {
+    (async () => {
+      const db = await loadDB();
+      faceDBRef.current = db;
+      setFaceDBCount(db.length);
+    })();
+  }, []);
+
+  useEffect(() => { ttsActiveRef.current = ttsActive; }, [ttsActive]);
+  useEffect(() => { faceLockRef.current = faceLock; }, [faceLock]);
+  useEffect(() => { trackingRef.current = tracking; }, [tracking]);
   useEffect(() => {
     modul3ActiveRef.current = modul3Active;
     if (modul3Active) {
@@ -1786,6 +2121,105 @@ export default function SimulasiPage() {
                 <span className="text-zinc-600 ml-1">{navPhaseRef.current.toUpperCase()}</span>
               </div>
             )}
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-[8px] font-mono text-zinc-500">M4</span>
+                <span className="text-[10px] font-mono text-zinc-300">AI GROQ</span>
+              </div>
+              <button
+                onClick={() => { setModul4Active(p => !p); modul4ActiveRef.current = !modul4Active; }}
+                className={`px-2 py-0.5 rounded-full text-[8px] font-mono font-bold border transition-colors active:scale-90 ${
+                  modul4Active
+                    ? "bg-violet-600 border-violet-500 text-white"
+                    : "bg-zinc-800 border-zinc-700 text-zinc-500"
+                }`}
+              >
+                {modul4Active ? "ON" : "OFF"}
+              </button>
+            </div>
+            {modul4Active && (
+              <div className="pl-4 text-[9px] font-mono space-y-1">
+                <div className="flex items-center gap-1.5">
+                  <input value={groqApiKey} onChange={e => { setGroqApiKey(e.target.value); groqApiKeyRef.current = e.target.value; localStorage.setItem("kei_groq_key", e.target.value); }}
+                    placeholder="Groq API key"
+                    type="password"
+                    className="flex-1 min-w-0 px-2 py-1 rounded bg-zinc-800 text-white text-[8px] font-mono placeholder-zinc-600 focus:outline-none border border-zinc-700" />
+                  {groqApiKey && <div className="size-1.5 rounded-full bg-green-400 shrink-0" />}
+                </div>
+                <div>
+                  <span className="text-violet-400">{aiStatus}</span>
+                  {aiSuggestionRef.current >= 0 && (
+                    <span className="text-zinc-600 ml-1">→{SECTORS[aiSuggestionRef.current].id} +{aiSuggestionWeightRef.current}</span>
+                  )}
+                </div>
+              </div>
+            )}
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-[8px] font-mono text-zinc-500">M5</span>
+                <span className="text-[10px] font-mono text-zinc-300">CAMERA</span>
+              </div>
+              <button
+                onClick={() => setCamActive(p => !p)}
+                className={`px-2 py-0.5 rounded-full text-[8px] font-mono font-bold border transition-colors active:scale-90 ${
+                  camActive
+                    ? "bg-emerald-600 border-emerald-500 text-white"
+                    : "bg-zinc-800 border-zinc-700 text-zinc-500"
+                }`}
+              >
+                {camActive ? "ON" : "OFF"}
+              </button>
+            </div>
+            {camActive && (
+              <div className="pl-4 text-[9px] font-mono space-y-1">
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => setFacingMode(p => p === "user" ? "environment" : "user")}
+                    className="px-1.5 py-0.5 rounded text-[7px] bg-zinc-800 text-zinc-400 border border-zinc-700"
+                  >
+                    {facingMode === "user" ? "SELFIE" : "DEPAN"}
+                  </button>
+                  <button
+                    onClick={() => { setFaceLock(p => !p); faceLockRef.current = !faceLock; }}
+                    className={`px-1.5 py-0.5 rounded text-[7px] border ${
+                      faceLock ? "bg-rose-600 border-rose-500 text-white" : "bg-zinc-800 border-zinc-700 text-zinc-400"
+                    }`}
+                  >
+                    {faceLock ? "☠ IKUT" : "☠ LOCK"}
+                  </button>
+                  <button
+                    onClick={() => setShowCamera(p => !p)}
+                    className={`px-1.5 py-0.5 rounded text-[7px] border ${
+                      showCamera ? "bg-cyan-600 border-cyan-500 text-white" : "bg-zinc-800 border-zinc-700 text-zinc-400"
+                    }`}
+                  >
+                    TAMPIL
+                  </button>
+                </div>
+                <div className="flex items-center gap-2 text-[7px]">
+                  <span className={modelReady ? "text-emerald-400" : "text-zinc-600"}>
+                    {modelLoading ? "memuat model..." : modelReady ? `${detectionCount} objek` : "mati"}
+                  </span>
+                  {recognizedFace && <span className="text-fuchsia-400">{recognizedFace}</span>}
+                </div>
+              </div>
+            )}
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-[8px] font-mono text-zinc-500">M6</span>
+                <span className="text-[10px] font-mono text-zinc-300">SUARA</span>
+              </div>
+              <button
+                onClick={() => { setTtsActive(p => !p); ttsActiveRef.current = !ttsActive; }}
+                className={`px-2 py-0.5 rounded-full text-[8px] font-mono font-bold border transition-colors active:scale-90 ${
+                  ttsActive
+                    ? "bg-amber-600 border-amber-500 text-white"
+                    : "bg-zinc-800 border-zinc-700 text-zinc-500"
+                }`}
+              >
+                {ttsActive ? "ON" : "OFF"}
+              </button>
+            </div>
           </div>
         )}
         <button
@@ -1804,6 +2238,32 @@ export default function SimulasiPage() {
             logTick={logTick}
             setShowLog={setShowLog}
           />
+        )}
+        <button
+          onClick={() => setShowVoice(p => !p)}
+          className={`px-2 py-1 rounded-full text-[10px] font-mono border active:scale-90 ${
+            showVoice
+              ? "bg-emerald-600 border-emerald-500 text-white"
+              : "bg-zinc-800 border-zinc-700 text-zinc-400 hover:text-white"
+          }`}
+        >
+          VOICE
+        </button>
+        {showVoice && (
+          <div className="fixed top-14 right-4 z-50">
+            <VoiceGroq
+              recognizedFaceRef={recognizedFaceRef}
+              detectionsRef={detectionsRef as any}
+              trackInfoRef={trackInfoRef}
+              aiBusyRef={aiBusyRef}
+              headingRef={headingRef}
+              leftMotor={leftMotor}
+              rightMotor={rightMotor}
+              trackingRef={trackingRef}
+              setTracking={setTracking}
+              motorRef={motorRef}
+            />
+          </div>
         )}
         {editMode && (
           <>
@@ -1961,6 +2421,22 @@ export default function SimulasiPage() {
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Camera panel */}
+      {showCamera && camActive && (
+        <div className="fixed bottom-6 right-4 z-40 w-[240px] h-[180px] rounded-xl overflow-hidden border border-white/10 shadow-2xl bg-zinc-900">
+          <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-cover" />
+          <canvas ref={overlayRef} className="absolute inset-0 w-full h-full" />
+          <div className="absolute top-1 left-1 flex gap-1">
+            <span className={`px-1 py-0.5 rounded text-[6px] font-mono ${modelReady ? "bg-emerald-600/80 text-white" : "bg-zinc-800/80 text-zinc-500"}`}>
+              {modelReady ? "AI" : "..."}
+            </span>
+            {recognizedFace && (
+              <span className="px-1 py-0.5 rounded text-[6px] font-mono bg-fuchsia-600/80 text-white">{recognizedFace}</span>
+            )}
+          </div>
         </div>
       )}
 
