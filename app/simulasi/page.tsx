@@ -165,6 +165,8 @@ export default function SimulasiPage() {
   const memoryRef = useRef<Set<string>>(new Set());
   const deadEndRef = useRef<Map<string, number>>(new Map());
   const navRunCountRef = useRef(0);
+  const navSameCornerCountRef = useRef(0);
+  const navLastCornerCellRef = useRef("");
 
   // Monitor Log System
   const MAX_LOG = 100;
@@ -609,6 +611,31 @@ export default function SimulasiPage() {
             angVelRef.current = 0;
             navPhaseRef.current = "turn";
             logEvent(`M3→${SECTORS[bestIdx].id} ${(bestDist/10).toFixed(0)}cm`, "nav");
+          } else {
+            // No good sector — corner deadlock; force least-bad or turnaround
+            let fallbackIdx = -1;
+            let fallbackDist = -1;
+            for (let i = 0; i < sd.length; i++) {
+              if (sd[i] > fallbackDist) { fallbackDist = sd[i]; fallbackIdx = i; }
+            }
+            if (fallbackIdx >= 0 && fallbackDist >= 50) {
+              navTargetSectorRef.current = fallbackIdx;
+              const cx = SECTORS[fallbackIdx].cx;
+              navTargetHeadingRef.current = headingDeg + (cx - 90);
+              navTurnHeadingRef.current = headingDeg;
+              navScanResetRef.current = false;
+              velRef.current = { x: 0, y: 0 };
+              angVelRef.current = 0;
+              navPhaseRef.current = "turn";
+              logEvent(`M3 CORNER→${SECTORS[fallbackIdx].id} ${(fallbackDist/10).toFixed(0)}cm`, "warn");
+            } else {
+              // Buntu total — force TURNAROUND
+              navPhaseRef.current = "turnaround";
+              navTurnaroundHeadingRef.current = headingDeg;
+              navTickRef.current = 0;
+              navScanResetRef.current = false;
+              logEvent("M3 BUNTU — TURNAROUND paksa", "error");
+            }
           }
         }
       }
@@ -621,7 +648,6 @@ export default function SimulasiPage() {
         if (Math.abs(err) <= HEADING_TOL) {
           navPhaseRef.current = "drive";
           navTickRef.current = 0;
-          navTargetSectorRef.current = -1;
           navScanResetRef.current = false;
           navDriveStartPosRef.current = { x: posRef.current.x, y: posRef.current.y };
           navStallTicksRef.current = 0;
@@ -659,6 +685,10 @@ export default function SimulasiPage() {
           const dx = px - navDriveStartPosRef.current.x;
           const dy = py - navDriveStartPosRef.current.y;
           const distTraveled = Math.hypot(dx, dy);
+          // Check position-based corner loop
+          const cellKey = `${Math.round(px/50)},${Math.round(py/50)}`;
+          if (cellKey === navLastCornerCellRef.current) navSameCornerCountRef.current++;
+          else { navSameCornerCountRef.current = 0; navLastCornerCellRef.current = cellKey; }
           if (distTraveled < 10) {
             const secIdx = navTargetSectorRef.current;
             if (secIdx >= 0) {
@@ -667,18 +697,28 @@ export default function SimulasiPage() {
               const gy = Math.round(posRef.current.y / 50);
               deadEndRef.current.set(`${gx},${gy},${secIdx}`, 1);
             }
-            navPhaseRef.current = "reverse";
-            navTickRef.current = 0;
+            navTargetSectorRef.current = -1;
+            if (navSameCornerCountRef.current >= 3) {
+              navPhaseRef.current = "turnaround";
+              navTurnaroundHeadingRef.current = headingDeg;
+              navTickRef.current = 0;
+              logEvent("M3 CORNER LOOP — TURNAROUND", "error");
+            } else {
+              navPhaseRef.current = "reverse";
+              navTickRef.current = 0;
+            }
             navScanResetRef.current = false;
             velRef.current = { x: 0, y: 0 };
             angVelRef.current = 0;
             logEvent("M3 STUCK mundur", "warn");
           } else {
             navStuckCountRef.current = 0;
+            navSameCornerCountRef.current = 0;
             if (navTargetSectorRef.current >= 0) {
               const dist = sd[CENTER_IDX] || 0;
               if (dist > 50) sectorScoreRef.current[navTargetSectorRef.current] = Math.min(5, sectorScoreRef.current[navTargetSectorRef.current] + 1);
             }
+            navTargetSectorRef.current = -1;
             navRunCountRef.current++;
             if (navRunCountRef.current % 5 === 0) {
               try { localStorage.setItem("kei_m3_memory", JSON.stringify({ scores: sectorScoreRef.current, deadEnds: [...deadEndRef.current] })); } catch {}
@@ -698,7 +738,13 @@ export default function SimulasiPage() {
 
       else if (navPhaseRef.current === "reverse") {
         navTickRef.current++;
-        if (navTickRef.current > 30) {
+        const centerDist = sd[CENTER_IDX] || 0;
+        const clearAhead = centerDist > 0 && centerDist > 80;
+        const hdg = headingRef.current;
+        const bx = posRef.current.x + Math.sin(hdg) * (ROBOT_R + 2);
+        const by = posRef.current.y - Math.cos(hdg) * (ROBOT_R + 2);
+        const rearHit = collides(bx, by, 2);
+        if (clearAhead || navTickRef.current > 60 || rearHit) {
           navStuckCountRef.current++;
           if (navStuckCountRef.current >= 2) {
             navPhaseRef.current = "turnaround";
