@@ -689,11 +689,15 @@ export default function SimulasiPage() {
             const sec = SECTORS[i];
             const exploreBonus = deadEndRef.current.has(`${gx},${gy},${i}`) ? -40 : 0;
             const learnBonus = sectorScoreRef.current[i] * 5;
-            // Body clearance: check 3-sector window (i-1,i,i+1)
-            let clearance = sd[i];
-            if (i > 0 && sd[i-1] > 0) clearance = Math.min(clearance, sd[i-1]);
-            if (i < sd.length-1 && sd[i+1] > 0) clearance = Math.min(clearance, sd[i+1]);
-            const clearanceBonus = clearance < 50 ? -40 : clearance < 80 ? -15 : 0;
+            // Body clearance: dynamic sector check based on robot width
+            const bodyHalfSectors = Math.ceil(Math.atan2(ROBOT_R + 5, sd[i]) * 180 / Math.PI / 10);
+            let bodyClearDist = sd[i];
+            for (let off = -bodyHalfSectors; off <= bodyHalfSectors; off++) {
+              const ni = i + off;
+              if (ni < 0 || ni >= SECTORS.length) continue;
+              if (sd[ni] > 0 && sd[ni] < bodyClearDist) bodyClearDist = sd[ni];
+            }
+            const clearancePenalty = bodyClearDist < sd[i] ? -(sd[i] - bodyClearDist) * 2 : 0;
             // Frontier bonus: count frontier cells within this sector's angular range
             let frontierBonus = 0;
             const secRad = (sec.cx - 90) * Math.PI / 180;
@@ -706,7 +710,7 @@ export default function SimulasiPage() {
               if (fdeg >= sec.min - 90 && fdeg <= sec.max - 90) frontierBonus += 1;
             }
             frontierBonus = Math.min(frontierBonus * 8, 60);
-            const score = sd[i] + learnBonus + exploreBonus + frontierBonus + clearanceBonus;
+            const score = sd[i] + learnBonus + exploreBonus + frontierBonus + clearancePenalty;
             if (score > bestDist) { bestDist = score; bestIdx = i; }
           }
           if (bestIdx >= 0 && bestDist >= NAV_THRESH) {
@@ -735,11 +739,17 @@ export default function SimulasiPage() {
               const raw = sd[i] >= 0 ? sd[i] : 0;
               const exploreBonus = deadEndRef.current.has(`${gx},${gy},${i}`) ? -40 : 0;
               const learnBonus = sectorScoreRef.current[i] * 5;
-              // Clearance in fallback
-              let clearance = sd[i] > 0 ? sd[i] : 0;
-              if (i > 0 && sd[i-1] > 0) clearance = Math.min(clearance, sd[i-1]);
-              if (i < sd.length-1 && sd[i+1] > 0) clearance = Math.min(clearance, sd[i+1]);
-              const clearanceBonus = clearance < 50 ? -30 : clearance < 80 ? -10 : 0;
+              // Body clearance in fallback
+              let bodyClearDist = sd[i] > 0 ? sd[i] : 0;
+              if (bodyClearDist > 0) {
+                const halfSec = Math.ceil(Math.atan2(ROBOT_R + 5, sd[i]) * 180 / Math.PI / 10);
+                for (let off = -halfSec; off <= halfSec; off++) {
+                  const ni = i + off;
+                  if (ni < 0 || ni >= SECTORS.length) continue;
+                  if (sd[ni] > 0 && sd[ni] < bodyClearDist) bodyClearDist = sd[ni];
+                }
+              }
+              const clearancePenalty = bodyClearDist > 0 && bodyClearDist < raw ? -(raw - bodyClearDist) : 0;
               let frontierBonus = 0;
               const sec = SECTORS[i];
               const secRad = (sec.cx - 90) * Math.PI / 180;
@@ -814,7 +824,11 @@ export default function SimulasiPage() {
         const ry = py - Math.cos(hdg + Math.PI/2) * ROBOT_R;
         const fx = px + Math.sin(hdg) * (ROBOT_R + 4);
         const fy = py - Math.cos(hdg) * (ROBOT_R + 4);
-        const bodyHit = collides(lx, ly, 2) || collides(rx, ry, 2) || collides(fx, fy, 2);
+        const flx = px + Math.sin(hdg - Math.PI/4) * (ROBOT_R + 2);
+        const fly = py - Math.cos(hdg - Math.PI/4) * (ROBOT_R + 2);
+        const frx = px + Math.sin(hdg + Math.PI/4) * (ROBOT_R + 2);
+        const fry = py - Math.cos(hdg + Math.PI/4) * (ROBOT_R + 2);
+        const bodyHit = collides(lx, ly, 2) || collides(rx, ry, 2) || collides(fx, fy, 2) || collides(flx, fly, 2) || collides(frx, fry, 2);
         const wallAhead = centerDist > 0 && centerDist < 30;
         const speed = Math.abs(velRef.current.x) + Math.abs(velRef.current.y);
         const stalled = speed < 0.3;
