@@ -151,11 +151,15 @@ export default function SimulasiPage() {
   const [sectorData, setSectorData] = useState<number[]>(SECTORS.map(() => -1));
   const [navTarget, setNavTarget] = useState("—");
   const navTargetSectorRef = useRef(-1);
-  const navTargetHeadingRef = useRef(0); // target world heading (°) to face
-  const navTurnHeadingRef = useRef(0);   // heading (°) when turn phase started
-  const navPhaseRef = useRef<"scan"|"turn"|"drive">("scan");
+  const navTargetHeadingRef = useRef(0);
+  const navTurnHeadingRef = useRef(0);
+  const navPhaseRef = useRef<"scan"|"turn"|"drive"|"reverse"|"turnaround">("scan");
   const navTickRef = useRef(0);
   const navScanResetRef = useRef(false);
+  const navDriveStartPosRef = useRef({ x: 0, y: 0 });
+  const navStuckCountRef = useRef(0);
+  const navTurnaroundHeadingRef = useRef(0);
+  const navStallTicksRef = useRef(0);
 
   // Monitor Log System
   const MAX_LOG = 100;
@@ -472,10 +476,10 @@ export default function SimulasiPage() {
           const ang = Math.round(Math.max(20, Math.min(160, cx - (hdgDeg - hdgAtTurn))));
           servoRef.current = ang;
         } else {
-          servoRef.current = Math.round(90 + Math.sin(Date.now() / 1000 * 0.25) * 70);
+          servoRef.current = Math.round(90 + Math.sin(Date.now() / 1000 * 0.35) * 70);
         }
       } else {
-        servoRef.current = Math.round(90 + Math.sin(Date.now() / 1000 * 0.25) * 70);
+        servoRef.current = Math.round(90 + Math.sin(Date.now() / 1000 * 0.35) * 70);
       }
     }
     const servoRad = (servoRef.current - 90) * Math.PI / 180;
@@ -587,6 +591,8 @@ export default function SimulasiPage() {
             navTargetHeadingRef.current = headingDeg + (cx - 90);
             navTurnHeadingRef.current = headingDeg;
             navScanResetRef.current = false;
+            velRef.current = { x: 0, y: 0 };
+            angVelRef.current = 0;
             navPhaseRef.current = "turn";
             logEvent(`M3→${SECTORS[bestIdx].id} ${(bestDist/10).toFixed(0)}cm`, "nav");
           }
@@ -603,6 +609,10 @@ export default function SimulasiPage() {
           navTickRef.current = 0;
           navTargetSectorRef.current = -1;
           navScanResetRef.current = false;
+          navDriveStartPosRef.current = { x: posRef.current.x, y: posRef.current.y };
+          navStallTicksRef.current = 0;
+          velRef.current = { x: 0, y: 0 };
+          angVelRef.current = 0;
           sweepPointsRef.current = [];
           lastSweepAngleRef.current = -1;
           for (let i = 0; i < sectorDataRef.current.length; i++) sectorDataRef.current[i] = -1;
@@ -626,15 +636,69 @@ export default function SimulasiPage() {
         const ry = py - Math.cos(hdg + Math.PI/2) * ROBOT_R;
         const bodyHit = collides(lx, ly, 2) || collides(rx, ry, 2);
         const wallAhead = centerDist > 0 && centerDist < 30;
-        if (bodyHit || wallAhead) {
+        const speed = Math.abs(velRef.current.x) + Math.abs(velRef.current.y);
+        const stalled = speed < 0.3;
+        if (stalled) navStallTicksRef.current++;
+        else navStallTicksRef.current = 0;
+        if (bodyHit || wallAhead || navStallTicksRef.current >= 30) {
+          const dx = px - navDriveStartPosRef.current.x;
+          const dy = py - navDriveStartPosRef.current.y;
+          const distTraveled = Math.hypot(dx, dy);
+          if (distTraveled < 10) {
+            navPhaseRef.current = "reverse";
+            navTickRef.current = 0;
+            navScanResetRef.current = false;
+            velRef.current = { x: 0, y: 0 };
+            angVelRef.current = 0;
+            logEvent("M3 STUCK mundur", "warn");
+          } else {
+            navStuckCountRef.current = 0;
+            navPhaseRef.current = "scan";
+            navScanResetRef.current = false;
+            sweepPointsRef.current = [];
+            lastSweepAngleRef.current = -1;
+            logEvent("M3 STOP", "nav");
+          }
+        } else {
+          l = 120; r = 120;
+        }
+      }
+
+      else if (navPhaseRef.current === "reverse") {
+        navTickRef.current++;
+        if (navTickRef.current > 30) {
+          navStuckCountRef.current++;
+          if (navStuckCountRef.current >= 2) {
+            navPhaseRef.current = "turnaround";
+            navTurnaroundHeadingRef.current = headingDeg;
+            navTickRef.current = 0;
+            logEvent("M3 TURNAROUND 180°", "nav");
+          } else {
+            navPhaseRef.current = "scan";
+            navScanResetRef.current = false;
+            sweepPointsRef.current = [];
+            lastSweepAngleRef.current = -1;
+            logEvent("M3 REVERSE selesai", "nav");
+          }
+        } else {
+          l = -80; r = -60;
+        }
+      }
+
+      else if (navPhaseRef.current === "turnaround") {
+        let turned = headingDeg - navTurnaroundHeadingRef.current;
+        if (turned > 180) turned -= 360;
+        if (turned < -180) turned += 360;
+        setNavTarget(`PUTAR ${Math.abs(turned).toFixed(0)}°`);
+        if (Math.abs(turned) >= 160) {
+          navStuckCountRef.current = 0;
           navPhaseRef.current = "scan";
           navScanResetRef.current = false;
           sweepPointsRef.current = [];
           lastSweepAngleRef.current = -1;
-          const reason = bodyHit ? "body" : "wall";
-          logEvent(`M3 STOP ${reason}`, "warn");
+          logEvent("M3 TURNAROUND selesai", "nav");
         } else {
-          l = 120; r = 120;
+          l = 80; r = -80;
         }
       }
 
