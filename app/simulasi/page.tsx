@@ -534,10 +534,10 @@ export default function SimulasiPage() {
           const ang = Math.round(Math.max(20, Math.min(160, cx - (hdgDeg - hdgAtTurn))));
           servoRef.current = ang;
         } else {
-          servoRef.current = Math.round(90 + Math.sin(Date.now() / 1000 * 0.35) * 70);
+          servoRef.current = Math.round(90 + Math.sin(Date.now() / 1000 * 0.7) * 70);
         }
       } else {
-        servoRef.current = Math.round(90 + Math.sin(Date.now() / 1000 * 0.35) * 70);
+        servoRef.current = Math.round(90 + Math.sin(Date.now() / 1000 * 0.7) * 70);
       }
     }
     const servoRad = (servoRef.current - 90) * Math.PI / 180;
@@ -689,6 +689,11 @@ export default function SimulasiPage() {
             const sec = SECTORS[i];
             const exploreBonus = deadEndRef.current.has(`${gx},${gy},${i}`) ? -40 : 0;
             const learnBonus = sectorScoreRef.current[i] * 5;
+            // Body clearance: check 3-sector window (i-1,i,i+1)
+            let clearance = sd[i];
+            if (i > 0 && sd[i-1] > 0) clearance = Math.min(clearance, sd[i-1]);
+            if (i < sd.length-1 && sd[i+1] > 0) clearance = Math.min(clearance, sd[i+1]);
+            const clearanceBonus = clearance < 50 ? -40 : clearance < 80 ? -15 : 0;
             // Frontier bonus: count frontier cells within this sector's angular range
             let frontierBonus = 0;
             const secRad = (sec.cx - 90) * Math.PI / 180;
@@ -701,7 +706,7 @@ export default function SimulasiPage() {
               if (fdeg >= sec.min - 90 && fdeg <= sec.max - 90) frontierBonus += 1;
             }
             frontierBonus = Math.min(frontierBonus * 8, 60);
-            const score = sd[i] + learnBonus + exploreBonus + frontierBonus;
+            const score = sd[i] + learnBonus + exploreBonus + frontierBonus + clearanceBonus;
             if (score > bestDist) { bestDist = score; bestIdx = i; }
           }
           if (bestIdx >= 0 && bestDist >= NAV_THRESH) {
@@ -730,6 +735,11 @@ export default function SimulasiPage() {
               const raw = sd[i] >= 0 ? sd[i] : 0;
               const exploreBonus = deadEndRef.current.has(`${gx},${gy},${i}`) ? -40 : 0;
               const learnBonus = sectorScoreRef.current[i] * 5;
+              // Clearance in fallback
+              let clearance = sd[i] > 0 ? sd[i] : 0;
+              if (i > 0 && sd[i-1] > 0) clearance = Math.min(clearance, sd[i-1]);
+              if (i < sd.length-1 && sd[i+1] > 0) clearance = Math.min(clearance, sd[i+1]);
+              const clearanceBonus = clearance < 50 ? -30 : clearance < 80 ? -10 : 0;
               let frontierBonus = 0;
               const sec = SECTORS[i];
               const secRad = (sec.cx - 90) * Math.PI / 180;
@@ -742,7 +752,7 @@ export default function SimulasiPage() {
                 if (fdeg >= sec.min - 90 && fdeg <= sec.max - 90) frontierBonus += 1;
               }
               frontierBonus = Math.min(frontierBonus * 8, 60);
-              const score = raw + learnBonus + exploreBonus + frontierBonus;
+              const score = raw + learnBonus + exploreBonus + frontierBonus + clearanceBonus;
               if (score > fallbackDist) { fallbackDist = score; fallbackIdx = i; }
             }
             if (fallbackIdx >= 0 && sd[fallbackIdx] > 0) {
@@ -802,7 +812,9 @@ export default function SimulasiPage() {
         const ly = py - Math.cos(hdg - Math.PI/2) * ROBOT_R;
         const rx = px + Math.sin(hdg + Math.PI/2) * ROBOT_R;
         const ry = py - Math.cos(hdg + Math.PI/2) * ROBOT_R;
-        const bodyHit = collides(lx, ly, 2) || collides(rx, ry, 2);
+        const fx = px + Math.sin(hdg) * (ROBOT_R + 4);
+        const fy = py - Math.cos(hdg) * (ROBOT_R + 4);
+        const bodyHit = collides(lx, ly, 2) || collides(rx, ry, 2) || collides(fx, fy, 2);
         const wallAhead = centerDist > 0 && centerDist < 30;
         const speed = Math.abs(velRef.current.x) + Math.abs(velRef.current.y);
         const stalled = speed < 0.3;
@@ -867,7 +879,16 @@ export default function SimulasiPage() {
           else if (cDist < 50) targetSpeed = 80;
           navSmoothSpeedRef.current = Math.min(targetSpeed, navSmoothSpeedRef.current + 8);
           const s = Math.round(navSmoothSpeedRef.current);
-          l = s; r = s;
+          // Corridor centering: compare S6 (left) vs S8 (right)
+          const leftDist = sd[5] || 0;
+          const rightDist = sd[7] || 0;
+          let steer = 0;
+          if (leftDist > 0 && rightDist > 0) {
+            const diff = rightDist - leftDist;
+            steer = Math.max(-20, Math.min(20, diff * 0.12));
+          }
+          l = s + Math.round(steer);
+          r = s - Math.round(steer);
         }
       }
 
