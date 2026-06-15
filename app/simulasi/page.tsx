@@ -730,8 +730,8 @@ export default function SimulasiPage() {
     // --- Modul 3: Navigasi step-by-step ---
     if (modul3ActiveRef.current) {
       const sd = sectorDataRef.current;
-      const NAV_THRESH = 80;
-      const HEADING_TOL = 15;
+      const NAV_THRESH = 60; // Lebih agresif (was 80)
+      const HEADING_TOL = 8; // Lebih presisi (was 15)
       const CENTER_IDX = 6; // S7 (81-90°) — lurus depan
       const headingDeg = h * 180 / Math.PI;
 
@@ -805,7 +805,10 @@ export default function SimulasiPage() {
             velRef.current = { x: 0, y: 0 };
             angVelRef.current = 0;
             navPhaseRef.current = "turn";
-            logEvent(`M3→${SECTORS[bestIdx].id} ${(bestDist/10).toFixed(0)}cm`, "nav");
+            // Detailed sector selection log
+            const secData = sd[bestIdx];
+            const secScore = sectorScoreRef.current[bestIdx];
+            logEvent(`M3→${SECTORS[bestIdx].id} dist=${(secData/10).toFixed(0)}cm score=${bestDist.toFixed(0)} learn=${secScore}`, "nav");
             speakTTS(pick(ttsBelok));
           } else {
             // No good sector — corner deadlock; weighted fallback with frontier
@@ -886,6 +889,9 @@ export default function SimulasiPage() {
           setSectorData([...sectorDataRef.current]);
           logEvent("M3 MAJU", "nav");
           speakTTS(pick(ttsMaju));
+          l = 0;
+          r = 0;
+        } else {
           const speed = 60;
           if (err > 0) { l = speed; r = -speed; }
           else { l = -speed; r = speed; }
@@ -917,6 +923,9 @@ export default function SimulasiPage() {
           const dx = px - navDriveStartPosRef.current.x;
           const dy = py - navDriveStartPosRef.current.y;
           const distTraveled = Math.hypot(dx, dy);
+          // Log stop reason
+          const stopReason = bodyHit ? "bodyHit" : wallAhead ? "wallAhead" : "stalled";
+          logEvent(`M3 DRIVE STOP: ${stopReason} dist=${distTraveled.toFixed(0)} stall=${navStallTicksRef.current}`, "nav");
           // Check position-based corner loop
           const cellKey = `${Math.round(px/50)},${Math.round(py/50)}`;
           if (cellKey === navLastCornerCellRef.current) navSameCornerCountRef.current++;
@@ -970,10 +979,11 @@ export default function SimulasiPage() {
           }
         } else {
           const cDist = sd[CENTER_IDX] || 0;
-          let targetSpeed = 120;
-          if (cDist > 100) targetSpeed = 150;
-          else if (cDist < 50) targetSpeed = 80;
-          navSmoothSpeedRef.current = Math.min(targetSpeed, navSmoothSpeedRef.current + 8);
+          let targetSpeed = 140; // Lebih cepat (was 120)
+          if (cDist > 120) targetSpeed = 180; // Lebih agresif (was 150)
+          else if (cDist < 60) targetSpeed = 90; // Lebih smooth slowdown (was 50→80)
+          const accel = navSmoothSpeedRef.current < targetSpeed ? 12 : 6; // Faster accel, slower decel
+          navSmoothSpeedRef.current = Math.min(targetSpeed, navSmoothSpeedRef.current + accel);
           const s = Math.round(navSmoothSpeedRef.current);
           // Corridor centering: compare S6 (left) vs S8 (right)
           const leftDist = sd[5] || 0;
@@ -981,7 +991,15 @@ export default function SimulasiPage() {
           let steer = 0;
           if (leftDist > 0 && rightDist > 0) {
             const diff = rightDist - leftDist;
-            steer = Math.max(-20, Math.min(20, diff * 0.12));
+            steer = Math.max(-30, Math.min(30, diff * 0.18));
+          }
+          // Side wall emergency avoidance (ROBOT_R = 13cm)
+          const MIN_SIDE_CLEAR = ROBOT_R + 8; // 21cm minimum clearance
+          if (leftDist > 0 && leftDist < MIN_SIDE_CLEAR) {
+            steer += 40; // steer right strongly
+          }
+          if (rightDist > 0 && rightDist < MIN_SIDE_CLEAR) {
+            steer -= 40; // steer left strongly
           }
           l = s + Math.round(steer);
           r = s - Math.round(steer);
