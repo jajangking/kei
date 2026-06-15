@@ -762,7 +762,7 @@ export default function SimulasiPage() {
                 if (fdeg >= sec.min - 90 && fdeg <= sec.max - 90) frontierBonus += 1;
               }
               frontierBonus = Math.min(frontierBonus * 8, 60);
-              const score = raw + learnBonus + exploreBonus + frontierBonus + clearanceBonus;
+              const score = raw + learnBonus + exploreBonus + frontierBonus + clearancePenalty;
               if (score > fallbackDist) { fallbackDist = score; fallbackIdx = i; }
             }
             if (fallbackIdx >= 0 && sd[fallbackIdx] > 0) {
