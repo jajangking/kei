@@ -167,6 +167,31 @@ export default function SimulasiPage() {
   const navRunCountRef = useRef(0);
   const navSameCornerCountRef = useRef(0);
   const navLastCornerCellRef = useRef("");
+  const navLastSectorRef = useRef(-1);
+  const navSameSectorCountRef = useRef(0);
+
+  // Occupancy Grid (0=unknown, 1=free, 2=wall)
+  const occupancyRef = useRef<Map<string, number>>(new Map());
+  const frontierRef = useRef<Set<string>>(new Set());
+  const gridCellKey = (x: number, y: number) => `${Math.round(x/GRID_STEP)},${Math.round(y/GRID_STEP)}`;
+  const setGrid = (x: number, y: number, v: number) => occupancyRef.current.set(gridCellKey(x, y), v);
+  const getGrid = (x: number, y: number) => occupancyRef.current.get(gridCellKey(x, y)) || 0;
+
+  // Populate occupancy grid from known obstacles
+  const syncGridFromObstacles = () => {
+    const occ = occupancyRef.current;
+    for (const o of obstaclesRef.current) {
+      for (let gy = Math.floor(o.y/GRID_STEP); gy <= Math.ceil((o.y+o.h)/GRID_STEP); gy++) {
+        for (let gx = Math.floor(o.x/GRID_STEP); gx <= Math.ceil((o.x+o.w)/GRID_STEP); gx++) {
+          const gcx = gx * GRID_STEP + GRID_STEP/2;
+          const gcy = gy * GRID_STEP + GRID_STEP/2;
+          if (gcx >= o.x && gcx <= o.x+o.w && gcy >= o.y && gcy <= o.y+o.h) {
+            occ.set(`${gx},${gy}`, 2);
+          }
+        }
+      }
+    }
+  };
 
   // Monitor Log System
   const MAX_LOG = 100;
@@ -346,6 +371,32 @@ export default function SimulasiPage() {
   };
 
   const castLaser = () => castRayAngle(0);
+
+  // Frontier: free cells adjacent to unknown (excluding unreachable)
+  const computeFrontier = () => {
+    const occ = occupancyRef.current;
+    const frontier = new Set<string>();
+    const dirs = [[-1,-1],[0,-1],[1,-1],[-1,0],[1,0],[-1,1],[0,1],[1,1]];
+    for (const [key, val] of occ) {
+      if (val !== 1) continue;
+      const [gx, gy] = key.split(",").map(Number);
+      for (const [dx, dy] of dirs) {
+        const nk = `${gx+dx},${gy+dy}`;
+        if (!occ.has(nk)) {
+          const nwx = (gx+dx) * GRID_STEP + GRID_STEP/2;
+          const nwy = (gy+dy) * GRID_STEP + GRID_STEP/2;
+          // Only add if reachable (not inside any obstacle)
+          let blocked = false;
+          for (const o of obstaclesRef.current) {
+            if (nwx >= o.x && nwx <= o.x+o.w && nwy >= o.y && nwy <= o.y+o.h) { blocked = true; break; }
+          }
+          if (!blocked) frontier.add(nk);
+          break;
+        }
+      }
+    }
+    frontierRef.current = frontier;
+  };
 
   // Find safe spawn point (not inside obstacles)
   const findSafeSpawn = useCallback(() => {
@@ -533,6 +584,44 @@ export default function SimulasiPage() {
       if (servoHistoryRef.current.length > 100) servoHistoryRef.current.shift();
     }
 
+    // Occupancy grid: mark free cells along ray + wall at hit
+    if (modeRef.current === "LATIHAN" && modul2ActiveRef.current && d > 0) {
+      const p = posRef.current;
+      const sr = (servoRef.current - 90) * Math.PI / 180;
+      const rayAngle = headingRef.current + sr;
+      const rx = Math.sin(rayAngle);
+      const ry = -Math.cos(rayAngle);
+      const dist = d;
+      const step = GRID_STEP;
+      const steps = Math.floor(dist / step);
+      for (let i = 0; i < steps; i++) {
+        const sx = p.x + rx * step * i;
+        const sy = p.y + ry * step * i;
+        if (getGrid(sx, sy) === 0) setGrid(sx, sy, 1);
+      }
+      const hitX = p.x + rx * dist;
+      const hitY = p.y + ry * dist;
+      if (getGrid(hitX, hitY) === 0) setGrid(hitX, hitY, 2);
+    }
+    // Also mark robot's current cell as free
+    {
+      const rp = posRef.current;
+      if (getGrid(rp.x, rp.y) === 0) setGrid(rp.x, rp.y, 1);
+    }
+    // Mark cells behind obstacles as wall (from sector data)
+    if (modul2ActiveRef.current) {
+      for (let i = 0; i < SECTORS.length; i++) {
+        const sd = sectorDataRef.current[i];
+        if (sd <= 0 || sd >= MAX_SENSE) continue;
+        const aRad = (SECTORS[i].cx - 90) * Math.PI / 180;
+        const rp = posRef.current;
+        const rh = headingRef.current;
+        const hx = rp.x + Math.sin(rh + aRad) * sd;
+        const hy = rp.y - Math.cos(rh + aRad) * sd;
+        if (getGrid(hx, hy) === 0) setGrid(hx, hy, 2);
+      }
+    }
+
     const d_now = distanceRef.current;
 
     let l = leftMotorRef.current;
@@ -575,6 +664,9 @@ export default function SimulasiPage() {
       const CENTER_IDX = 6; // S7 (81-90°) — lurus depan
       const headingDeg = h * 180 / Math.PI;
 
+      // Compute frontier from occupancy grid each tick
+      computeFrontier();
+
       if (navPhaseRef.current === "scan") {
         if (!navScanResetRef.current) {
           navScanResetRef.current = true;
@@ -595,13 +687,32 @@ export default function SimulasiPage() {
           for (let i = 0; i < sd.length; i++) {
             if (sd[i] < NAV_THRESH) continue;
             const sec = SECTORS[i];
-            // Weighted score: distance + exploration + learning
             const exploreBonus = deadEndRef.current.has(`${gx},${gy},${i}`) ? -40 : 0;
             const learnBonus = sectorScoreRef.current[i] * 5;
-            const score = sd[i] + learnBonus + exploreBonus;
+            // Frontier bonus: count frontier cells within this sector's angular range
+            let frontierBonus = 0;
+            const secRad = (sec.cx - 90) * Math.PI / 180;
+            for (const fk of frontierRef.current) {
+              const [fgx, fgy] = fk.split(",").map(Number);
+              const fwx = fgx * GRID_STEP;
+              const fwy = fgy * GRID_STEP;
+              const fa = Math.atan2(fwx - posRef.current.x, -(fwy - posRef.current.y));
+              const fdeg = ((fa * 180 / Math.PI) - headingDeg + 540) % 360 - 180;
+              if (fdeg >= sec.min - 90 && fdeg <= sec.max - 90) frontierBonus += 1;
+            }
+            frontierBonus = Math.min(frontierBonus * 8, 60);
+            const score = sd[i] + learnBonus + exploreBonus + frontierBonus;
             if (score > bestDist) { bestDist = score; bestIdx = i; }
           }
           if (bestIdx >= 0 && bestDist >= NAV_THRESH) {
+            // Same-sector stuck detection
+            if (bestIdx === navLastSectorRef.current) navSameSectorCountRef.current++;
+            else { navSameSectorCountRef.current = 0; navLastSectorRef.current = bestIdx; }
+            if (navSameSectorCountRef.current >= 3) {
+              navSameSectorCountRef.current = 0;
+              bestIdx = (bestIdx + 7) % SECTORS.length; // Force opposite-ish direction
+              logEvent("M3 SECTOR SAMA — paksa ganti arah", "warn");
+            }
             navTargetSectorRef.current = bestIdx;
             const cx = SECTORS[bestIdx].cx;
             navTargetHeadingRef.current = headingDeg + (cx - 90);
@@ -612,13 +723,29 @@ export default function SimulasiPage() {
             navPhaseRef.current = "turn";
             logEvent(`M3→${SECTORS[bestIdx].id} ${(bestDist/10).toFixed(0)}cm`, "nav");
           } else {
-            // No good sector — corner deadlock; force least-bad or turnaround
+            // No good sector — corner deadlock; weighted fallback with frontier
             let fallbackIdx = -1;
             let fallbackDist = -1;
             for (let i = 0; i < sd.length; i++) {
-              if (sd[i] > fallbackDist) { fallbackDist = sd[i]; fallbackIdx = i; }
+              const raw = sd[i] >= 0 ? sd[i] : 0;
+              const exploreBonus = deadEndRef.current.has(`${gx},${gy},${i}`) ? -40 : 0;
+              const learnBonus = sectorScoreRef.current[i] * 5;
+              let frontierBonus = 0;
+              const sec = SECTORS[i];
+              const secRad = (sec.cx - 90) * Math.PI / 180;
+              for (const fk of frontierRef.current) {
+                const [fgx, fgy] = fk.split(",").map(Number);
+                const fwx = fgx * GRID_STEP;
+                const fwy = fgy * GRID_STEP;
+                const fa = Math.atan2(fwx - posRef.current.x, -(fwy - posRef.current.y));
+                const fdeg = ((fa * 180 / Math.PI) - headingDeg + 540) % 360 - 180;
+                if (fdeg >= sec.min - 90 && fdeg <= sec.max - 90) frontierBonus += 1;
+              }
+              frontierBonus = Math.min(frontierBonus * 8, 60);
+              const score = raw + learnBonus + exploreBonus + frontierBonus;
+              if (score > fallbackDist) { fallbackDist = score; fallbackIdx = i; }
             }
-            if (fallbackIdx >= 0 && fallbackDist >= 50) {
+            if (fallbackIdx >= 0 && sd[fallbackIdx] > 0) {
               navTargetSectorRef.current = fallbackIdx;
               const cx = SECTORS[fallbackIdx].cx;
               navTargetHeadingRef.current = headingDeg + (cx - 90);
@@ -627,7 +754,7 @@ export default function SimulasiPage() {
               velRef.current = { x: 0, y: 0 };
               angVelRef.current = 0;
               navPhaseRef.current = "turn";
-              logEvent(`M3 CORNER→${SECTORS[fallbackIdx].id} ${(fallbackDist/10).toFixed(0)}cm`, "warn");
+              logEvent(`M3 CORNER→${SECTORS[fallbackIdx].id} ${(sd[fallbackIdx]/10).toFixed(0)}cm`, "warn");
             } else {
               // Buntu total — force TURNAROUND
               navPhaseRef.current = "turnaround";
@@ -723,6 +850,10 @@ export default function SimulasiPage() {
             if (navRunCountRef.current % 5 === 0) {
               try { localStorage.setItem("kei_m3_memory", JSON.stringify({ scores: sectorScoreRef.current, deadEnds: [...deadEndRef.current] })); } catch {}
             }
+            // Save occupancy grid every 10 runs
+            if (navRunCountRef.current % 10 === 0) {
+              try { localStorage.setItem("kei_occupancy", JSON.stringify([...occupancyRef.current])); } catch {}
+            }
             navPhaseRef.current = "scan";
             navScanResetRef.current = false;
             sweepPointsRef.current = [];
@@ -730,7 +861,11 @@ export default function SimulasiPage() {
             logEvent("M3 STOP", "nav");
           }
         } else {
-          navSmoothSpeedRef.current = Math.min(120, navSmoothSpeedRef.current + 8);
+          const cDist = sd[CENTER_IDX] || 0;
+          let targetSpeed = 120;
+          if (cDist > 100) targetSpeed = 150;
+          else if (cDist < 50) targetSpeed = 80;
+          navSmoothSpeedRef.current = Math.min(targetSpeed, navSmoothSpeedRef.current + 8);
           const s = Math.round(navSmoothSpeedRef.current);
           l = s; r = s;
         }
@@ -1148,6 +1283,38 @@ export default function SimulasiPage() {
       ctx.fillText(`${(distVal / 10).toFixed(1)}cm`, ex + 5, ey - 5);
     }
 
+    // ---- Occupancy Grid (faint) ----
+    if (modul3Active && !editMode) {
+      const cx = cw / 2, cy = ch / 2;
+      const occ = occupancyRef.current;
+      // Draw wall cells as red dots, free as green
+      for (const [key, val] of occ) {
+        const [gx, gy] = key.split(",").map(Number);
+        const mx = (gx * GRID_STEP - p.x) * s + cx;
+        const my = (gy * GRID_STEP - p.y) * s + cy;
+        if (mx < -50 || mx > cw + 50 || my < -50 || my > ch + 50) continue;
+        if (val === 2) {
+          ctx.fillStyle = "rgba(239, 68, 68, 0.12)";
+          ctx.fillRect(mx - 2, my - 2, 4, 4);
+        }
+      }
+      // Draw frontier cells as yellow diamonds
+      ctx.fillStyle = "rgba(250, 204, 21, 0.25)";
+      for (const fk of frontierRef.current) {
+        const [gx, gy] = fk.split(",").map(Number);
+        const mx = (gx * GRID_STEP - p.x) * s + cx;
+        const my = (gy * GRID_STEP - p.y) * s + cy;
+        if (mx < -50 || mx > cw + 50 || my < -50 || my > ch + 50) continue;
+        ctx.beginPath();
+        ctx.moveTo(mx, my - 3);
+        ctx.lineTo(mx + 3, my);
+        ctx.lineTo(mx, my + 3);
+        ctx.lineTo(mx - 3, my);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+
     // ---- Memory: explored cells (faint green) ----
     if (modul3Active && memoryRef.current.size > 0) {
       const cx = cw / 2, cy = ch / 2;
@@ -1270,6 +1437,8 @@ export default function SimulasiPage() {
       ctx.fillStyle = "rgba(251, 191, 36, 0.25)";
       ctx.font = "bold 8px monospace";
       ctx.fillText(`NAV:${navTarget} mem:${memoryRef.current.size} ±${bestS},${worstS}`, 8, vh - 68);
+      ctx.fillStyle = "rgba(250, 204, 21, 0.15)";
+      ctx.fillText(`GRID:${occupancyRef.current.size} frontier:${frontierRef.current.size}`, 8, vh - 78);
     }
   }, [obstacleCount, sensorDist, editMode, editTool, modul1Active, modul1Braking, modul1Threshold, modul2Active, sectorData, modul3Active, navTarget]);
 
@@ -1390,6 +1559,8 @@ export default function SimulasiPage() {
   useEffect(() => {
     obstaclesRef.current = PRESETS.LABIRIN.map(o => ({ ...o }));
     setObstacleCount(obstaclesRef.current.length);
+    occupancyRef.current = new Map();
+    syncGridFromObstacles();
     const safePos = findSafeSpawn();
     posRef.current = safePos;
     headingRef.current = 0;
@@ -1436,6 +1607,17 @@ export default function SimulasiPage() {
           if (data.scores) sectorScoreRef.current = data.scores;
           if (data.deadEnds) deadEndRef.current = new Map(data.deadEnds);
           logEvent(`M3 memori dimuat (${data.deadEnds?.length ?? 0} jejak)`, "info");
+        }
+      } catch {}
+      // Load occupancy grid
+      try {
+        const occSaved = localStorage.getItem("kei_occupancy");
+        if (occSaved) {
+          const data = JSON.parse(occSaved);
+          if (Array.isArray(data)) {
+            occupancyRef.current = new Map(data);
+            logEvent(`OccGrid dimuat (${data.length} sel)`, "info");
+          }
         }
       } catch {}
     }
@@ -1645,6 +1827,9 @@ export default function SimulasiPage() {
                       setObstacleCount(obstaclesRef.current.length);
                       setShowPresets(false);
                       setModul1Braking(false);
+                      // Reset occupancy grid + pre-populate from obstacles
+                      occupancyRef.current = new Map();
+                      syncGridFromObstacles();
                       const safePos = findSafeSpawn();
                       posRef.current = safePos;
                       headingRef.current = 0;
