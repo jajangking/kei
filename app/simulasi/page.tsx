@@ -160,6 +160,11 @@ export default function SimulasiPage() {
   const navStuckCountRef = useRef(0);
   const navTurnaroundHeadingRef = useRef(0);
   const navStallTicksRef = useRef(0);
+  const navSmoothSpeedRef = useRef(0);
+  const sectorScoreRef = useRef<number[]>(SECTORS.map(() => 0));
+  const memoryRef = useRef<Set<string>>(new Set());
+  const deadEndRef = useRef<Map<string, number>>(new Map());
+  const navRunCountRef = useRef(0);
 
   // Monitor Log System
   const MAX_LOG = 100;
@@ -582,8 +587,17 @@ export default function SimulasiPage() {
         if (filled >= SECTORS.length) {
           let bestIdx = -1;
           let bestDist = -1;
+          const gx = Math.round(posRef.current.x / 50);
+          const gy = Math.round(posRef.current.y / 50);
+          memoryRef.current.add(`${gx},${gy}`);
           for (let i = 0; i < sd.length; i++) {
-            if (sd[i] > bestDist) { bestDist = sd[i]; bestIdx = i; }
+            if (sd[i] < NAV_THRESH) continue;
+            const sec = SECTORS[i];
+            // Weighted score: distance + exploration + learning
+            const exploreBonus = deadEndRef.current.has(`${gx},${gy},${i}`) ? -40 : 0;
+            const learnBonus = sectorScoreRef.current[i] * 5;
+            const score = sd[i] + learnBonus + exploreBonus;
+            if (score > bestDist) { bestDist = score; bestIdx = i; }
           }
           if (bestIdx >= 0 && bestDist >= NAV_THRESH) {
             navTargetSectorRef.current = bestIdx;
@@ -611,6 +625,7 @@ export default function SimulasiPage() {
           navScanResetRef.current = false;
           navDriveStartPosRef.current = { x: posRef.current.x, y: posRef.current.y };
           navStallTicksRef.current = 0;
+          navSmoothSpeedRef.current = 0;
           velRef.current = { x: 0, y: 0 };
           angVelRef.current = 0;
           sweepPointsRef.current = [];
@@ -638,13 +653,20 @@ export default function SimulasiPage() {
         const wallAhead = centerDist > 0 && centerDist < 30;
         const speed = Math.abs(velRef.current.x) + Math.abs(velRef.current.y);
         const stalled = speed < 0.3;
-        if (stalled) navStallTicksRef.current++;
+        if (stalled) { navStallTicksRef.current++; navSmoothSpeedRef.current = Math.max(0, navSmoothSpeedRef.current - 4); }
         else navStallTicksRef.current = 0;
         if (bodyHit || wallAhead || navStallTicksRef.current >= 30) {
           const dx = px - navDriveStartPosRef.current.x;
           const dy = py - navDriveStartPosRef.current.y;
           const distTraveled = Math.hypot(dx, dy);
           if (distTraveled < 10) {
+            const secIdx = navTargetSectorRef.current;
+            if (secIdx >= 0) {
+              sectorScoreRef.current[secIdx] = Math.max(-3, sectorScoreRef.current[secIdx] - 1);
+              const gx = Math.round(posRef.current.x / 50);
+              const gy = Math.round(posRef.current.y / 50);
+              deadEndRef.current.set(`${gx},${gy},${secIdx}`, 1);
+            }
             navPhaseRef.current = "reverse";
             navTickRef.current = 0;
             navScanResetRef.current = false;
@@ -653,6 +675,14 @@ export default function SimulasiPage() {
             logEvent("M3 STUCK mundur", "warn");
           } else {
             navStuckCountRef.current = 0;
+            if (navTargetSectorRef.current >= 0) {
+              const dist = sd[CENTER_IDX] || 0;
+              if (dist > 50) sectorScoreRef.current[navTargetSectorRef.current] = Math.min(5, sectorScoreRef.current[navTargetSectorRef.current] + 1);
+            }
+            navRunCountRef.current++;
+            if (navRunCountRef.current % 5 === 0) {
+              try { localStorage.setItem("kei_m3_memory", JSON.stringify({ scores: sectorScoreRef.current, deadEnds: [...deadEndRef.current] })); } catch {}
+            }
             navPhaseRef.current = "scan";
             navScanResetRef.current = false;
             sweepPointsRef.current = [];
@@ -660,7 +690,9 @@ export default function SimulasiPage() {
             logEvent("M3 STOP", "nav");
           }
         } else {
-          l = 120; r = 120;
+          navSmoothSpeedRef.current = Math.min(120, navSmoothSpeedRef.current + 8);
+          const s = Math.round(navSmoothSpeedRef.current);
+          l = s; r = s;
         }
       }
 
@@ -1070,6 +1102,21 @@ export default function SimulasiPage() {
       ctx.fillText(`${(distVal / 10).toFixed(1)}cm`, ex + 5, ey - 5);
     }
 
+    // ---- Memory: explored cells (faint green) ----
+    if (modul3Active && memoryRef.current.size > 0) {
+      const cx = cw / 2, cy = ch / 2;
+      for (const key of memoryRef.current) {
+        const [gx, gy] = key.split(",").map(Number);
+        const mx = (gx * 50 - p.x) * s + cx;
+        const my = (gy * 50 - p.y) * s + cy;
+        if (mx < -100 || mx > cw + 100 || my < -100 || my > ch + 100) continue;
+        ctx.fillStyle = "rgba(34, 197, 94, 0.05)";
+        ctx.beginPath();
+        ctx.arc(mx, my, 5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
     // ---- Modul 1: Collision Ring ----
     if (modul1Braking) {
       ctx.strokeStyle = "rgba(255, 0, 0, 0.5)";
@@ -1172,9 +1219,11 @@ export default function SimulasiPage() {
       ctx.fillText(modul1Braking ? `! HENTI ! <${(modul1Threshold / 10).toFixed(0)}cm` : `M1 <${(modul1Threshold / 10).toFixed(0)}cm`, 8, vh - 58);
     }
     if (modul3Active) {
+      const bestS = Math.max(...sectorScoreRef.current);
+      const worstS = Math.min(...sectorScoreRef.current);
       ctx.fillStyle = "rgba(251, 191, 36, 0.25)";
       ctx.font = "bold 8px monospace";
-      ctx.fillText(`NAV:${navTarget}`, 8, vh - 68);
+      ctx.fillText(`NAV:${navTarget} mem:${memoryRef.current.size} ±${bestS},${worstS}`, 8, vh - 68);
     }
   }, [obstacleCount, sensorDist, editMode, editTool, modul1Active, modul1Braking, modul1Threshold, modul2Active, sectorData, modul3Active, navTarget]);
 
@@ -1329,8 +1378,20 @@ export default function SimulasiPage() {
       navScanResetRef.current = false;
       navTargetSectorRef.current = -1;
       navTickRef.current = 0;
+      navStuckCountRef.current = 0;
+      navSmoothSpeedRef.current = 0;
       sweepPointsRef.current = [];
       lastSweepAngleRef.current = -1;
+      // Load memory from localStorage
+      try {
+        const saved = localStorage.getItem("kei_m3_memory");
+        if (saved) {
+          const data = JSON.parse(saved);
+          if (data.scores) sectorScoreRef.current = data.scores;
+          if (data.deadEnds) deadEndRef.current = new Map(data.deadEnds);
+          logEvent(`M3 memori dimuat (${data.deadEnds?.length ?? 0} jejak)`, "info");
+        }
+      } catch {}
     }
   }, [modul3Active]);
 
