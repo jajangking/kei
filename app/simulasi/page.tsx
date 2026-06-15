@@ -13,7 +13,22 @@ const ROBOT_H = 16;
 const ROBOT_R = 13;
 const WHEEL_BASE = 14;
 
-type Obstacle = { x: number; y: number; w: number; h: number; seen?: boolean };
+const SECTORS = [
+  { id: "S1",  min: 20,  max: 30,  cx: 25 },
+  { id: "S2",  min: 31,  max: 40,  cx: 35 },
+  { id: "S3",  min: 41,  max: 50,  cx: 45 },
+  { id: "S4",  min: 51,  max: 60,  cx: 55 },
+  { id: "S5",  min: 61,  max: 70,  cx: 65 },
+  { id: "S6",  min: 71,  max: 80,  cx: 75 },
+  { id: "S7",  min: 81,  max: 90,  cx: 85 },
+  { id: "S8",  min: 91,  max: 100, cx: 95 },
+  { id: "S9",  min: 101, max: 110, cx: 105 },
+  { id: "S10", min: 111, max: 120, cx: 115 },
+  { id: "S11", min: 121, max: 130, cx: 125 },
+  { id: "S12", min: 131, max: 140, cx: 135 },
+  { id: "S13", min: 141, max: 150, cx: 145 },
+  { id: "S14", min: 151, max: 160, cx: 155 },
+];
 
 const PRESETS: Record<string, Obstacle[]> = {
   DINDING: [
@@ -22,25 +37,33 @@ const PRESETS: Record<string, Obstacle[]> = {
     { x: 150, y: 100, w: 50, h: 150 },
   ],
   LABIRIN: [
-    // Outer Border
-    { x: -300, y: -50, w: 50, h: 650 }, // Left
-    { x: 250, y: -50, w: 50, h: 650 }, // Right
-    { x: -300, y: 600, w: 600, h: 50 }, // Top
-    { x: -300, y: -50, w: 250, h: 50 }, // Bottom Left
-    { x: 50, y: -50, w: 250, h: 50 },   // Bottom Right (Entry at 0,0)
+    // Outer Border (800x700 arena)
+    { x: -400, y: 0, w: 30, h: 700 },      // Left wall
+    { x: 370, y: 0, w: 30, h: 700 },       // Right wall
+    { x: -400, y: 0, w: 800, h: 30 },      // Bottom wall
+    { x: -400, y: 670, w: 800, h: 30 },    // Top wall
 
-    // Inner Walls - complex path
-    { x: -150, y: 50, w: 300, h: 50 },
-    { x: -150, y: 100, w: 50, h: 100 },
-    { x: 50, y: 150, w: 100, h: 50 },
-    { x: 50, y: 200, w: 50, h: 100 },
-    { x: -250, y: 250, w: 200, h: 50 },
-    { x: -50, y: 250, w: 50, h: 150 },
-    { x: 50, y: 350, w: 200, h: 50 },
-    { x: -200, y: 400, w: 50, h: 100 },
-    { x: -100, y: 450, w: 250, h: 50 },
-    { x: 100, y: 500, w: 50, h: 100 },
-    { x: -250, y: 520, w: 250, h: 30 },
+    // Vertical corridors (width ~80-100 for robot passage)
+    { x: -250, y: 100, w: 30, h: 200 },    // Left column
+    { x: -100, y: 200, w: 30, h: 250 },    // Center-left column
+    { x: 50, y: 100, w: 30, h: 200 },      // Center column
+    { x: 200, y: 200, w: 30, h: 250 },     // Right column
+
+    // Horizontal corridors
+    { x: -300, y: 150, w: 200, h: 30 },    // Upper-left horizontal
+    { x: -50, y: 150, w: 200, h: 30 },     // Upper-right horizontal
+    { x: -350, y: 300, w: 250, h: 30 },    // Mid-left horizontal
+    { x: 80, y: 350, w: 200, h: 30 },      // Mid-right horizontal
+    { x: -250, y: 500, w: 200, h: 30 },    // Lower-left horizontal
+    { x: 100, y: 550, w: 150, h: 30 },     // Lower-right horizontal
+
+    // Dead-end chambers
+    { x: -320, y: 400, w: 30, h: 150 },    // Left chamber wall
+    { x: 280, y: 100, w: 30, h: 150 },     // Right chamber wall
+
+    // Central obstacles (target areas)
+    { x: -50, y: 400, w: 60, h: 60 },      // Central obstacle 1
+    { x: 100, y: 480, w: 50, h: 50 },      // Central obstacle 2
   ],
   RINTANGAN: [
     { x: 100, y: 80, w: 60, h: 60 },
@@ -82,7 +105,7 @@ type EditTool = "place" | "delete";
 
 export default function SimulasiPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const posRef = useRef({ x: 0, y: 0 });
+  const posRef = useRef({ x: 0, y: 350 });
   const headingRef = useRef(0);
   const scaleRef = useRef(1);
 
@@ -98,6 +121,8 @@ export default function SimulasiPage() {
   const [editTool, setEditTool] = useState<EditTool>("place");
   const [showPresets, setShowPresets] = useState(false);
   const scanDotsRef = useRef<Array<{ x: number; y: number }>>([]);
+  const sweepPointsRef = useRef<Array<{ x: number; y: number }>>([]);
+  const lastSweepAngleRef = useRef(-1);
   const obstaclesRef = useRef<Obstacle[]>([]);
   const drawStartRef = useRef<{ x: number; y: number } | null>(null);
   const drawEndRef = useRef<{ x: number; y: number } | null>(null);
@@ -111,6 +136,42 @@ export default function SimulasiPage() {
   const [buzzerActive, setBuzzerActive] = useState(false);
   const [leds, setLeds] = useState([0, 0, 0, 0]); // P1, P2, M1, M2
   const lastBuzzerRef = useRef(0);
+  const [modul1Active, setModul1Active] = useState(true);
+  const modul1ActiveRef = useRef(true);
+  const [modul1Braking, setModul1Braking] = useState(false);
+  const [modul1Threshold, setModul1Threshold] = useState(30); // 3cm default
+  const modul1ThresholdRef = useRef(30);
+  const modul1BrakingRef = useRef(false);
+  const [modul2Active, setModul2Active] = useState(false);
+  const modul2ActiveRef = useRef(false);
+  const [modul3Active, setModul3Active] = useState(false);
+  const modul3ActiveRef = useRef(false);
+  const [modulesOpen, setModulesOpen] = useState(false);
+  const sectorDataRef = useRef<number[]>(SECTORS.map(() => -1));
+  const [sectorData, setSectorData] = useState<number[]>(SECTORS.map(() => -1));
+  const [navTarget, setNavTarget] = useState("—");
+  const navTargetSectorRef = useRef(-1);
+  const navTargetHeadingRef = useRef(0); // target world heading (°) to face
+  const navTurnHeadingRef = useRef(0);   // heading (°) when turn phase started
+  const navPhaseRef = useRef<"scan"|"turn"|"drive">("scan");
+  const navTickRef = useRef(0);
+  const navScanResetRef = useRef(false);
+
+  // Monitor Log System
+  const MAX_LOG = 100;
+  type LogEntry = { time: string; msg: string; type: "info" | "warn" | "error" | "nav" | "sensor" | "motor" };
+  const logEntriesRef = useRef<LogEntry[]>([
+    { time: new Date().toLocaleTimeString("id-ID", { hour12: false }), msg: "Monitor log aktif", type: "info" }
+  ]);
+  const [showLog, setShowLog] = useState(false);
+  const [logTick, setLogTick] = useState(0);
+  const logEvent = useCallback((msg: string, type: LogEntry["type"] = "info") => {
+    const now = new Date();
+    const time = now.toLocaleTimeString("id-ID", { hour12: false });
+    logEntriesRef.current.push({ time, msg, type });
+    if (logEntriesRef.current.length > MAX_LOG) logEntriesRef.current = logEntriesRef.current.slice(-MAX_LOG);
+    setLogTick(t => t + 1);
+  }, []);
 
   // Physical State for smoother movement
   const velRef = useRef({ x: 0, y: 0 });
@@ -131,17 +192,19 @@ export default function SimulasiPage() {
     localStorage.setItem("kei_esp_ip", ip);
   }, []);
   const telemetryRef = useRef<any>(null);
-  const [telemetryTick, setTelemetryTick] = useState(0); // trigger UI re-render
+  const [telemetryTick, setTelemetryTick] = useState(0);
   const [servoAngle, setServoAngle] = useState(90);
   const servoRef = useRef(90);
   const sendServo = useCallback((deg: number) => {
+    const prev = servoRef.current;
     const a = Math.round(Math.max(0, Math.min(180, deg)));
     setServoAngle(a);
     servoRef.current = a;
+    if (a !== prev) logEvent(`Servo ${prev}° → ${a}°`, "sensor");
     if (modeRef.current === "NYATA" && wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ servo: a }));
     }
-  }, []);
+  }, [logEvent]);
 
   // Servo sweep history
   type ServoRead = { angle: number; dist: number };
@@ -164,15 +227,23 @@ export default function SimulasiPage() {
     return { x: mx, y: my };
   }, []);
 
+  const motorLogThrottleRef = useRef(0);
   const setMotors = useCallback((l: number, r: number) => {
+    const prevL = leftMotorRef.current;
+    const prevR = rightMotorRef.current;
     leftMotorRef.current = l;
     rightMotorRef.current = r;
     setLeftMotor(l);
     setRightMotor(r);
+    const now = Date.now();
+    if ((l !== prevL || r !== prevR) && now - motorLogThrottleRef.current > 500) {
+      motorLogThrottleRef.current = now;
+      logEvent(`Motor L=${l} R=${r}`, "motor");
+    }
     if (modeRef.current === "NYATA" && wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ leftMotor: l, rightMotor: r }));
     }
-  }, []);
+  }, [logEvent]);
 
   const handleJoyMove = useCallback((clientX: number, clientY: number) => {
     const el = joystickRef.current;
@@ -185,23 +256,34 @@ export default function SimulasiPage() {
     let dy = clientY - cy;
     const dist = Math.hypot(dx, dy);
     if (dist > maxR) { dx = (dx / dist) * maxR; dy = (dy / dist) * maxR; }
-    
-    let nx = dx / maxR;
-    let ny = -dy / maxR;
-    
-    // Deadzone (titik 0) 10% agar lebih stabil saat inisiasi
-    if (Math.hypot(nx, ny) < 0.1) {
-      nx = 0;
-      ny = 0;
-      setJoyPos({ x: 0, y: 0 });
-    } else {
+
+    const nxRaw = dx / maxR;
+    const nyRaw = -dy / maxR;
+
+    // Per-axis deadzone 12% with smooth ramp
+    const DEADZONE = 0.12;
+    const applyDeadzone = (v: number) => {
+      const abs = Math.abs(v);
+      if (abs < DEADZONE) return 0;
+      return (abs - DEADZONE) / (1 - DEADZONE) * (v > 0 ? 1 : -1);
+    };
+    const nx = applyDeadzone(nxRaw);
+    const ny = applyDeadzone(nyRaw);
+
+    const anyInput = Math.abs(nx) > 0.01 || Math.abs(ny) > 0.01;
+    if (anyInput) {
       setJoyPos({ x: dx, y: dy });
+    } else {
+      setJoyPos({ x: 0, y: 0 });
     }
 
-    let l = (ny + nx) * 255;
-    let r = (ny - nx) * 255;
-    l = Math.max(-255, Math.min(255, Math.round(l)));
-    r = Math.max(-255, Math.min(255, Math.round(r)));
+    // Differential drive with anti-clamp scaling
+    let rawL = (ny + nx) * 255;
+    let rawR = (ny - nx) * 255;
+    const maxAbs = Math.max(Math.abs(rawL), Math.abs(rawR), 255);
+    const scale = maxAbs > 255 ? 255 / maxAbs : 1;
+    const l = Math.round(rawL * scale);
+    const r = Math.round(rawR * scale);
     setMotors(l, r);
   }, [setMotors]);
 
@@ -254,14 +336,45 @@ export default function SimulasiPage() {
 
   const castLaser = () => castRayAngle(0);
 
+  // Find safe spawn point (not inside obstacles)
+  const findSafeSpawn = useCallback(() => {
+    const candidates = [
+      { x: 0, y: 350 },    // Center of new labyrinth
+      { x: -150, y: 250 }, // Left corridor
+      { x: 150, y: 450 },  // Right corridor
+      { x: -200, y: 450 }, // Upper left area
+      { x: 200, y: 150 },  // Upper right area
+      { x: 0, y: 100 },    // Lower center
+      { x: 0, y: 600 },    // Top center
+    ];
+    
+    for (const pos of candidates) {
+      if (!collides(pos.x, pos.y)) {
+        return pos;
+      }
+    }
+    
+    // Fallback: search grid
+    for (let y = 50; y < 650; y += 50) {
+      for (let x = -350; x < 350; x += 50) {
+        if (!collides(x, y)) {
+          return { x, y };
+        }
+      }
+    }
+    
+    return { x: 0, y: 350 }; // Ultimate fallback - center
+  }, []);
+
   // WebSocket connection to ESP32
   const connectESP = useCallback((ip: string) => {
     if (!ip) return;
     wsRef.current?.close();
+    logEvent(`Hubung ESP32 ${ip}...`, "info");
     const ws = new WebSocket(`ws://${ip}:81/`);
-    ws.onopen = () => setEspConnected(true);
-    ws.onclose = () => setEspConnected(false);
-    ws.onerror = () => setEspConnected(false);
+    ws.onopen = () => { setEspConnected(true); logEvent("ESP32 tersambung!", "info"); };
+    ws.onclose = () => { setEspConnected(false); logEvent("ESP32 putus", "warn"); };
+    ws.onerror = () => { setEspConnected(false); logEvent("ESP32 error", "error"); };
     ws.onmessage = (e: MessageEvent) => {
       try {
         telemetryRef.current = JSON.parse(e.data as string);
@@ -269,7 +382,7 @@ export default function SimulasiPage() {
       } catch {}
     };
     wsRef.current = ws;
-  }, []);
+  }, [logEvent]);
 
   const disconnectESP = useCallback(() => {
     wsRef.current?.close();
@@ -345,25 +458,77 @@ export default function SimulasiPage() {
       return;
     }
 
-    // LATIHAN: record animated servo sweep into history
-    const sweepAngle = 90 + Math.sin(Date.now() / 1000 * 0.6) * 70;
-    const servoRad = (sweepAngle - 90) * Math.PI / 180;
-    const d = castRayAngle(servoRad, false); // Sensor follows servo
+    // LATIHAN: cast laser at current servo angle
+    // Modul 2: auto-sweep servo when active (unless M3 overrides)
+    if (modul2ActiveRef.current) {
+      if (modul3ActiveRef.current) {
+        const phase = navPhaseRef.current;
+        if (phase === "drive") {
+          servoRef.current = 90;
+        } else if (phase === "turn" && navTargetSectorRef.current >= 0) {
+          const cx = SECTORS[navTargetSectorRef.current].cx;
+          const hdgDeg = h * 180 / Math.PI;
+          const hdgAtTurn = navTurnHeadingRef.current;
+          const ang = Math.round(Math.max(20, Math.min(160, cx - (hdgDeg - hdgAtTurn))));
+          servoRef.current = ang;
+        } else {
+          servoRef.current = Math.round(90 + Math.sin(Date.now() / 1000 * 0.25) * 70);
+        }
+      } else {
+        servoRef.current = Math.round(90 + Math.sin(Date.now() / 1000 * 0.25) * 70);
+      }
+    }
+    const servoRad = (servoRef.current - 90) * Math.PI / 180;
+    const d = castRayAngle(servoRad, true); // Enable mapping (markSeen = true)
 
     distanceRef.current = d;
     setSensorDist(d > 0 ? `${(d / 10).toFixed(0)}cm` : "---");
 
+    // Capture sector data during sweep
+    if (modul2ActiveRef.current) {
+      const s = servoRef.current;
+      for (let i = 0; i < SECTORS.length; i++) {
+        const sec = SECTORS[i];
+        if (s >= sec.min && s <= sec.max) {
+          const dist = d > 0 ? d : MAX_SENSE;
+          sectorDataRef.current[i] = dist;
+          setSectorData([...sectorDataRef.current]);
+          if (d > 0) logEvent(`${sec.id} ${s}° → ${(d/10).toFixed(0)}cm`, "sensor");
+          break;
+        }
+      }
+    }
+
+    // Collect sweep point cloud data
+    if (modul2ActiveRef.current && d > 0) {
+      const angleDiff = Math.abs(servoRef.current - lastSweepAngleRef.current);
+      if (lastSweepAngleRef.current < 0 || angleDiff >= 3) {
+        lastSweepAngleRef.current = servoRef.current;
+        const p = posRef.current;
+        const h = headingRef.current;
+        const sr = (servoRef.current - 90) * Math.PI / 180;
+        const sx = p.x + Math.sin(h + sr) * d;
+        const sy = p.y - Math.cos(h + sr) * d;
+        sweepPointsRef.current.push({ x: sx, y: sy });
+        if (sweepPointsRef.current.length > 2000) {
+          sweepPointsRef.current = sweepPointsRef.current.slice(-1500);
+        }
+      }
+    }
+
     // Update sweep history for visualization
     if (d > 0) {
-      servoHistoryRef.current.push({ angle: sweepAngle, dist: d });
+      servoHistoryRef.current.push({ angle: servoRef.current, dist: d });
       if (servoHistoryRef.current.length > 100) servoHistoryRef.current.shift();
     }
 
-    const l = leftMotorRef.current;
-    const r = rightMotorRef.current;
+    const d_now = distanceRef.current;
+
+    let l = leftMotorRef.current;
+    let r = rightMotorRef.current;
 
     // Virtual Buzzer Logic (Matching real robot: beep if <= 5cm in CURRENT sensor direction)
-    if (d > 0 && d <= 50) {
+    if (d_now > 0 && d_now <= 50) {
       const now = Date.now();
       if (now - lastBuzzerRef.current > 200) {
         setBuzzerActive(p => !p);
@@ -372,7 +537,113 @@ export default function SimulasiPage() {
     } else {
       setBuzzerActive(false);
     }
-    
+
+    // Modul 1: Collision Detection - Auto stop before wall
+    const movingForward = l > 30 && r > 30;
+    const m3Driving = modul3ActiveRef.current && navPhaseRef.current === "drive";
+    if (modul1ActiveRef.current && !m3Driving && d_now > 0 && d_now <= modul1ThresholdRef.current && movingForward) {
+      l = 0;
+      r = 0;
+      leftMotorRef.current = 0;
+      rightMotorRef.current = 0;
+      setLeftMotor(0);
+      setRightMotor(0);
+      setModul1Braking(true);
+      modul1BrakingRef.current = true;
+      logEvent(`M1 BRAKING! jarak=${(d_now/10).toFixed(0)}cm`, "warn");
+    } else {
+      setModul1Braking(false);
+      modul1BrakingRef.current = false;
+    }
+
+    // --- Modul 3: Navigasi step-by-step ---
+    if (modul3ActiveRef.current) {
+      const sd = sectorDataRef.current;
+      const NAV_THRESH = 80;
+      const HEADING_TOL = 15;
+      const CENTER_IDX = 6; // S7 (81-90°) — lurus depan
+      const headingDeg = h * 180 / Math.PI;
+
+      if (navPhaseRef.current === "scan") {
+        if (!navScanResetRef.current) {
+          navScanResetRef.current = true;
+          for (let i = 0; i < sectorDataRef.current.length; i++) sectorDataRef.current[i] = -1;
+          setSectorData([...sectorDataRef.current]);
+          sweepPointsRef.current = [];
+          lastSweepAngleRef.current = -1;
+        }
+        const filled = sd.filter(v => v > 0).length;
+        setNavTarget(`SCAN ${filled}/${SECTORS.length}`);
+        l = 0; r = 0;
+        if (filled >= SECTORS.length) {
+          let bestIdx = -1;
+          let bestDist = -1;
+          for (let i = 0; i < sd.length; i++) {
+            if (sd[i] > bestDist) { bestDist = sd[i]; bestIdx = i; }
+          }
+          if (bestIdx >= 0 && bestDist >= NAV_THRESH) {
+            navTargetSectorRef.current = bestIdx;
+            const cx = SECTORS[bestIdx].cx;
+            navTargetHeadingRef.current = headingDeg + (cx - 90);
+            navTurnHeadingRef.current = headingDeg;
+            navScanResetRef.current = false;
+            navPhaseRef.current = "turn";
+            logEvent(`M3→${SECTORS[bestIdx].id} ${(bestDist/10).toFixed(0)}cm`, "nav");
+          }
+        }
+      }
+
+      else if (navPhaseRef.current === "turn") {
+        let err = navTargetHeadingRef.current - headingDeg;
+        if (err > 180) err -= 360;
+        if (err < -180) err += 360;
+        setNavTarget(`→ ${err.toFixed(0)}°`);
+        if (Math.abs(err) <= HEADING_TOL) {
+          navPhaseRef.current = "drive";
+          navTickRef.current = 0;
+          navTargetSectorRef.current = -1;
+          navScanResetRef.current = false;
+          sweepPointsRef.current = [];
+          lastSweepAngleRef.current = -1;
+          for (let i = 0; i < sectorDataRef.current.length; i++) sectorDataRef.current[i] = -1;
+          setSectorData([...sectorDataRef.current]);
+          logEvent("M3 MAJU", "nav");
+        } else {
+          const speed = 60;
+          if (err > 0) { l = speed; r = -speed; }
+          else { l = -speed; r = speed; }
+        }
+      }
+
+      else if (navPhaseRef.current === "drive") {
+        const centerDist = sd[CENTER_IDX] || 0;
+        const hdg = headingRef.current;
+        const px = posRef.current.x;
+        const py = posRef.current.y;
+        const lx = px + Math.sin(hdg - Math.PI/2) * ROBOT_R;
+        const ly = py - Math.cos(hdg - Math.PI/2) * ROBOT_R;
+        const rx = px + Math.sin(hdg + Math.PI/2) * ROBOT_R;
+        const ry = py - Math.cos(hdg + Math.PI/2) * ROBOT_R;
+        const bodyHit = collides(lx, ly, 2) || collides(rx, ry, 2);
+        const wallAhead = centerDist > 0 && centerDist < 30;
+        if (bodyHit || wallAhead) {
+          navPhaseRef.current = "scan";
+          navScanResetRef.current = false;
+          sweepPointsRef.current = [];
+          lastSweepAngleRef.current = -1;
+          const reason = bodyHit ? "body" : "wall";
+          logEvent(`M3 STOP ${reason}`, "warn");
+        } else {
+          l = 120; r = 120;
+        }
+      }
+
+      leftMotorRef.current = l;
+      rightMotorRef.current = r;
+      setLeftMotor(l);
+      setRightMotor(r);
+    }
+
     // Physical simulation
     const vl_target = Math.max(-1, Math.min(1, l / 255));
     const vr_target = Math.max(-1, Math.min(1, r / 255));
@@ -473,6 +744,15 @@ export default function SimulasiPage() {
       ctx.stroke();
     }
 
+    // ---- Sweep point cloud ----
+    const swpts = sweepPointsRef.current;
+    if (swpts.length > 0 && modul2Active) {
+      for (const pt of swpts) {
+        ctx.fillStyle = "rgba(34, 211, 238, 0.08)";
+        ctx.fillRect(pt.x - 1, pt.y - 1, 2, 2);
+      }
+    }
+
     // ---- Scan dots (sensor hit points) ----
     const dots = scanDotsRef.current;
     for (let i = 0; i < dots.length; i++) {
@@ -509,6 +789,10 @@ export default function SimulasiPage() {
         // Subtle glow on seen obstacles
         ctx.fillStyle = "rgba(250, 204, 21, 0.04)";
         ctx.fillRect(o.x - 2, o.y - 2, o.w + 4, o.h + 4);
+        // Mapping label
+        ctx.fillStyle = "rgba(250, 204, 21, 0.7)";
+        ctx.font = "bold 10px monospace";
+        ctx.fillText("MAPPING", o.x + 3, o.y + 13);
       }
     }
 
@@ -631,82 +915,106 @@ export default function SimulasiPage() {
         ctx.font = "bold 9px monospace";
         ctx.fillText("menunggu ESP...", p.x + 10, p.y - 10);
       }
-    } else {
-      // ---- Servo sweep history (LATIHAN) ----
-      if (!editMode) {
-        // Animated servo: sweep back and forth
-        const sweepT = Date.now() / 1000;
-        const sweepAngle = 90 + Math.sin(sweepT * 0.6) * 70; // 20°–160°
-        const servoRad = (sweepAngle - 90) * Math.PI / 180;
-        const distAtServo = castRayAngle(servoRad, false);
+    }
 
-        // Draw servo sweep cone (ghost arcs at past positions)
-        for (const past of servoHistoryRef.current.slice(-8)) {
-          const pa = (past.angle - 90) * Math.PI / 180;
-          if (past.dist > 0) {
-            const plen = Math.min(past.dist, MAX_SENSE);
-            const pex = p.x + Math.sin(h + pa) * plen;
-            const pey = p.y - Math.cos(h + pa) * plen;
-            ctx.fillStyle = "rgba(34, 211, 238, 0.04)";
-            ctx.beginPath();
-            ctx.arc(pex, pey, 1.5, 0, Math.PI * 2);
-            ctx.fill();
-          }
-        }
-
-        // Draw current servo ray
-        if (distAtServo > 0) {
-          const rayLen = Math.min(distAtServo, MAX_SENSE);
-          const ex = p.x + Math.sin(h + servoRad) * rayLen;
-          const ey = p.y - Math.cos(h + servoRad) * rayLen;
-          ctx.strokeStyle = "rgba(34, 211, 238, 0.4)";
-          ctx.lineWidth = 1.5;
+    // ---- Modul 2: Servo sweep visualization ----
+    if (modul2Active && !editMode) {
+      const sweepRad = (servoRef.current - 90) * Math.PI / 180;
+      // Ghost dots from history
+      for (const past of servoHistoryRef.current.slice(-12)) {
+        const pa = (past.angle - 90) * Math.PI / 180;
+        if (past.dist > 0) {
+          const plen = Math.min(past.dist, MAX_SENSE);
+          const pex = p.x + Math.sin(h + pa) * plen;
+          const pey = p.y - Math.cos(h + pa) * plen;
+          ctx.fillStyle = "rgba(34, 211, 238, 0.04)";
           ctx.beginPath();
-          ctx.moveTo(p.x, p.y);
-          ctx.lineTo(ex, ey);
-          ctx.stroke();
-          ctx.fillStyle = "rgba(34, 211, 238, 0.5)";
-          ctx.beginPath();
-          ctx.arc(ex, ey, 2.5, 0, Math.PI * 2);
+          ctx.arc(pex, pey, 1.5, 0, Math.PI * 2);
           ctx.fill();
         }
       }
-
-      // ---- VL53L0X laser ray (sweeping with servo) ----
-      const sweepT = Date.now() / 1000;
-      const sweepAngle = 90 + Math.sin(sweepT * 0.6) * 70;
-      const servoRad = (sweepAngle - 90) * Math.PI / 180;
-      const distVal = distanceRef.current;
-      
-      if (distVal > 0) {
-        const rayAngle = h + servoRad;
-        const rayLen = Math.min(distVal, MAX_SENSE);
-        const ex = p.x + Math.sin(rayAngle) * rayLen;
-        const ey = p.y - Math.cos(rayAngle) * rayLen;
-        
-        ctx.fillStyle = "rgba(239, 68, 68, 0.03)";
-        ctx.beginPath();
-        ctx.moveTo(p.x, p.y);
-        ctx.arc(p.x, p.y, Math.min(rayLen, 100), rayAngle - LIDAR_FOV / 2 - Math.PI / 2, rayAngle + LIDAR_FOV / 2 - Math.PI / 2);
-        ctx.closePath();
-        ctx.fill();
-        
-        ctx.strokeStyle = "rgba(239, 68, 68, 0.7)";
-        ctx.lineWidth = 1.5;
+      // Current servo ray
+      const dNow = distanceRef.current;
+      if (dNow > 0) {
+        const rayLen = Math.min(dNow, MAX_SENSE);
+        const ex = p.x + Math.sin(h + sweepRad) * rayLen;
+        const ey = p.y - Math.cos(h + sweepRad) * rayLen;
+        ctx.strokeStyle = "rgba(34, 211, 238, 0.3)";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 5]);
         ctx.beginPath();
         ctx.moveTo(p.x, p.y);
         ctx.lineTo(ex, ey);
         ctx.stroke();
-        
-        ctx.fillStyle = "rgba(239, 68, 68, 0.9)";
+        ctx.setLineDash([]);
+        ctx.fillStyle = "rgba(34, 211, 238, 0.4)";
         ctx.beginPath();
-        ctx.arc(ex, ey, 2.5, 0, Math.PI * 2);
+        ctx.arc(ex, ey, 2, 0, Math.PI * 2);
         ctx.fill();
-        
-        ctx.fillStyle = "rgba(239, 68, 68, 0.7)";
-        ctx.font = "bold 9px monospace";
-        ctx.fillText(`${(distVal / 10).toFixed(1)}cm`, ex + 5, ey - 5);
       }
+      // Sector markers
+      if (modul2Active) {
+        for (let i = 0; i < SECTORS.length; i++) {
+          const dVal = sectorDataRef.current[i];
+          if (dVal <= 0) continue;
+          const aRad = (SECTORS[i].cx - 90) * Math.PI / 180;
+          const lx = p.x + Math.sin(h + aRad) * Math.min(dVal, MAX_SENSE);
+          const ly = p.y - Math.cos(h + aRad) * Math.min(dVal, MAX_SENSE);
+          const hue = 140 - (dVal / MAX_SENSE) * 140;
+          ctx.fillStyle = `hsla(${hue}, 80%, 55%, 0.2)`;
+          ctx.beginPath();
+          ctx.arc(lx, ly, 4, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = `hsla(${hue}, 80%, 65%, 0.9)`;
+          ctx.font = "bold 7px monospace";
+          ctx.fillText(`${SECTORS[i].id}${(dVal/10).toFixed(0)}`, lx + 4, ly - 4);
+        }
+      }
+    }
+
+    // ---- VL53L0X laser ray ----
+    const servoRad = (servoRef.current - 90) * Math.PI / 180;
+    const distVal = distanceRef.current;
+
+    if (distVal > 0) {
+      const rayAngle = h + servoRad;
+      const rayLen = Math.min(distVal, MAX_SENSE);
+      const ex = p.x + Math.sin(rayAngle) * rayLen;
+      const ey = p.y - Math.cos(rayAngle) * rayLen;
+
+      ctx.fillStyle = "rgba(239, 68, 68, 0.03)";
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      ctx.arc(p.x, p.y, Math.min(rayLen, 100), rayAngle - LIDAR_FOV / 2 - Math.PI / 2, rayAngle + LIDAR_FOV / 2 - Math.PI / 2);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.strokeStyle = "rgba(239, 68, 68, 0.7)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(ex, ey);
+      ctx.stroke();
+
+      ctx.fillStyle = "rgba(239, 68, 68, 0.9)";
+      ctx.beginPath();
+      ctx.arc(ex, ey, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = "rgba(239, 68, 68, 0.7)";
+      ctx.font = "bold 9px monospace";
+      ctx.fillText(`${(distVal / 10).toFixed(1)}cm`, ex + 5, ey - 5);
+    }
+
+    // ---- Modul 1: Collision Ring ----
+    if (modul1Braking) {
+      ctx.strokeStyle = "rgba(255, 0, 0, 0.5)";
+      ctx.lineWidth = 2.5;
+      ctx.setLineDash([4, 6]);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, ROBOT_R + 10, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
 
     // ---- Robot (Physical-Sync Representation) ----
@@ -788,8 +1096,23 @@ export default function SimulasiPage() {
     ctx.fillText(`VL53L0X: ${sensorDist}`, 8, vh - 28);
     ctx.fillStyle = "rgba(255,255,255,0.06)";
     const dotCount = scanDotsRef.current.length;
-    ctx.fillText(`zoom:${s.toFixed(1)} dots:${dotCount}`, 8, vh - 38);
-  }, [obstacleCount, sensorDist, editMode, editTool]);
+    ctx.fillText(`zoom:${s.toFixed(1)} servo:${servoRef.current}° dots:${dotCount}`, 8, vh - 38);
+    if (modul2Active) {
+      ctx.fillStyle = "rgba(34, 211, 238, 0.2)";
+      ctx.font = "8px monospace";
+      ctx.fillText(`SWEEP:${sweepPointsRef.current.length}pt`, 8, vh - 48);
+    }
+    if (modul1Active) {
+      ctx.fillStyle = modul1Braking ? "rgba(255, 0, 0, 0.4)" : "rgba(34, 197, 94, 0.15)";
+      ctx.font = "bold 8px monospace";
+      ctx.fillText(modul1Braking ? `! HENTI ! <${(modul1Threshold / 10).toFixed(0)}cm` : `M1 <${(modul1Threshold / 10).toFixed(0)}cm`, 8, vh - 58);
+    }
+    if (modul3Active) {
+      ctx.fillStyle = "rgba(251, 191, 36, 0.25)";
+      ctx.font = "bold 8px monospace";
+      ctx.fillText(`NAV:${navTarget}`, 8, vh - 68);
+    }
+  }, [obstacleCount, sensorDist, editMode, editTool, modul1Active, modul1Braking, modul1Threshold, modul2Active, sectorData, modul3Active, navTarget]);
 
   // Pointer handlers for canvas
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -863,6 +1186,8 @@ export default function SimulasiPage() {
       keys.add(e.key.toLowerCase());
       if (["arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(e.key.toLowerCase())) e.preventDefault();
       if (e.key === "Tab") { e.preventDefault(); setEditMode(p => !p); }
+      if (e.key.toLowerCase() === "q") sendServo(servoRef.current - 5);
+      if (e.key.toLowerCase() === "e") sendServo(servoRef.current + 5);
     };
     const handleKeyUp = (e: KeyboardEvent) => {
       keys.delete(e.key.toLowerCase());
@@ -902,6 +1227,18 @@ export default function SimulasiPage() {
     };
   }, [tick, draw, setMotors, editMode]);
 
+  // Load LABIRIN preset on mount
+  useEffect(() => {
+    obstaclesRef.current = PRESETS.LABIRIN.map(o => ({ ...o }));
+    setObstacleCount(obstaclesRef.current.length);
+    const safePos = findSafeSpawn();
+    posRef.current = safePos;
+    headingRef.current = 0;
+    trailRef.current = [];
+    sweepPointsRef.current = [];
+    lastSweepAngleRef.current = -1;
+  }, [findSafeSpawn]);
+
   // Sync joystick visual knob with keyboard/motor state
   useEffect(() => {
     if (joyActiveRef.current) return;
@@ -915,6 +1252,23 @@ export default function SimulasiPage() {
     const nx = (leftMotor - rightMotor) / 510;
     setJoyPos({ x: nx * maxR, y: -ny * maxR });
   }, [leftMotor, rightMotor]);
+
+  // Sync module refs for tick (stale closure fix)
+  useEffect(() => { modul1ActiveRef.current = modul1Active; }, [modul1Active]);
+  useEffect(() => { modul1ThresholdRef.current = modul1Threshold; }, [modul1Threshold]);
+  useEffect(() => { modul1BrakingRef.current = modul1Braking; }, [modul1Braking]);
+  useEffect(() => { modul2ActiveRef.current = modul2Active; }, [modul2Active]);
+  useEffect(() => {
+    modul3ActiveRef.current = modul3Active;
+    if (modul3Active) {
+      navPhaseRef.current = "scan";
+      navScanResetRef.current = false;
+      navTargetSectorRef.current = -1;
+      navTickRef.current = 0;
+      sweepPointsRef.current = [];
+      lastSweepAngleRef.current = -1;
+    }
+  }, [modul3Active]);
 
   return (
     <main className="fixed inset-0 bg-black select-none touch-none">
@@ -938,6 +1292,131 @@ export default function SimulasiPage() {
         >
           {editMode ? "EDIT" : "DRIVE"}
         </button>
+        <button
+          onClick={() => setModulesOpen(p => !p)}
+          className={`px-2 py-1 rounded-full text-[10px] font-mono border active:scale-90 transition-colors ${
+            modulesOpen || modul1Braking
+              ? "bg-cyan-600 border-cyan-500 text-white"
+              : "bg-zinc-800 border-zinc-700 text-zinc-400 hover:text-white"
+          }`}
+        >
+          MODUL{modul1Braking ? "!" : ""}
+        </button>
+        {modulesOpen && (
+          <div className="fixed top-14 left-1/2 -translate-x-1/2 flex flex-col gap-1.5 min-w-[220px] bg-zinc-900/80 backdrop-blur-md px-3 py-2.5 rounded-xl border border-white/10 z-50">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-[8px] font-mono text-zinc-500">M1</span>
+                <span className="text-[10px] font-mono text-zinc-300">COLLISION</span>
+              </div>
+              <button
+                onClick={() => { setModul1Active(p => !p); modul1ActiveRef.current = !modul1Active; }}
+                className={`px-2 py-0.5 rounded-full text-[8px] font-mono font-bold border transition-colors active:scale-90 ${
+                  modul1Active
+                    ? "bg-emerald-600 border-emerald-500 text-white"
+                    : "bg-zinc-800 border-zinc-700 text-zinc-500"
+                }`}
+              >
+                {modul1Active ? "ON" : "OFF"}
+              </button>
+            </div>
+            {modul1Active && (
+              <div className="flex items-center gap-2 pl-4">
+                <span className="text-[8px] font-mono text-zinc-500">JARAK</span>
+                <input
+                  type="range"
+                  min="30"
+                  max="500"
+                  step="10"
+                  value={modul1Threshold}
+                  onChange={e => { setModul1Threshold(Number(e.target.value)); modul1ThresholdRef.current = Number(e.target.value); }}
+                  className="flex-1 h-1 accent-cyan-500 cursor-pointer"
+                />
+                <span className="text-[9px] font-mono text-cyan-400 w-9 text-right">{(modul1Threshold / 10).toFixed(0)}cm</span>
+              </div>
+            )}
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-[8px] font-mono text-zinc-500">M2</span>
+                <span className="text-[10px] font-mono text-zinc-300">SERVO LASER</span>
+              </div>
+              <button
+                onClick={() => setModul2Active(p => !p)}
+                className={`px-2 py-0.5 rounded-full text-[8px] font-mono font-bold border transition-colors active:scale-90 ${
+                  modul2Active
+                    ? "bg-emerald-600 border-emerald-500 text-white"
+                    : "bg-zinc-800 border-zinc-700 text-zinc-500"
+                }`}
+              >
+                {modul2Active ? "ON" : "OFF"}
+              </button>
+            </div>
+            {modul2Active && (
+              <div className="flex items-center gap-1 pl-4 text-[8px] font-mono">
+                {SECTORS.map((sec, i) => {
+                  const d = sectorData[i];
+                  const pct = d > 0 ? Math.min(d / MAX_SENSE, 1) * 100 : 0;
+                  return (
+                    <div key={sec.id} className="flex flex-col items-center gap-0.5">
+                      <span className="text-zinc-500">{sec.id}</span>
+                      <div className="w-5 h-12 bg-zinc-900 rounded-sm border border-zinc-800 relative overflow-hidden">
+                        <div
+                          className="absolute bottom-0 left-0 w-full transition-all duration-150"
+                          style={{
+                            height: `${pct}%`,
+                            background: d <= 0 ? "transparent" : d < 200 ? "rgba(239,68,68,0.5)" : "rgba(34,211,238,0.3)",
+                          }}
+                        />
+                      </div>
+                      <span className={d > 0 && d < 200 ? "text-rose-400" : "text-zinc-600"}>
+                        {d > 0 ? `${(d/10).toFixed(0)}` : "-"}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-[8px] font-mono text-zinc-500">M3</span>
+                <span className="text-[10px] font-mono text-zinc-300">NAVIGASI</span>
+              </div>
+              <button
+                onClick={() => { setModul3Active(p => !p); modul3ActiveRef.current = !modul3Active; }}
+                className={`px-2 py-0.5 rounded-full text-[8px] font-mono font-bold border transition-colors active:scale-90 ${
+                  modul3Active
+                    ? "bg-emerald-600 border-emerald-500 text-white"
+                    : "bg-zinc-800 border-zinc-700 text-zinc-500"
+                }`}
+              >
+                {modul3Active ? "ON" : "OFF"}
+              </button>
+            </div>
+            {modul3Active && (
+              <div className="pl-4 text-[9px] font-mono">
+                <span className="text-amber-400">{navTarget}</span>
+                <span className="text-zinc-600 ml-1">{navPhaseRef.current.toUpperCase()}</span>
+              </div>
+            )}
+          </div>
+        )}
+        <button
+          onClick={() => setShowLog(p => !p)}
+          className={`px-2 py-1 rounded-full text-[10px] font-mono border active:scale-90 ${
+            showLog
+              ? "bg-violet-600 border-violet-500 text-white"
+              : "bg-zinc-800 border-zinc-700 text-zinc-400 hover:text-white"
+          }`}
+        >
+          MONITOR
+        </button>
+        {showLog && (
+          <MonitorPanel
+            logEntriesRef={logEntriesRef}
+            logTick={logTick}
+            setShowLog={setShowLog}
+          />
+        )}
         {editMode && (
           <>
             <button
@@ -964,6 +1443,8 @@ export default function SimulasiPage() {
               onClick={() => {
                 obstaclesRef.current = [];
                 scanDotsRef.current = [];
+                sweepPointsRef.current = [];
+                lastSweepAngleRef.current = -1;
                 setObstacleCount(0);
               }}
               className="px-2 py-1 rounded-full bg-zinc-800 border border-zinc-700 text-zinc-400 text-[10px] font-mono active:scale-90"
@@ -988,11 +1469,16 @@ export default function SimulasiPage() {
                     onClick={() => {
                       obstaclesRef.current = PRESETS[name].map(o => ({ ...o }));
                       scanDotsRef.current = [];
+                      sweepPointsRef.current = [];
+                      lastSweepAngleRef.current = -1;
                       setObstacleCount(obstaclesRef.current.length);
                       setShowPresets(false);
-                      posRef.current = { x: 0, y: 0 };
+                      setModul1Braking(false);
+                      const safePos = findSafeSpawn();
+                      posRef.current = safePos;
                       headingRef.current = 0;
                       trailRef.current = [];
+                      logEvent(`Preset ${name} dimuat`, "info");
                     }}
                     className="px-2.5 py-1 rounded-full bg-zinc-800/90 border border-zinc-700 text-zinc-300 hover:text-white hover:border-cyan-500 text-[9px] font-mono active:scale-90 backdrop-blur-sm"
                   >
@@ -1021,6 +1507,7 @@ export default function SimulasiPage() {
               setMode(next);
               modeRef.current = next;
               if (next === "LATIHAN") disconnectESP();
+              logEvent(`Mode ${next}`, "info");
             }}
             className={`px-2 py-1 rounded-full text-[9px] font-mono font-bold border active:scale-90 ${
               mode === "NYATA"
@@ -1115,5 +1602,71 @@ export default function SimulasiPage() {
         </div>
       </div>
     </main>
+  );
+}
+
+// ─── Monitor Panel ──────────────────────────────────────────────
+type MonitorProps = {
+  logEntriesRef: React.MutableRefObject<Array<{ time: string; msg: string; type: string }>>;
+  logTick: number;
+  setShowLog: (v: boolean) => void;
+};
+
+function MonitorPanel({ logEntriesRef, logTick, setShowLog }: MonitorProps) {
+  const logEndRef = useRef<HTMLDivElement>(null);
+  const preRef = useRef<HTMLPreElement>(null);
+
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [logTick]);
+
+  const copyLog = () => {
+    const text = logEntriesRef.current.map(e => `[${e.time}] ${e.msg}`).join("\n");
+    navigator.clipboard.writeText(text).catch(() => {});
+  };
+
+  const clearLog = () => {
+    logEntriesRef.current = [];
+  };
+
+  const typeColor = (t: string) => {
+    switch (t) {
+      case "warn": return "text-yellow-400";
+      case "error": return "text-red-400";
+      case "nav": return "text-cyan-400";
+      case "sensor": return "text-emerald-400";
+      case "motor": return "text-orange-400";
+      default: return "text-zinc-400";
+    }
+  };
+
+  const entries = logEntriesRef.current;
+
+  return (
+    <div className="fixed top-14 left-1/2 -translate-x-1/2 z-50 w-[480px] max-h-[70vh] bg-zinc-900/95 backdrop-blur-md rounded-xl border border-white/10 text-[10px] font-mono shadow-2xl flex flex-col">
+      {/* Header */}
+      <div className="flex items-center justify-between px-3 py-1.5 border-b border-white/10 shrink-0">
+        <span className="text-violet-400 font-bold text-[11px] tracking-wider">LOG</span>
+        <div className="flex gap-1 items-center">
+          <span className="text-zinc-600 text-[8px]">#{logTick}</span>
+          <button onClick={clearLog} className="px-1.5 py-0.5 rounded text-[8px] bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-700 active:scale-90">HAPUS</button>
+          <button onClick={copyLog} className="px-1.5 py-0.5 rounded text-[8px] bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-700 active:scale-90">COPY</button>
+        </div>
+      </div>
+
+      {/* Log entries */}
+      <div className="overflow-y-auto p-2 space-y-0.5 flex-1" style={{ maxHeight: "calc(70vh - 36px)" }}>
+        {entries.length === 0 && (
+          <div className="text-zinc-600 italic py-4 text-center">Belum ada log</div>
+        )}
+        {entries.map((entry, i) => (
+          <div key={i} className="flex gap-2 leading-snug hover:bg-white/5 px-1 rounded">
+            <span className="text-zinc-600 shrink-0 w-[60px]">{entry.time}</span>
+            <span className={`${typeColor(entry.type)} break-all`}>{entry.msg}</span>
+          </div>
+        ))}
+        <div ref={logEndRef} />
+      </div>
+    </div>
   );
 }
