@@ -746,19 +746,9 @@ export default function SimulasiPage() {
       setBuzzerActive(false);
     }
 
-    // Modul 1: Collision Detection - Auto stop before wall (ALWAYS ACTIVE as safety layer)
-    // Adaptive threshold: kalau semua sektor < threshold, robot di ruang sempit — turunkan threshold
-    let effectiveThreshold = modul1ThresholdRef.current;
-    if (modul2ActiveRef.current && modeRef.current === "NYATA") {
-      const maxSector = Math.max(...sectorDataRef.current.filter(v => v > 0));
-      // If all sectors are close, robot is in tight space — allow closer movement
-      if (maxSector > 0 && maxSector < modul1ThresholdRef.current) {
-        effectiveThreshold = Math.max(5, maxSector - 5); // relax threshold below current max
-      }
-    }
+    // Modul 1: Collision Detection — pakai slider threshold user
     const movingForward = l > 30 && r > 30;
-    const m3ActivelyMoving = modul3ActiveRef.current && ["drive","turn","turnaround"].includes(navPhaseRef.current);
-    if (!m3ActivelyMoving && modul1ActiveRef.current && d_now > 0 && d_now <= effectiveThreshold && movingForward) {
+    if (modul1ActiveRef.current && d_now > 0 && d_now <= modul1ThresholdRef.current && movingForward) {
       l = 0;
       r = 0;
       setMotors(0, 0);
@@ -767,7 +757,7 @@ export default function SimulasiPage() {
       if (!modul1BrakingRef.current) {
         setModul1Braking(true);
         modul1BrakingRef.current = true;
-        logEvent(`M1 BRAKE! jarak=${(d_now/10).toFixed(0)}cm threshold=${(effectiveThreshold/10).toFixed(0)}cm`, "warn");
+        logEvent(`M1 BRAKE! jarak=${(d_now/10).toFixed(0)}cm threshold=${(modul1ThresholdRef.current/10).toFixed(0)}cm`, "warn");
       }
     } else {
       setModul1Braking(false);
@@ -778,6 +768,7 @@ export default function SimulasiPage() {
     if (modul3ActiveRef.current) {
       const sd = sectorDataRef.current;
       const NAV_THRESH = 60; // Lebih agresif (was 80)
+      const CREEP_THRESH = 30; // Kalau semua < ini, creep aja
       const HEADING_TOL = 8; // Lebih presisi (was 15)
       const CENTER_IDX = 6; // S7 (81-90°) — lurus depan
       const headingDeg = ((h * 180 / Math.PI) % 360 + 360) % 360; // Normalize 0-360°
@@ -848,7 +839,7 @@ export default function SimulasiPage() {
             else { navSameSectorCountRef.current = 0; navLastSectorRef.current = bestIdx; }
             if (navSameSectorCountRef.current >= 3) {
               navSameSectorCountRef.current = 0;
-              bestIdx = (bestIdx + 7) % SECTORS.length; // Force opposite-ish direction
+              bestIdx = (bestIdx + 7) % SECTORS.length;
               logEvent("M3 SECTOR SAMA — paksa ganti arah", "warn");
             }
             navTargetSectorRef.current = bestIdx;
@@ -859,11 +850,23 @@ export default function SimulasiPage() {
             velRef.current = { x: 0, y: 0 };
             angVelRef.current = 0;
             navPhaseRef.current = "turn";
-            // Detailed sector selection log
+            navStallTicksRef.current = 0;
             const secData = sd[bestIdx];
             const secScore = sectorScoreRef.current[bestIdx];
             logEvent(`M3→${SECTORS[bestIdx].id} dist=${(secData/10).toFixed(0)}cm score=${bestDist.toFixed(0)} learn=${secScore}`, "nav");
             speakTTS(pick(ttsBelok));
+          } else if (bestIdx >= 0 && bestDist >= CREEP_THRESH) {
+            // CREEP: semua sektor sempit, jalan pelan ke arah terbaik
+            navTargetSectorRef.current = bestIdx;
+            const cx = SECTORS[bestIdx].cx;
+            navTargetHeadingRef.current = headingDeg + (cx - 90);
+            navTurnHeadingRef.current = headingDeg;
+            navScanResetRef.current = false;
+            velRef.current = { x: 0, y: 0 };
+            angVelRef.current = 0;
+            navPhaseRef.current = "turn";
+            navStallTicksRef.current = 0;
+            logEvent(`M3 CREEP→${SECTORS[bestIdx].id} ${(sd[bestIdx]/10).toFixed(0)}cm`, "nav");
           } else {
             // No good sector — corner deadlock; weighted fallback with frontier
             let fallbackIdx = -1;
@@ -971,26 +974,22 @@ export default function SimulasiPage() {
         const frx = px + Math.sin(hdg + Math.PI/4) * (ROBOT_R + 2);
         const fry = py - Math.cos(hdg + Math.PI/4) * (ROBOT_R + 2);
         const bodyHit = collides(lx, ly, 2) || collides(rx, ry, 2) || collides(fx, fy, 2) || collides(flx, fly, 2) || collides(frx, fry, 2);
-        // NYATA: skip gridHit (real robot, M1 brake cukup)
         const gridHit = false;
-        // NYATA: relax wallAhead threshold (real robot, tighter spaces)
-        const wallAhead = centerDist > 0 && centerDist < (modeRef.current === "NYATA" ? 5 : 30);
-        // NYATA: gunakan actual VL53L0X distance untuk emergency stop di drive phase
-        const realWallHit = modeRef.current === "NYATA" && d_now > 0 && d_now < 8;
+        const wallAhead = centerDist > 0 && centerDist < 30;
         const speed = Math.abs(velRef.current.x) + Math.abs(velRef.current.y);
-        // NYATA: stall detection — heading gak berubah dalam beberapa tick saat motor jalan
+        // NYATA: no physics stall
         let stalled = speed < 0.3;
         if (modeRef.current === "NYATA") {
           stalled = false;
         }
         if (stalled) { navStallTicksRef.current++; navSmoothSpeedRef.current = Math.max(0, navSmoothSpeedRef.current - 4); }
         else navStallTicksRef.current = 0;
-        if (bodyHit || gridHit || wallAhead || realWallHit || navStallTicksRef.current >= 30) {
+        if (bodyHit || gridHit || wallAhead || navStallTicksRef.current >= 30) {
           const dx = px - navDriveStartPosRef.current.x;
           const dy = py - navDriveStartPosRef.current.y;
           const distTraveled = Math.hypot(dx, dy);
           // Log stop reason
-          const stopReason = bodyHit ? "bodyHit" : gridHit ? "gridHit" : wallAhead ? "wallAhead" : realWallHit ? "realWall" : "stalled";
+          const stopReason = bodyHit ? "bodyHit" : gridHit ? "gridHit" : wallAhead ? "wallAhead" : "stalled";
           logEvent(`M3 DRIVE STOP: ${stopReason} dist=${distTraveled.toFixed(0)} stall=${navStallTicksRef.current}`, "nav");
           // Check position-based corner loop
           const cellKey = `${Math.round(px/50)},${Math.round(py/50)}`;
@@ -1076,18 +1075,25 @@ export default function SimulasiPage() {
           const minDist = Math.min(targetDist > 0 ? targetDist : 999, cDist > 0 ? cDist : 999);
           if (minDist < 120) targetSpeed = Math.min(targetSpeed, 50 + Math.round(minDist * 0.4));
           if (minDist < 50) targetSpeed = Math.min(targetSpeed, 30);
-          // NYATA: no physics, langsung target speed (skip smooth ramp)
-          if (modeRef.current === "NYATA") {
-            navSmoothSpeedRef.current = targetSpeed;
+          // CREEP mode: ruang sempit, heading pursuit langsung (skip straight)
+          if (targetDist < CREEP_THRESH && modeRef.current === "NYATA") {
+            const creepS = 80;
+            const creepSteer = Math.max(-80, Math.min(80, headingErr * 0.7));
+            l = Math.round(creepS + creepSteer);
+            r = Math.round(creepS - creepSteer);
           } else {
-            const accel = navSmoothSpeedRef.current < targetSpeed ? 12 : 6;
-            navSmoothSpeedRef.current = Math.min(targetSpeed, navSmoothSpeedRef.current + accel);
+            // NYATA: no physics, langsung target speed (skip smooth ramp)
+            if (modeRef.current === "NYATA") {
+              navSmoothSpeedRef.current = targetSpeed;
+            } else {
+              const accel = navSmoothSpeedRef.current < targetSpeed ? 12 : 6;
+              navSmoothSpeedRef.current = Math.min(targetSpeed, navSmoothSpeedRef.current + accel);
+            }
+            const s = Math.round(navSmoothSpeedRef.current);
+            const steerRounded = Math.round(steer);
+            l = Math.max(-255, Math.min(255, s + steerRounded));
+            r = Math.max(-255, Math.min(255, s - steerRounded));
           }
-          const s = Math.round(navSmoothSpeedRef.current);
-          const steerRounded = Math.round(steer);
-
-          l = Math.max(-255, Math.min(255, s + steerRounded));
-          r = Math.max(-255, Math.min(255, s - steerRounded));
         }
       }
 
@@ -1155,10 +1161,8 @@ export default function SimulasiPage() {
       leftMotorRef.current = l;
       rightMotorRef.current = r;
 
-      // M1 SAFETY OVERRIDE: Final check after all motor calculations
-      // Skip saat M3 aktif — M3 punya logic avoidance sendiri
-      const m3Active = modul3ActiveRef.current && ["drive","turn","turnaround"].includes(navPhaseRef.current);
-      if (!m3Active && modul1ActiveRef.current && distanceRef.current > 0 && distanceRef.current <= effectiveThreshold) {
+      // M1 SAFETY OVERRIDE: Final check — pakai slider threshold user
+      if (modul1ActiveRef.current && distanceRef.current > 0 && distanceRef.current <= modul1ThresholdRef.current) {
         const isMovingToward = (l > 20 && r > 20);
         if (isMovingToward) {
           leftMotorRef.current = 0;
