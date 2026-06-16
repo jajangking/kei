@@ -172,6 +172,9 @@ export default function SimulasiPage() {
   const navLastCornerCellRef = useRef("");
   const navLastSectorRef = useRef(-1);
   const navSameSectorCountRef = useRef(0);
+  const mpuStallTicksRef = useRef(0);
+  const mpuLastYawRef = useRef(0);
+  const mpuLastDistRef = useRef(0);
 
   // M4: Groq AI Hybrid
   const [modul4Active, setModul4Active] = useState(false);
@@ -600,6 +603,28 @@ export default function SimulasiPage() {
         }
       }
 
+      // MPU Stall Detection: motor jalan tapi gak gerak → stuck
+      if (l !== 0 || r !== 0) {
+        const currYaw = tele?.yaw ?? 0;
+        const currDist = d;
+        const yawDiff = Math.abs(currYaw - mpuLastYawRef.current);
+        const distDiff = Math.abs(currDist - mpuLastDistRef.current);
+        const moving = yawDiff > 0.5 || distDiff > 1;
+        if (moving) { mpuStallTicksRef.current = 0; }
+        else { mpuStallTicksRef.current++; }
+        if (mpuStallTicksRef.current > 30 && modul3ActiveRef.current) {
+          logEvent("MPU STALL — stuck", "warn");
+          mpuStallTicksRef.current = 0;
+          navPhaseRef.current = "reverse";
+          navTickRef.current = 0;
+          navStuckCountRef.current++;
+        }
+        mpuLastYawRef.current = currYaw;
+        mpuLastDistRef.current = currDist;
+      } else {
+        mpuStallTicksRef.current = 0;
+      }
+
       // Build occupancy grid from scan dots (for frontier mapping in NYATA)
       if (modul2ActiveRef.current && dots.length > 20) {
         for (const dot of dots) {
@@ -788,8 +813,9 @@ export default function SimulasiPage() {
         setNavTarget(`SCAN ${filled}/${SECTORS.length}`);
         // SCAN SAMBIL JALAN: jalan pelan, gak buang waktu
         const MIN_SCAN = 3; // cukup 3 sektor untuk ambil keputusan
-        if (filled < MIN_SCAN) { l = 20; r = 20; } // creep sambil scan
-        else { l = 0; r = 0; } // stop bentar untuk decision
+        if (modeRef.current === "NYATA") { l = 0; r = 0; }
+        else if (filled < MIN_SCAN) { l = 20; r = 20; } // LATIHAN: creep sambil scan
+        else { l = 0; r = 0; } // stop bentar
         if (filled >= Math.max(MIN_SCAN, Math.min(SECTORS.length, 7))) {
           // Trigger AI suggestion if M4 active
           if (modul4ActiveRef.current) callGroqAI();
