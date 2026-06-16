@@ -812,6 +812,10 @@ export default function SimulasiPage() {
             const sec = SECTORS[i];
             const exploreBonus = deadEndRef.current.has(`${gx},${gy},${i}`) ? -40 : 0;
             const learnBonus = sectorScoreRef.current[i] * 5;
+            // Strong distance penalty: very short distances get heavily discounted
+            const rawDist = sd[i];
+            // Non-linear distance penalty: < 20cm = dihukum berat, < 40cm = dihukum ringan
+            const distPenalty = rawDist < 200 ? -(200 - rawDist) * 3 : 0;
             // Body clearance: dynamic sector check based on robot width
             const bodyHalfSectors = Math.ceil(Math.atan2(ROBOT_R + 5, sd[i]) * 180 / Math.PI / 10);
             let bodyClearDist = sd[i];
@@ -835,7 +839,7 @@ export default function SimulasiPage() {
             frontierBonus = Math.min(frontierBonus * 8, 60);
             // AI suggestion bonus (hybrid)
             const aiBonus = (modul4ActiveRef.current && aiSuggestionRef.current === i) ? aiSuggestionWeightRef.current : 0;
-            const score = sd[i] + learnBonus + exploreBonus + frontierBonus + clearancePenalty + aiBonus;
+            const score = sd[i] + learnBonus + exploreBonus + frontierBonus + clearancePenalty + aiBonus + distPenalty;
             if (score > bestDist) { bestDist = score; bestIdx = i; }
           }
           if (bestIdx >= 0 && bestDist >= NAV_THRESH) {
@@ -868,6 +872,7 @@ export default function SimulasiPage() {
               const raw = sd[i] >= 0 ? sd[i] : 0;
               const exploreBonus = deadEndRef.current.has(`${gx},${gy},${i}`) ? -40 : 0;
               const learnBonus = sectorScoreRef.current[i] * 5;
+              const distPenalty = raw < 200 ? -(200 - raw) * 3 : 0;
               // Body clearance in fallback
               let bodyClearDist = sd[i] > 0 ? sd[i] : 0;
               if (bodyClearDist > 0) {
@@ -892,7 +897,7 @@ export default function SimulasiPage() {
               }
               frontierBonus = Math.min(frontierBonus * 8, 60);
               const aiBonus = (modul4ActiveRef.current && aiSuggestionRef.current === i) ? aiSuggestionWeightRef.current : 0;
-              const score = raw + learnBonus + exploreBonus + frontierBonus + clearancePenalty + aiBonus;
+              const score = raw + learnBonus + exploreBonus + frontierBonus + clearancePenalty + aiBonus + distPenalty;
               if (score > fallbackDist) { fallbackDist = score; fallbackIdx = i; }
             }
             if (fallbackIdx >= 0 && sd[fallbackIdx] > 0) {
@@ -994,7 +999,7 @@ export default function SimulasiPage() {
           if (distTraveled < 10) {
             const secIdx = navTargetSectorRef.current;
             if (secIdx >= 0) {
-              sectorScoreRef.current[secIdx] = Math.max(-3, sectorScoreRef.current[secIdx] - 1);
+              sectorScoreRef.current[secIdx] = Math.max(-50, sectorScoreRef.current[secIdx] - 20);
               const gx = Math.round(posRef.current.x / 50);
               const gy = Math.round(posRef.current.y / 50);
               deadEndRef.current.set(`${gx},${gy},${secIdx}`, 1);
