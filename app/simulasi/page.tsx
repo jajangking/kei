@@ -282,6 +282,12 @@ export default function SimulasiPage() {
   const setMotors = useCallback((l: number, r: number) => {
     const prevL = leftMotorRef.current;
     const prevR = rightMotorRef.current;
+    // NYATA: enforce minimum PWM 80 (ESP32 buzzes below 80)
+    if (modeRef.current === "NYATA") {
+      const clampMin = (v: number) => v === 0 ? 0 : Math.round(v > 0 ? Math.max(80, v) : Math.min(-80, v));
+      l = clampMin(l);
+      r = clampMin(r);
+    }
     leftMotorRef.current = l;
     rightMotorRef.current = r;
     setLeftMotor(l);
