@@ -970,20 +970,22 @@ export default function SimulasiPage() {
         const gridHit = false;
         // NYATA: relax wallAhead threshold (real robot, tighter spaces)
         const wallAhead = centerDist > 0 && centerDist < (modeRef.current === "NYATA" ? 5 : 30);
+        // NYATA: gunakan actual VL53L0X distance untuk emergency stop di drive phase
+        const realWallHit = modeRef.current === "NYATA" && d_now > 0 && d_now < 8;
         const speed = Math.abs(velRef.current.x) + Math.abs(velRef.current.y);
-        // NYATA: stall detection pakai heading change (yaw dari ESP), bukan physics velRef
+        // NYATA: stall detection — heading gak berubah dalam beberapa tick saat motor jalan
         let stalled = speed < 0.3;
         if (modeRef.current === "NYATA") {
-          stalled = false; // real robot moves itself — no physics stall
+          stalled = false;
         }
         if (stalled) { navStallTicksRef.current++; navSmoothSpeedRef.current = Math.max(0, navSmoothSpeedRef.current - 4); }
         else navStallTicksRef.current = 0;
-        if (bodyHit || gridHit || wallAhead || navStallTicksRef.current >= 30) {
+        if (bodyHit || gridHit || wallAhead || realWallHit || navStallTicksRef.current >= 30) {
           const dx = px - navDriveStartPosRef.current.x;
           const dy = py - navDriveStartPosRef.current.y;
           const distTraveled = Math.hypot(dx, dy);
           // Log stop reason
-          const stopReason = bodyHit ? "bodyHit" : gridHit ? "gridHit" : wallAhead ? "wallAhead" : "stalled";
+          const stopReason = bodyHit ? "bodyHit" : gridHit ? "gridHit" : wallAhead ? "wallAhead" : realWallHit ? "realWall" : "stalled";
           logEvent(`M3 DRIVE STOP: ${stopReason} dist=${distTraveled.toFixed(0)} stall=${navStallTicksRef.current}`, "nav");
           // Check position-based corner loop
           const cellKey = `${Math.round(px/50)},${Math.round(py/50)}`;
