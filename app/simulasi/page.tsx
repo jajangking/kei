@@ -286,10 +286,15 @@ export default function SimulasiPage() {
     rightMotorRef.current = r;
     setLeftMotor(l);
     setRightMotor(r);
-    const now = Date.now();
-    if ((l !== prevL || r !== prevR) && now - motorLogThrottleRef.current > 500) {
-      motorLogThrottleRef.current = now;
-      logEvent(`Motor L=${l} R=${r}`, "motor");
+    // Motor log: hanya saat STOP (0,0) atau START (dari 0 → jalan) — gak spam
+    if (l !== prevL || r !== prevR) {
+      const now = Date.now();
+      const isStop = (l === 0 && r === 0);
+      const isStart = (prevL === 0 && prevR === 0 && (l !== 0 || r !== 0));
+      if ((isStop || isStart) && now - motorLogThrottleRef.current > 500) {
+        motorLogThrottleRef.current = now;
+        logEvent(`Motor ${isStop ? "STOP" : `L=${l} R=${r}`}`, "motor");
+      }
     }
     if (modeRef.current === "NYATA" && wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ leftMotor: l, rightMotor: r }));
@@ -400,12 +405,12 @@ export default function SimulasiPage() {
         if (!occ.has(nk)) {
           const nwx = (gx+dx) * GRID_STEP + GRID_STEP/2;
           const nwy = (gy+dy) * GRID_STEP + GRID_STEP/2;
-          // Only add if reachable (not inside any obstacle)
+          // Only add if reachable (not inside any obstacle or wall cell)
           let blocked = false;
           for (const o of obstaclesRef.current) {
             if (nwx >= o.x && nwx <= o.x+o.w && nwy >= o.y && nwy <= o.y+o.h) { blocked = true; break; }
           }
-          if (!blocked) frontier.add(nk);
+          if (!blocked && occ.get(nk) !== 2) frontier.add(nk);
           break;
         }
       }
@@ -588,108 +593,134 @@ export default function SimulasiPage() {
           if (trail.length > TRAIL_LEN) trail.shift();
         }
       }
-      return;
+
+      // Build occupancy grid from scan dots (for frontier mapping in NYATA)
+      if (modul2ActiveRef.current && dots.length > 20) {
+        for (const dot of dots) {
+          const gk = gridCellKey(dot.x, dot.y);
+          if (occupancyRef.current.get(gk) !== 2) occupancyRef.current.set(gk, 2);
+        }
+        // Mark robot path as free
+        const rk = gridCellKey(p.x, p.y);
+        if (!occupancyRef.current.has(rk)) occupancyRef.current.set(rk, 1);
+        // Limit grid size to prevent memory bloat
+        if (occupancyRef.current.size > 5000) {
+          const arr = [...occupancyRef.current];
+          occupancyRef.current = new Map(arr.slice(arr.length - 3000));
+        }
+      }
     }
 
-    // LATIHAN: cast laser at current servo angle
-    // Modul 2: auto-sweep servo when active (unless M3 overrides)
+    // Servo sweep (BOTH modes: LATIHAN for viz, NYATA sends via WebSocket to ESP32)
     if (modul2ActiveRef.current) {
+      let newAngle = 90;
       if (modul3ActiveRef.current) {
         const phase = navPhaseRef.current;
         if (phase === "drive") {
-          servoRef.current = 90;
+          newAngle = navTargetSectorRef.current >= 0 ? SECTORS[navTargetSectorRef.current].cx : 90;
         } else if (phase === "turn" && navTargetSectorRef.current >= 0) {
           const cx = SECTORS[navTargetSectorRef.current].cx;
           const hdgDeg = h * 180 / Math.PI;
           const hdgAtTurn = navTurnHeadingRef.current;
-          const ang = Math.round(Math.max(20, Math.min(160, cx - (hdgDeg - hdgAtTurn))));
-          servoRef.current = ang;
+          newAngle = Math.round(Math.max(20, Math.min(160, cx - (hdgDeg - hdgAtTurn))));
+        } else if (phase === "scan") {
+          newAngle = Math.round(90 + Math.sin(Date.now() / 800 * 0.7) * 70);
         } else {
-          servoRef.current = Math.round(90 + Math.sin(Date.now() / 1000 * 0.7) * 70);
+          newAngle = Math.round(90 + Math.sin(Date.now() / 1000 * 0.7) * 70);
         }
       } else {
-        servoRef.current = Math.round(90 + Math.sin(Date.now() / 1000 * 0.7) * 70);
+        newAngle = Math.round(90 + Math.sin(Date.now() / 1000 * 0.7) * 70);
+      }
+      if (modeRef.current === "NYATA") {
+        // Only send to ESP32 when angle changes meaningfully (reduce WebSocket spam)
+        if (Math.abs(newAngle - servoRef.current) >= 3) sendServo(newAngle);
+      } else {
+        servoRef.current = newAngle;
       }
     }
-    const servoRad = (servoRef.current - 90) * Math.PI / 180;
-    const d = castRayAngle(servoRad, true); // Enable mapping (markSeen = true)
 
-    distanceRef.current = d;
-    setSensorDist(d > 0 ? `${(d / 10).toFixed(0)}cm` : "---");
+    // LATIHAN: cast laser at current servo angle + point cloud + occupancy grid
+    if (modeRef.current !== "NYATA") {
+      const servoRad = (servoRef.current - 90) * Math.PI / 180;
+      const d = castRayAngle(servoRad, true);
+      distanceRef.current = d;
+      setSensorDist(d > 0 ? `${(d / 10).toFixed(0)}cm` : "---");
 
-    // Capture sector data during sweep
+      // Sweep point cloud data
+      if (modul2ActiveRef.current && d > 0) {
+        const angleDiff = Math.abs(servoRef.current - lastSweepAngleRef.current);
+        if (lastSweepAngleRef.current < 0 || angleDiff >= 3) {
+          lastSweepAngleRef.current = servoRef.current;
+          const sx = p.x + Math.sin(h + servoRad) * d;
+          const sy = p.y - Math.cos(h + servoRad) * d;
+          sweepPointsRef.current.push({ x: sx, y: sy });
+          if (sweepPointsRef.current.length > 2000) sweepPointsRef.current = sweepPointsRef.current.slice(-1500);
+        }
+      }
+      // Sweep history
+      if (d > 0) {
+        servoHistoryRef.current.push({ angle: servoRef.current, dist: d });
+        if (servoHistoryRef.current.length > 100) servoHistoryRef.current.shift();
+      }
+      // Occupancy grid
+      if (modul2ActiveRef.current && d > 0) {
+        const sr = servoRad;
+        const rayAngle = headingRef.current + sr;
+        const rx = Math.sin(rayAngle);
+        const ry = -Math.cos(rayAngle);
+        const step = GRID_STEP;
+        const steps = Math.floor(d / step);
+        for (let i = 0; i < steps; i++) {
+          const sx = p.x + rx * step * i;
+          const sy = p.y + ry * step * i;
+          if (getGrid(sx, sy) === 0) setGrid(sx, sy, 1);
+        }
+        const hitX = p.x + rx * d;
+        const hitY = p.y + ry * d;
+        if (getGrid(hitX, hitY) === 0) setGrid(hitX, hitY, 2);
+      }
+      {
+        const rp = posRef.current;
+        if (getGrid(rp.x, rp.y) === 0) setGrid(rp.x, rp.y, 1);
+      }
+      if (modul2ActiveRef.current) {
+        for (let i = 0; i < SECTORS.length; i++) {
+          const sd = sectorDataRef.current[i];
+          if (sd <= 0 || sd >= MAX_SENSE) continue;
+          const aRad = (SECTORS[i].cx - 90) * Math.PI / 180;
+          const rh = headingRef.current;
+          const hx = p.x + Math.sin(rh + aRad) * sd;
+          const hy = p.y - Math.cos(rh + aRad) * sd;
+          if (getGrid(hx, hy) === 0) setGrid(hx, hy, 2);
+        }
+      }
+    }
+    // Ensure sensorDist is set in NYATA mode too
+    if (modeRef.current === "NYATA" && distanceRef.current > 0) {
+      setSensorDist(`${(distanceRef.current / 10).toFixed(0)}cm`);
+    }
+
+    // Sector data capture (both modes: LATIHAN uses castRay d, NYATA uses telemetry distance)
     if (modul2ActiveRef.current) {
       const s = servoRef.current;
+      const currentDist = distanceRef.current;
       for (let i = 0; i < SECTORS.length; i++) {
         const sec = SECTORS[i];
         if (s >= sec.min && s <= sec.max) {
-          const dist = d > 0 ? d : MAX_SENSE;
+          const dist = currentDist > 0 ? currentDist : MAX_SENSE;
           sectorDataRef.current[i] = dist;
           setSectorData([...sectorDataRef.current]);
-          if (d > 0) logEvent(`${sec.id} ${s}° → ${(d/10).toFixed(0)}cm`, "sensor");
+          if (currentDist > 0) {
+            // Throttle sensor log: only log when sector or distance quantized to 5cm changes
+            const qDist = Math.round(currentDist / 50) * 50;
+            const logKey = `${sec.id}_${qDist}`;
+            if (logKey !== (window as any).__lastSensorLog) {
+              (window as any).__lastSensorLog = logKey;
+              logEvent(`${sec.id} ${s}° → ${(currentDist/10).toFixed(0)}cm`, "sensor");
+            }
+          }
           break;
         }
-      }
-    }
-
-    // Collect sweep point cloud data
-    if (modul2ActiveRef.current && d > 0) {
-      const angleDiff = Math.abs(servoRef.current - lastSweepAngleRef.current);
-      if (lastSweepAngleRef.current < 0 || angleDiff >= 3) {
-        lastSweepAngleRef.current = servoRef.current;
-        const p = posRef.current;
-        const h = headingRef.current;
-        const sr = (servoRef.current - 90) * Math.PI / 180;
-        const sx = p.x + Math.sin(h + sr) * d;
-        const sy = p.y - Math.cos(h + sr) * d;
-        sweepPointsRef.current.push({ x: sx, y: sy });
-        if (sweepPointsRef.current.length > 2000) {
-          sweepPointsRef.current = sweepPointsRef.current.slice(-1500);
-        }
-      }
-    }
-
-    // Update sweep history for visualization
-    if (d > 0) {
-      servoHistoryRef.current.push({ angle: servoRef.current, dist: d });
-      if (servoHistoryRef.current.length > 100) servoHistoryRef.current.shift();
-    }
-
-    // Occupancy grid: mark free cells along ray + wall at hit
-    if (modeRef.current === "LATIHAN" && modul2ActiveRef.current && d > 0) {
-      const p = posRef.current;
-      const sr = (servoRef.current - 90) * Math.PI / 180;
-      const rayAngle = headingRef.current + sr;
-      const rx = Math.sin(rayAngle);
-      const ry = -Math.cos(rayAngle);
-      const dist = d;
-      const step = GRID_STEP;
-      const steps = Math.floor(dist / step);
-      for (let i = 0; i < steps; i++) {
-        const sx = p.x + rx * step * i;
-        const sy = p.y + ry * step * i;
-        if (getGrid(sx, sy) === 0) setGrid(sx, sy, 1);
-      }
-      const hitX = p.x + rx * dist;
-      const hitY = p.y + ry * dist;
-      if (getGrid(hitX, hitY) === 0) setGrid(hitX, hitY, 2);
-    }
-    // Also mark robot's current cell as free
-    {
-      const rp = posRef.current;
-      if (getGrid(rp.x, rp.y) === 0) setGrid(rp.x, rp.y, 1);
-    }
-    // Mark cells behind obstacles as wall (from sector data)
-    if (modul2ActiveRef.current) {
-      for (let i = 0; i < SECTORS.length; i++) {
-        const sd = sectorDataRef.current[i];
-        if (sd <= 0 || sd >= MAX_SENSE) continue;
-        const aRad = (SECTORS[i].cx - 90) * Math.PI / 180;
-        const rp = posRef.current;
-        const rh = headingRef.current;
-        const hx = rp.x + Math.sin(rh + aRad) * sd;
-        const hy = rp.y - Math.cos(rh + aRad) * sd;
-        if (getGrid(hx, hy) === 0) setGrid(hx, hy, 2);
       }
     }
 
@@ -709,19 +740,29 @@ export default function SimulasiPage() {
       setBuzzerActive(false);
     }
 
-    // Modul 1: Collision Detection - Auto stop before wall
+    // Modul 1: Collision Detection - Auto stop before wall (ALWAYS ACTIVE as safety layer)
+    // Adaptive threshold: kalau semua sektor < threshold, robot di ruang sempit — turunkan threshold
+    let effectiveThreshold = modul1ThresholdRef.current;
+    if (modul2ActiveRef.current && modeRef.current === "NYATA") {
+      const maxSector = Math.max(...sectorDataRef.current.filter(v => v > 0));
+      // If all sectors are close, robot is in tight space — allow closer movement
+      if (maxSector > 0 && maxSector < modul1ThresholdRef.current) {
+        effectiveThreshold = Math.max(5, maxSector - 5); // relax threshold below current max
+      }
+    }
     const movingForward = l > 30 && r > 30;
-    const m3Driving = modul3ActiveRef.current && navPhaseRef.current === "drive";
-    if (modul1ActiveRef.current && !m3Driving && d_now > 0 && d_now <= modul1ThresholdRef.current && movingForward) {
+    const m3ActivelyMoving = modul3ActiveRef.current && ["drive","turn","turnaround"].includes(navPhaseRef.current);
+    if (!m3ActivelyMoving && modul1ActiveRef.current && d_now > 0 && d_now <= effectiveThreshold && movingForward) {
       l = 0;
       r = 0;
+      setMotors(0, 0);
       leftMotorRef.current = 0;
       rightMotorRef.current = 0;
-      setLeftMotor(0);
-      setRightMotor(0);
-      setModul1Braking(true);
-      modul1BrakingRef.current = true;
-      logEvent(`M1 BRAKING! jarak=${(d_now/10).toFixed(0)}cm`, "warn");
+      if (!modul1BrakingRef.current) {
+        setModul1Braking(true);
+        modul1BrakingRef.current = true;
+        logEvent(`M1 BRAKE! jarak=${(d_now/10).toFixed(0)}cm threshold=${(effectiveThreshold/10).toFixed(0)}cm`, "warn");
+      }
     } else {
       setModul1Braking(false);
       modul1BrakingRef.current = false;
@@ -733,7 +774,7 @@ export default function SimulasiPage() {
       const NAV_THRESH = 60; // Lebih agresif (was 80)
       const HEADING_TOL = 8; // Lebih presisi (was 15)
       const CENTER_IDX = 6; // S7 (81-90°) — lurus depan
-      const headingDeg = h * 180 / Math.PI;
+      const headingDeg = ((h * 180 / Math.PI) % 360 + 360) % 360; // Normalize 0-360°
 
       // Compute frontier from occupancy grid each tick
       computeFrontier();
@@ -748,8 +789,11 @@ export default function SimulasiPage() {
         }
         const filled = sd.filter(v => v > 0).length;
         setNavTarget(`SCAN ${filled}/${SECTORS.length}`);
-        l = 0; r = 0;
-        if (filled >= SECTORS.length) {
+        // SCAN SAMBIL JALAN: jalan pelan, gak buang waktu
+        const MIN_SCAN = 3; // cukup 3 sektor untuk ambil keputusan
+        if (filled < MIN_SCAN) { l = 20; r = 20; } // creep sambil scan
+        else { l = 0; r = 0; } // stop bentar untuk decision
+        if (filled >= Math.max(MIN_SCAN, Math.min(SECTORS.length, 7))) {
           // Trigger AI suggestion if M4 active
           if (modul4ActiveRef.current) callGroqAI();
           let bestIdx = -1;
@@ -874,13 +918,14 @@ export default function SimulasiPage() {
         if (err > 180) err -= 360;
         if (err < -180) err += 360;
         setNavTarget(`→ ${err.toFixed(0)}°`);
-        if (Math.abs(err) <= HEADING_TOL) {
+        // Transition lebih awal & mulus: cukup sampai setengah, sisanya di drive pursuit
+        if (Math.abs(err) <= HEADING_TOL * 2) {
           navPhaseRef.current = "drive";
           navTickRef.current = 0;
           navScanResetRef.current = false;
           navDriveStartPosRef.current = { x: posRef.current.x, y: posRef.current.y };
           navStallTicksRef.current = 0;
-          navSmoothSpeedRef.current = 0;
+          navSmoothSpeedRef.current = modeRef.current === "NYATA" ? 150 : Math.max(30, navSmoothSpeedRef.current);
           velRef.current = { x: 0, y: 0 };
           angVelRef.current = 0;
           sweepPointsRef.current = [];
@@ -892,9 +937,10 @@ export default function SimulasiPage() {
           l = 0;
           r = 0;
         } else {
-          const speed = 60;
-          if (err > 0) { l = speed; r = -speed; }
-          else { l = -speed; r = speed; }
+          // Gentle arc: belok sambil jalan dikit, bukan spin in place
+          const turnSpeed = Math.round(40 + Math.min(40, Math.abs(err) * 0.3));
+          if (err > 0) { l = turnSpeed; r = -turnSpeed; }
+          else { l = -turnSpeed; r = turnSpeed; }
         }
       }
 
@@ -914,17 +960,24 @@ export default function SimulasiPage() {
         const frx = px + Math.sin(hdg + Math.PI/4) * (ROBOT_R + 2);
         const fry = py - Math.cos(hdg + Math.PI/4) * (ROBOT_R + 2);
         const bodyHit = collides(lx, ly, 2) || collides(rx, ry, 2) || collides(fx, fy, 2) || collides(flx, fly, 2) || collides(frx, fry, 2);
-        const wallAhead = centerDist > 0 && centerDist < 30;
+        // NYATA: skip gridHit (real robot, M1 brake cukup)
+        const gridHit = false;
+        // NYATA: relax wallAhead threshold (real robot, tighter spaces)
+        const wallAhead = centerDist > 0 && centerDist < (modeRef.current === "NYATA" ? 5 : 30);
         const speed = Math.abs(velRef.current.x) + Math.abs(velRef.current.y);
-        const stalled = speed < 0.3;
+        // NYATA: stall detection pakai heading change (yaw dari ESP), bukan physics velRef
+        let stalled = speed < 0.3;
+        if (modeRef.current === "NYATA") {
+          stalled = false; // real robot moves itself — no physics stall
+        }
         if (stalled) { navStallTicksRef.current++; navSmoothSpeedRef.current = Math.max(0, navSmoothSpeedRef.current - 4); }
         else navStallTicksRef.current = 0;
-        if (bodyHit || wallAhead || navStallTicksRef.current >= 30) {
+        if (bodyHit || gridHit || wallAhead || navStallTicksRef.current >= 30) {
           const dx = px - navDriveStartPosRef.current.x;
           const dy = py - navDriveStartPosRef.current.y;
           const distTraveled = Math.hypot(dx, dy);
           // Log stop reason
-          const stopReason = bodyHit ? "bodyHit" : wallAhead ? "wallAhead" : "stalled";
+          const stopReason = bodyHit ? "bodyHit" : gridHit ? "gridHit" : wallAhead ? "wallAhead" : "stalled";
           logEvent(`M3 DRIVE STOP: ${stopReason} dist=${distTraveled.toFixed(0)} stall=${navStallTicksRef.current}`, "nav");
           // Check position-based corner loop
           const cellKey = `${Math.round(px/50)},${Math.round(py/50)}`;
@@ -979,30 +1032,49 @@ export default function SimulasiPage() {
           }
         } else {
           const cDist = sd[CENTER_IDX] || 0;
-          let targetSpeed = 140; // Lebih cepat (was 120)
-          if (cDist > 120) targetSpeed = 180; // Lebih agresif (was 150)
-          else if (cDist < 60) targetSpeed = 90; // Lebih smooth slowdown (was 50→80)
-          const accel = navSmoothSpeedRef.current < targetSpeed ? 12 : 6; // Faster accel, slower decel
-          navSmoothSpeedRef.current = Math.min(targetSpeed, navSmoothSpeedRef.current + accel);
-          const s = Math.round(navSmoothSpeedRef.current);
-          // Corridor centering: compare S6 (left) vs S8 (right)
+          // PREDICTIVE: Check target sector distance for early warning
+          const targetDist = navTargetSectorRef.current >= 0 ? (sd[navTargetSectorRef.current] || 0) : cDist;
+
+          // HEADING PURSUIT: continuously steer toward target sector, not straight ahead
+          let targetHeading = headingDeg;
+          if (navTargetSectorRef.current >= 0) {
+            const cx = SECTORS[navTargetSectorRef.current].cx;
+            targetHeading = navTurnHeadingRef.current + (cx - 90);
+          }
+          let headingErr = targetHeading - headingDeg;
+          if (headingErr > 180) headingErr -= 360;
+          if (headingErr < -180) headingErr += 360;
+          const headSteer = Math.max(-60, Math.min(60, headingErr * 0.8));
+
+          // Side clearance: avoid walls while pursuing target
           const leftDist = sd[5] || 0;
           const rightDist = sd[7] || 0;
-          let steer = 0;
-          if (leftDist > 0 && rightDist > 0) {
-            const diff = rightDist - leftDist;
-            steer = Math.max(-30, Math.min(30, diff * 0.18));
+          let sideSteer = 0;
+          const MIN_SIDE_CLEAR = ROBOT_R + 8;
+          if (leftDist > 0 && leftDist < MIN_SIDE_CLEAR) sideSteer += 30;
+          if (rightDist > 0 && rightDist < MIN_SIDE_CLEAR) sideSteer -= 30;
+
+          let steer = headSteer + sideSteer;
+
+          // Speed: gradual slowdown based on obstacle distance (not abrupt)
+          const turnFactor = 1 - Math.min(1, Math.abs(headingErr) / 45);
+          let targetSpeed = Math.round(80 + turnFactor * 100);
+          // Gradual slowdown: pelan duluan kalau ada tembok di depan
+          const minDist = Math.min(targetDist > 0 ? targetDist : 999, cDist > 0 ? cDist : 999);
+          if (minDist < 120) targetSpeed = Math.min(targetSpeed, 50 + Math.round(minDist * 0.4));
+          if (minDist < 50) targetSpeed = Math.min(targetSpeed, 30);
+          // NYATA: no physics, langsung target speed (skip smooth ramp)
+          if (modeRef.current === "NYATA") {
+            navSmoothSpeedRef.current = targetSpeed;
+          } else {
+            const accel = navSmoothSpeedRef.current < targetSpeed ? 12 : 6;
+            navSmoothSpeedRef.current = Math.min(targetSpeed, navSmoothSpeedRef.current + accel);
           }
-          // Side wall emergency avoidance (ROBOT_R = 13cm)
-          const MIN_SIDE_CLEAR = ROBOT_R + 8; // 21cm minimum clearance
-          if (leftDist > 0 && leftDist < MIN_SIDE_CLEAR) {
-            steer += 40; // steer right strongly
-          }
-          if (rightDist > 0 && rightDist < MIN_SIDE_CLEAR) {
-            steer -= 40; // steer left strongly
-          }
-          l = s + Math.round(steer);
-          r = s - Math.round(steer);
+          const s = Math.round(navSmoothSpeedRef.current);
+          const steerRounded = Math.round(steer);
+
+          l = Math.max(-255, Math.min(255, s + steerRounded));
+          r = Math.max(-255, Math.min(255, s - steerRounded));
         }
       }
 
@@ -1014,7 +1086,8 @@ export default function SimulasiPage() {
         const bx = posRef.current.x + Math.sin(hdg) * (ROBOT_R + 2);
         const by = posRef.current.y - Math.cos(hdg) * (ROBOT_R + 2);
         const rearHit = collides(bx, by, 2);
-        if (clearAhead || navTickRef.current > 60 || rearHit) {
+        const gridRearHit = modeRef.current === "NYATA" && occupancyRef.current.get(gridCellKey(bx, by)) === 2;
+        if (clearAhead || navTickRef.current > 60 || rearHit || gridRearHit) {
           navStuckCountRef.current++;
           if (navStuckCountRef.current >= 2) {
             navPhaseRef.current = "turnaround";
@@ -1031,7 +1104,14 @@ export default function SimulasiPage() {
             speakTTS(pick(ttsAman));
           }
         } else {
-          l = -80; r = -60;
+          // Natural curved reverse: belok sambil mundur, bukan lurus
+          const leftDist = sd[5] || 0;
+          const rightDist = sd[7] || 0;
+          let revSteer = 0;
+          if (leftDist > 0 && rightDist > 0) revSteer = rightDist > leftDist ? 20 : -20;
+          else if (leftDist > 0) revSteer = -20;
+          else if (rightDist > 0) revSteer = 20;
+          l = -60 - revSteer; r = -60 + revSteer;
         }
       }
 
@@ -1040,7 +1120,7 @@ export default function SimulasiPage() {
         if (turned > 180) turned -= 360;
         if (turned < -180) turned += 360;
         setNavTarget(`PUTAR ${Math.abs(turned).toFixed(0)}°`);
-        if (Math.abs(turned) >= 160) {
+        if (Math.abs(turned) >= 150) {
           navStuckCountRef.current = 0;
           navPhaseRef.current = "scan";
           navScanResetRef.current = false;
@@ -1049,51 +1129,72 @@ export default function SimulasiPage() {
           logEvent("M3 TURNAROUND selesai", "nav");
           speakTTS(pick(ttsLanjut));
         } else {
-          l = 80; r = -80;
+          // 3-point turn: forward-back-forward ala mobil, gak spin di tempat
+          const phase3pt = navTickRef.current % 40;
+          if (phase3pt < 15) { l = 60; r = -60; }       // pivot
+          else if (phase3pt < 22) { l = -40; r = -40; } // mundur dikit
+          else { l = 70; r = -50; }                      // lanjut pivot dengan arc
+          navTickRef.current++;
         }
       }
 
+      setMotors(l, r);
       leftMotorRef.current = l;
       rightMotorRef.current = r;
-      setLeftMotor(l);
-      setRightMotor(r);
+
+      // M1 SAFETY OVERRIDE: Final check after all motor calculations
+      // Skip saat M3 aktif — M3 punya logic avoidance sendiri
+      const m3Active = modul3ActiveRef.current && ["drive","turn","turnaround"].includes(navPhaseRef.current);
+      if (!m3Active && modul1ActiveRef.current && distanceRef.current > 0 && distanceRef.current <= effectiveThreshold) {
+        const isMovingToward = (l > 20 && r > 20);
+        if (isMovingToward) {
+          leftMotorRef.current = 0;
+          rightMotorRef.current = 0;
+          setMotors(0, 0);
+          l = 0; r = 0;
+          if (!modul1BrakingRef.current) {
+            setModul1Braking(true);
+            modul1BrakingRef.current = true;
+            logEvent(`M1 SAFETY BRAKE! jarak=${(distanceRef.current/10).toFixed(0)}cm`, "warn");
+          }
+        }
+      }
     }
 
-    // Physical simulation
-    const vl_target = Math.max(-1, Math.min(1, l / 255));
-    const vr_target = Math.max(-1, Math.min(1, r / 255));
-    
-    const V_target = (vl_target + vr_target) / 2 * 1.5; // Slightly lower top speed (was 2.0)
-    const w_target = (vl_target - vr_target) / WHEEL_BASE * 1.2; // Calibrated turn speed
+    // Physical simulation (LATIHAN only — real robot moves itself)
+    if (modeRef.current !== "NYATA") {
+      const vl_target = Math.max(-1, Math.min(1, l / 255));
+      const vr_target = Math.max(-1, Math.min(1, r / 255));
 
-    // Apply acceleration/momentum
-    const targetVx = V_target * Math.sin(h);
-    const targetVy = -V_target * Math.cos(h);
+      const V_target = (vl_target + vr_target) / 2 * 1.5;
+      const w_target = (vl_target - vr_target) / WHEEL_BASE * 1.2;
 
-    velRef.current.x += (targetVx - velRef.current.x) * ACCEL;
-    velRef.current.y += (targetVy - velRef.current.y) * ACCEL;
-    angVelRef.current += (w_target - angVelRef.current) * ANG_ACCEL;
+      const targetVx = V_target * Math.sin(h);
+      const targetVy = -V_target * Math.cos(h);
 
-    // Apply friction
-    if (l === 0 && r === 0) {
-      velRef.current.x *= FRICTION;
-      velRef.current.y *= FRICTION;
-      angVelRef.current *= ANG_FRICTION;
+      velRef.current.x += (targetVx - velRef.current.x) * ACCEL;
+      velRef.current.y += (targetVy - velRef.current.y) * ACCEL;
+      angVelRef.current += (w_target - angVelRef.current) * ANG_ACCEL;
+
+      if (l === 0 && r === 0) {
+        velRef.current.x *= FRICTION;
+        velRef.current.y *= FRICTION;
+        angVelRef.current *= ANG_FRICTION;
+      }
+
+      const dx = velRef.current.x;
+      const dy = velRef.current.y;
+      const dh = angVelRef.current;
+      gyroRef.current = dh;
+
+      if (!collides(p.x + dx, p.y)) p.x += dx;
+      else velRef.current.x *= -0.2;
+
+      if (!collides(p.x, p.y + dy)) p.y += dy;
+      else velRef.current.y *= -0.2;
+
+      headingRef.current = h + dh;
     }
-
-    const dx = velRef.current.x;
-    const dy = velRef.current.y;
-    const dh = angVelRef.current;
-    gyroRef.current = dh;
-
-    // Collision check per axis
-    if (!collides(p.x + dx, p.y)) p.x += dx;
-    else velRef.current.x *= -0.2; // Bounce slightly
-
-    if (!collides(p.x, p.y + dy)) p.y += dy;
-    else velRef.current.y *= -0.2; // Bounce slightly
-
-    headingRef.current = h + dh;
 
     const trail = trailRef.current;
     if (trail.length === 0 || Math.hypot(trail[trail.length - 1].x - p.x, trail[trail.length - 1].y - p.y) > 3) {
@@ -1722,12 +1823,14 @@ export default function SimulasiPage() {
     };
   }, [tick, draw, setMotors, editMode]);
 
-  // Load LABIRIN preset on mount
+  // Load LABIRIN preset on mount (LATIHAN only — NYATA real world has no virtual walls)
   useEffect(() => {
-    obstaclesRef.current = PRESETS.LABIRIN.map(o => ({ ...o }));
-    setObstacleCount(obstaclesRef.current.length);
-    occupancyRef.current = new Map();
-    syncGridFromObstacles();
+    if (modeRef.current !== "NYATA") {
+      obstaclesRef.current = PRESETS.LABIRIN.map(o => ({ ...o }));
+      setObstacleCount(obstaclesRef.current.length);
+      occupancyRef.current = new Map();
+      syncGridFromObstacles();
+    }
     const safePos = findSafeSpawn();
     posRef.current = safePos;
     headingRef.current = 0;
@@ -1994,20 +2097,22 @@ export default function SimulasiPage() {
           const data = JSON.parse(saved);
           if (data.scores) sectorScoreRef.current = data.scores;
           if (data.deadEnds) deadEndRef.current = new Map(data.deadEnds);
-          logEvent(`M3 memori dimuat (${data.deadEnds?.length ?? 0} jejak)`, "info");
+      // Load occupancy grid (LATIHAN only — NYATA environment changes)
         }
       } catch {}
-      // Load occupancy grid
-      try {
-        const occSaved = localStorage.getItem("kei_occupancy");
-        if (occSaved) {
-          const data = JSON.parse(occSaved);
-          if (Array.isArray(data)) {
-            occupancyRef.current = new Map(data);
-            logEvent(`OccGrid dimuat (${data.length} sel)`, "info");
+      // Load occupancy grid (LATIHAN only — NYATA environment changes)
+      if (modeRef.current !== "NYATA") {
+        try {
+          const occSaved = localStorage.getItem("kei_occupancy");
+          if (occSaved) {
+            const data = JSON.parse(occSaved);
+            if (Array.isArray(data)) {
+              occupancyRef.current = new Map(data);
+              logEvent(`OccGrid dimuat (${data.length} sel)`, "info");
+            }
           }
-        }
-      } catch {}
+        } catch {}
+      }
     }
   }, [modul3Active]);
 
@@ -2255,6 +2360,24 @@ export default function SimulasiPage() {
             logEntriesRef={logEntriesRef}
             logTick={logTick}
             setShowLog={setShowLog}
+            navDebugRef={{
+              posRef,
+              headingRef,
+              navPhaseRef,
+              navTargetSectorRef,
+              navSmoothSpeedRef,
+              navSameSectorCountRef,
+              navStallTicksRef,
+              sectorDataRef,
+              occupancyRef,
+              frontierRef,
+              modul1Active,
+              modul2Active,
+              modul3Active,
+              modul4Active,
+              camActive,
+              ttsActive,
+            }}
           />
         )}
         <button
@@ -2375,6 +2498,14 @@ export default function SimulasiPage() {
               const next = mode === "NYATA" ? "LATIHAN" : "NYATA";
               setMode(next);
               modeRef.current = next;
+              if (next === "NYATA") {
+                obstaclesRef.current = [];
+                setObstacleCount(0);
+              } else {
+                obstaclesRef.current = PRESETS.LABIRIN.map(o => ({ ...o }));
+                setObstacleCount(obstaclesRef.current.length);
+                syncGridFromObstacles();
+              }
               if (next === "LATIHAN") disconnectESP();
               logEvent(`Mode ${next}`, "info");
             }}
@@ -2491,13 +2622,33 @@ export default function SimulasiPage() {
 }
 
 // ─── Monitor Panel ──────────────────────────────────────────────
+type NavDebugData = {
+  posRef: React.MutableRefObject<{ x: number; y: number }>;
+  headingRef: React.MutableRefObject<number>;
+  navPhaseRef: React.MutableRefObject<string>;
+  navTargetSectorRef: React.MutableRefObject<number>;
+  navSmoothSpeedRef: React.MutableRefObject<number>;
+  navSameSectorCountRef: React.MutableRefObject<number>;
+  navStallTicksRef: React.MutableRefObject<number>;
+  sectorDataRef: React.MutableRefObject<number[]>;
+  occupancyRef: React.MutableRefObject<Map<string, number>>;
+  frontierRef: React.MutableRefObject<Set<string>>;
+  modul1Active: boolean;
+  modul2Active: boolean;
+  modul3Active: boolean;
+  modul4Active: boolean;
+  camActive: boolean;
+  ttsActive: boolean;
+};
+
 type MonitorProps = {
   logEntriesRef: React.MutableRefObject<Array<{ time: string; msg: string; type: string }>>;
   logTick: number;
   setShowLog: (v: boolean) => void;
+  navDebugRef: NavDebugData;
 };
 
-function MonitorPanel({ logEntriesRef, logTick, setShowLog }: MonitorProps) {
+function MonitorPanel({ logEntriesRef, logTick, setShowLog, navDebugRef }: MonitorProps) {
   const logEndRef = useRef<HTMLDivElement>(null);
   const preRef = useRef<HTMLPreElement>(null);
 
@@ -2514,6 +2665,36 @@ function MonitorPanel({ logEntriesRef, logTick, setShowLog }: MonitorProps) {
     logEntriesRef.current = [];
   };
 
+  const dumpNavDebug = () => {
+    const n = navDebugRef;
+    const log = (msg: string, type: string = "nav") => {
+      logEntriesRef.current.push({
+        time: new Date().toLocaleTimeString("id-ID", { hour12: false }),
+        msg, type: type as any,
+      });
+      if (logEntriesRef.current.length > 100) logEntriesRef.current = logEntriesRef.current.slice(-100);
+    };
+    const SECTORS_LOOKUP = [
+      { id: "S1" },{ id: "S2" },{ id: "S3" },{ id: "S4" },{ id: "S5" },{ id: "S6" },
+      { id: "S7" },{ id: "S8" },{ id: "S9" },{ id: "S10" },{ id: "S11" },{ id: "S12" },
+      { id: "S13" },{ id: "S14" },
+    ];
+    const pos = n.posRef.current;
+    const hdg = (n.headingRef.current * 180 / Math.PI).toFixed(0);
+    const target = n.navTargetSectorRef.current >= 0 ? SECTORS_LOOKUP[n.navTargetSectorRef.current]?.id || "—" : "—";
+    log(`=== DEBUG ===`, "nav");
+    log(`pos=(${pos.x.toFixed(0)},${pos.y.toFixed(0)}) h=${hdg}°`, "nav");
+    log(`phase=${n.navPhaseRef.current} target=${target}`, "nav");
+    log(`speed=${n.navSmoothSpeedRef.current} sameSec=${n.navSameSectorCountRef.current} stall=${n.navStallTicksRef.current}`, "nav");
+    const sd = n.sectorDataRef.current;
+    const sdBuf = sd.map((v,i) => v>0 ? `${SECTORS_LOOKUP[i].id}:${(v/10).toFixed(0)}cm` : null).filter(Boolean).join(" ");
+    log(`sectors: ${sd.filter(v=>v>0).length}/14 filled`, "sensor");
+    if (sdBuf) log(sdBuf, "sensor");
+    log(`grid=${n.occupancyRef.current.size} frontier=${n.frontierRef.current.size}`, "nav");
+    log(`M1=${n.modul1Active} M2=${n.modul2Active} M3=${n.modul3Active} M4=${n.modul4Active} cam=${n.camActive} tts=${n.ttsActive}`, "info");
+    log(`=== DEBUG END ===`, "nav");
+  };
+
   const typeColor = (t: string) => {
     switch (t) {
       case "warn": return "text-yellow-400";
@@ -2528,7 +2709,7 @@ function MonitorPanel({ logEntriesRef, logTick, setShowLog }: MonitorProps) {
   const entries = logEntriesRef.current;
 
   return (
-    <div className="fixed top-14 left-1/2 -translate-x-1/2 z-50 w-[480px] max-h-[70vh] bg-zinc-900/95 backdrop-blur-md rounded-xl border border-white/10 text-[10px] font-mono shadow-2xl flex flex-col">
+    <div className="fixed top-14 left-4 right-4 z-50 max-h-[70vh] bg-zinc-900/95 backdrop-blur-md rounded-xl border border-white/10 text-[10px] font-mono shadow-2xl flex flex-col">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-white/10 shrink-0">
         <span className="text-violet-400 font-bold text-[11px] tracking-wider">LOG</span>
@@ -2536,6 +2717,7 @@ function MonitorPanel({ logEntriesRef, logTick, setShowLog }: MonitorProps) {
           <span className="text-zinc-600 text-[8px]">#{logTick}</span>
           <button onClick={clearLog} className="px-1.5 py-0.5 rounded text-[8px] bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-700 active:scale-90">HAPUS</button>
           <button onClick={copyLog} className="px-1.5 py-0.5 rounded text-[8px] bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-700 active:scale-90">COPY</button>
+          <button onClick={dumpNavDebug} className="px-1.5 py-0.5 rounded text-[8px] bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-700 active:scale-90">NAVSTATE</button>
         </div>
       </div>
 
