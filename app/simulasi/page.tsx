@@ -52,6 +52,12 @@ export default function SimulasiPage() {
   const modul1BrakingRef = useRef(false);
   const [modul2Active, setModul2Active] = useState(false);
   const modul2ActiveRef = useRef(false);
+  // M3: Navigasi Otomatis
+  const [modul3Active, setModul3Active] = useState(false);
+  const modul3ActiveRef = useRef(false);
+  const modul3TargetRef = useRef(-1); // sector index target
+  const modul3StateRef = useRef<"MAJU" | "MUNDUR" | "PUTAR">("MAJU");
+  const [modul3Info, setModul3Info] = useState("—");
   const [modulesOpen, setModulesOpen] = useState(false);
   const sectorDataRef = useRef<number[]>(SECTORS.map(() => -1));
   const [sectorData, setSectorData] = useState<number[]>(SECTORS.map(() => -1));
@@ -421,6 +427,57 @@ export default function SimulasiPage() {
       modul1BrakingRef.current = false;
     }
 
+    // Modul 3: Navigasi otomatis — cari arah kosong dari sector
+    if (modul3ActiveRef.current && !modul1BrakingRef.current) {
+      const sd = sectorDataRef.current;
+      let bestIdx = -1;
+      let bestDist = -1;
+      // Cari sector dengan jarak terjauh, prefer yang dekat tengah (90°)
+      for (let i = 0; i < sd.length; i++) {
+        const d = sd[i];
+        if (d <= 0) continue;
+        // Weight: jarak * bias tengah (cx makin dekat 90 → bias 1.0)
+        const cx = SECTORS[i].cx;
+        const centerBias = 1.0 - Math.abs(cx - 90) / 90 * 0.3; // 0.7–1.0
+        const weighted = d * centerBias;
+        if (weighted > bestDist) {
+          bestDist = weighted;
+          bestIdx = i;
+        }
+      }
+
+      if (bestIdx >= 0) {
+        const targetCx = SECTORS[bestIdx].cx;
+        const targetDist = sd[bestIdx];
+        modul3TargetRef.current = bestIdx;
+
+        // Jika semua sektor terlalu dekat (< 30cm), mundur & putar
+        const allBlocked = sd.every(d => d > 0 && d < 30);
+        if (allBlocked && targetDist < 30) {
+          modul3StateRef.current = "MUNDUR";
+          setModul3Info(`MUNDUR semua ${targetDist.toFixed(0)}cm`);
+          l = -150; r = -150;
+        } else {
+          // Steer ke arah target
+          const error = (targetCx - 90) / 70; // -1..1
+          const baseSpeed = 180;
+          const steer = Math.round(error * 120);
+          l = baseSpeed - steer;
+          r = baseSpeed + steer;
+          modul3StateRef.current = "MAJU";
+          setModul3Info(`${SECTORS[bestIdx].id} ${(targetDist/10).toFixed(0)}cm`);
+        }
+      } else {
+        // Tidak ada data sector — jalan pelan
+        l = 100; r = 100;
+        modul3StateRef.current = "MAJU";
+        setModul3Info("cari...");
+      }
+      setMotors(l, r);
+      leftMotorRef.current = l;
+      rightMotorRef.current = r;
+    }
+
     // Physical simulation (LATIHAN only)
     if (modeRef.current !== "NYATA") {
       const vl_target = Math.max(-1, Math.min(1, l / 255));
@@ -504,6 +561,8 @@ export default function SimulasiPage() {
       modul1Braking,
       modul1Threshold,
       modul2Active,
+      modul3Active,
+      modul3Info,
       modul4Active,
       leds,
       buzzerActive,
@@ -518,7 +577,7 @@ export default function SimulasiPage() {
   }, [
     sensorDist, editMode, editTool,
     modul1Active, modul1Braking, modul1Threshold,
-    modul2Active, modul4Active,
+    modul2Active, modul3Active, modul3Info, modul4Active,
     leds, buzzerActive, camActive, aiStatus,
   ]);
 
@@ -661,6 +720,7 @@ export default function SimulasiPage() {
   useEffect(() => { modul1ThresholdRef.current = modul1Threshold; }, [modul1Threshold]);
   useEffect(() => { modul1BrakingRef.current = modul1Braking; }, [modul1Braking]);
   useEffect(() => { modul2ActiveRef.current = modul2Active; }, [modul2Active]);
+  useEffect(() => { modul3ActiveRef.current = modul3Active; }, [modul3Active]);
   useEffect(() => { modul4ActiveRef.current = modul4Active; }, [modul4Active]);
   useEffect(() => {
     const saved = localStorage.getItem("kei_groq_key");
@@ -981,6 +1041,32 @@ export default function SimulasiPage() {
             )}
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
+                <span className="text-[8px] font-mono text-zinc-500">M3</span>
+                <span className="text-[10px] font-mono text-zinc-300">NAVIGASI</span>
+              </div>
+              <button
+                onClick={() => { setModul3Active(p => !p); modul3ActiveRef.current = !modul3Active; }}
+                className={`px-2 py-0.5 rounded-full text-[8px] font-mono font-bold border transition-colors active:scale-90 ${
+                  modul3Active
+                    ? "bg-emerald-600 border-emerald-500 text-white"
+                    : "bg-zinc-800 border-zinc-700 text-zinc-500"
+                }`}
+              >
+                {modul3Active ? "ON" : "OFF"}
+              </button>
+            </div>
+            {modul3Active && (
+              <div className="pl-4 text-[9px] font-mono space-y-1">
+                <span className="text-cyan-400">{modul3Info}</span>
+                {modul3TargetRef.current >= 0 && (
+                  <span className="text-zinc-600 ml-1">
+                    →{SECTORS[modul3TargetRef.current]?.id} {modul3StateRef.current}
+                  </span>
+                )}
+              </div>
+            )}
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
                 <span className="text-[8px] font-mono text-zinc-500">M4</span>
                 <span className="text-[10px] font-mono text-zinc-300">AI GROQ</span>
               </div>
@@ -1102,6 +1188,7 @@ export default function SimulasiPage() {
               occupancyRef,
               modul1Active,
               modul2Active,
+              modul3Active,
               modul4Active,
               camActive,
               ttsActive,

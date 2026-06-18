@@ -47,6 +47,8 @@ export interface DrawState {
   modul1Braking: boolean;
   modul1Threshold: number;
   modul2Active: boolean;
+  modul3Active: boolean;
+  modul3Info: string;
   modul4Active: boolean;
 
   // Edit mode
@@ -95,6 +97,8 @@ export function drawScene(ctx: CanvasRenderingContext2D, st: DrawState): void {
     modul1Braking,
     modul1Threshold,
     modul2Active,
+    modul3Active,
+    modul3Info,
     modul4Active,
     editMode,
     editTool,
@@ -558,8 +562,12 @@ export function drawScene(ctx: CanvasRenderingContext2D, st: DrawState): void {
       vh - 58
     );
   }
+  if (modul3Active) {
+    ctx.fillStyle = "rgba(34, 211, 238, 0.2)";
+    ctx.fillText(`M3:${modul3Info}`, 8, vh - 68);
+  }
   if (modul4Active) {
     ctx.fillStyle = "rgba(139, 92, 246, 0.2)";
-    ctx.fillText(`AI:${aiStatus} call#${aiCallCount}`, 8, vh - 68);
+    ctx.fillText(`AI:${aiStatus} call#${aiCallCount}`, 8, vh - 78);
   }
 }
