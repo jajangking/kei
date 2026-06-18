@@ -56,6 +56,20 @@ export default function SimulasiPage() {
   const sectorDataRef = useRef<number[]>(SECTORS.map(() => -1));
   const [sectorData, setSectorData] = useState<number[]>(SECTORS.map(() => -1));
 
+  // M2 Auto-Nav state
+  const navPhaseRef = useRef<"FWD" | "TURN" | "STUCK" | "FWD_AFTER_TURN">("FWD");
+  const navFwdAfterTurnTimerRef = useRef(0); // end-of-turn forced forward timer
+  const navTargetSectorRef = useRef(-1);
+  const navTimerRef = useRef(0);
+  const navLogThrottleRef = useRef(0);
+  const navPrevPosRef = useRef({ x: 0, y: 0 });
+  const navStuckCountRef = useRef(0);
+  const navDirRef = useRef<"L" | "R">("L"); // last turn direction for alternation
+  const navLastMotorRef = useRef({ l: 0, r: 0 }); // throttle setMotors spam
+  const navSweepReadyRef = useRef(false); // initial sweep complete
+  const navForwardDistRef = useRef(MAX_SENSE); // real-time forward distance (70-110°)
+  const navDecisionTimerRef = useRef(0); // hysteresis timer
+
   // M4: Groq AI Hybrid
   const [modul4Active, setModul4Active] = useState(false);
   const modul4ActiveRef = useRef(false);
@@ -302,7 +316,16 @@ export default function SimulasiPage() {
 
     // Servo sweep
     if (modul2ActiveRef.current) {
-      let newAngle = Math.round(90 + Math.sin(Date.now() / 1000 * 0.7) * 70);
+      // Center servo when moving forward so laser points ahead for collision detection
+      const isFwd = navPhaseRef.current === "FWD" && navSweepReadyRef.current;
+      let newAngle: number;
+      if (isFwd) {
+        // Micro-sweep ±15° so front laser mostly forward, some mapping
+        newAngle = Math.round(90 + Math.sin(Date.now() / 1000 * 0.3) * 15);
+      } else {
+        // Full sweep to find openings
+        newAngle = Math.round(90 + Math.sin(Date.now() / 1000 * 0.7) * 70);
+      }
       if (modeRef.current === "NYATA") {
         if (Math.abs(newAngle - servoRef.current) >= 3) sendServo(newAngle);
       } else {
@@ -316,6 +339,17 @@ export default function SimulasiPage() {
       const d = castRayAngle(servoRad, posRef.current, headingRef.current, obstaclesRef.current, scanDotsRef.current, true);
       distanceRef.current = d;
       setSensorDist(d > 0 ? `${(d / 10).toFixed(0)}cm` : "---");
+
+      // Update real-time forward distance (servo in 70-110° → forward-facing)
+      if (modul2ActiveRef.current) {
+        const sa = servoRef.current;
+        if (sa >= 70 && sa <= 110) {
+          navForwardDistRef.current = d > 0 ? Math.min(navForwardDistRef.current, d) : navForwardDistRef.current;
+        } else {
+          // Reset when servo looks away so we don't use stale value
+          navForwardDistRef.current = MAX_SENSE;
+        }
+      }
 
       if (modul2ActiveRef.current && d > 0) {
         const angleDiff = Math.abs(servoRef.current - lastSweepAngleRef.current);
@@ -419,6 +453,178 @@ export default function SimulasiPage() {
     } else {
       setModul1Braking(false);
       modul1BrakingRef.current = false;
+    }
+
+    // M2 Auto Navigation: sector-based steering with exploration + visited penalty
+    if (modul2ActiveRef.current && modeRef.current !== "NYATA" && !joyActiveRef.current && !editMode) {
+      const sd = sectorDataRef.current;
+      const navNow = Date.now();
+
+      // Wait for initial sweep: need >=10/14 sectors populated before moving
+      const populated = sd.filter(d => d > 0).length;
+      if (populated < 10) {
+        l = 0; r = 0;
+        navSweepReadyRef.current = false;
+        navPhaseRef.current = "FWD";
+        if (navNow - navLogThrottleRef.current > 2500) {
+          navLogThrottleRef.current = navNow;
+          logEvent("M2 scan awal... " + populated + "/14 sektor", "nav");
+        }
+      } else {
+        navSweepReadyRef.current = true;
+        const threshold = modul1ThresholdRef.current;
+        const occ = occupancyRef.current;
+
+        // --- visited heatmap: increment counter for current grid cell ---
+        const myKey = gridCellKey(p.x, p.y);
+        const visitCount = occ.get(myKey) || 0;
+        // Use occupancy map values: 1=visited, >10=heavily visited
+        // Store visited count in the 3-255 range
+        if (visitCount <= 2) {
+          occ.set(myKey, visitCount + 1); // stay 1 if was 1, becomes 3+ if visited repeatedly
+        } else if (visitCount < 255) {
+          occ.set(myKey, 5); // mark as heavily visited
+        }
+        // Track total explored cells separately
+        // Explored = cells with value >= 1 (free) or 2 (obstacle)
+        let exploredCount = 0;
+        occ.forEach((v) => { if (v >= 1) exploredCount++; });
+
+        // Score sectors: distance + exploration + visited penalty
+        const gridStep = GRID_STEP;
+        let bestScore = -100000; // can be negative
+        let bestIdx = 6;
+        for (let i = 0; i < SECTORS.length; i++) {
+          const dist = sd[i];
+          if (dist <= 0) { continue; }
+          const offset = (SECTORS[i].cx - 90) * Math.PI / 180;
+          const weight = Math.cos(offset);
+          const distScore = dist * Math.max(0.3, weight);
+
+          // Count unknown AND visited cells in this direction
+          const rh = headingRef.current + offset;
+          const rx = Math.sin(rh);
+          const ry = -Math.cos(rh);
+          const maxSteps = Math.min(Math.floor(dist / gridStep), 20);
+          let unknown = 0;
+          let visitedPenalty = 0;
+          for (let s = 3; s < maxSteps; s++) {
+            const sx = p.x + rx * gridStep * s;
+            const sy = p.y + ry * gridStep * s;
+            const k = gridCellKey(sx, sy);
+            const val = occ.get(k);
+            if (!val) {
+              unknown++;
+            } else if (val > 2) {
+              // Heavily visited area -> penalize
+              visitedPenalty += val;
+            }
+          }
+
+          // Score: distance + exploration bonus - visited penalty
+          const exploreScore = unknown * 80;
+          const penalizedVisited = visitedPenalty * 15;
+          const score = distScore * 0.5 + exploreScore * 0.5 - penalizedVisited;
+          if (score > bestScore) { bestScore = score; bestIdx = i; }
+        }
+
+        const centerDist = navForwardDistRef.current < MAX_SENSE ? navForwardDistRef.current : (sd[6] > 0 ? sd[6] : MAX_SENSE);
+        const anyCenter = sd.filter(d => d > 0);
+
+        // Detect stall: motor running but barely moving
+        const dp = Math.hypot(p.x - navPrevPosRef.current.x, p.y - navPrevPosRef.current.y);
+        navPrevPosRef.current = { x: p.x, y: p.y };
+        const motorRunning = l !== 0 || r !== 0;
+        const stalled = motorRunning && dp < 0.5 && (navNow - navTimerRef.current > 400);
+
+        // Hysteresis: don't re-decide direction for 800ms when turning
+        const decisionAge = navNow - navDecisionTimerRef.current;
+        const committed = (navPhaseRef.current === "TURN" || navPhaseRef.current === "STUCK") && decisionAge < 800;
+
+        // Turn finished -> time to move forward
+        const turnFinished = navPhaseRef.current === "TURN" && !committed && decisionAge >= 800;
+
+        // If M1 brake fired, abort forward push immediately
+        if (navPhaseRef.current === "FWD_AFTER_TURN" && modul1BrakingRef.current) {
+          navPhaseRef.current = "FWD";
+          navStuckCountRef.current = 0;
+        }
+
+        if (navPhaseRef.current === "FWD_AFTER_TURN") {
+          const fwdAge = navNow - navFwdAfterTurnTimerRef.current;
+          const tooClose = navForwardDistRef.current < MAX_SENSE && navForwardDistRef.current < threshold + 30;
+          if (fwdAge > 400 && tooClose) {
+            navPhaseRef.current = "FWD";
+            navStuckCountRef.current = 0;
+          } else if (fwdAge < 1200) {
+            l = 130; r = 130;
+          } else {
+            navPhaseRef.current = "FWD";
+          }
+        } else if (turnFinished) {
+          l = 130; r = 130;
+          navPhaseRef.current = "FWD_AFTER_TURN";
+          navFwdAfterTurnTimerRef.current = navNow;
+          navStuckCountRef.current = 0;
+          if (navNow - navLogThrottleRef.current > 2500) {
+            navLogThrottleRef.current = navNow;
+            logEvent("M2 jelajah... " + exploredCount + " sel", "nav");
+          }
+        } else if (stalled && !committed) {
+          navStuckCountRef.current++;
+          if (navStuckCountRef.current >= 3) {
+            const dir = navDirRef.current === "L" ? "R" : "L";
+            navDirRef.current = dir;
+            l = dir === "L" ? -150 : 150;
+            r = dir === "L" ? 150 : -150;
+            navPhaseRef.current = "STUCK";
+            navDecisionTimerRef.current = navNow;
+            for (let i = 0; i < SECTORS.length; i++) sectorDataRef.current[i] = -1;
+            setSectorData([...sectorDataRef.current]);
+            if (navNow - navLogThrottleRef.current > 1500) {
+              navLogThrottleRef.current = navNow;
+              logEvent("M2 STUCK spin", "warn");
+            }
+          } else {
+            l = -120; r = 100;
+            navPhaseRef.current = "STUCK";
+          }
+        } else if (committed) {
+          const turnLeft = navDirRef.current === "L";
+          l = turnLeft ? -140 : 140;
+          r = turnLeft ? 140 : -140;
+        } else if (centerDist > threshold + 60) {
+          l = 200; r = 200;
+          navPhaseRef.current = "FWD";
+          navStuckCountRef.current = 0;
+          if (navNow - navLogThrottleRef.current > 2000) {
+            navLogThrottleRef.current = navNow;
+            logEvent("M2 maju " + (centerDist/10).toFixed(0) + "cm map=" + exploredCount, "nav");
+          }
+        } else {
+          const turnLeft = SECTORS[bestIdx].cx < 90;
+          const outer = 180;
+          const inner = 60;
+          l = turnLeft ? inner : outer;
+          r = turnLeft ? outer : inner;
+          navDirRef.current = turnLeft ? "L" : "R";
+          navPhaseRef.current = "TURN";
+          navDecisionTimerRef.current = navNow;
+          navStuckCountRef.current = 0;
+          if (navNow - navLogThrottleRef.current > 1200) {
+            logEvent("M2 " + (turnLeft ? "L" : "R") + " " + SECTORS[bestIdx].id + " d=" + (sd[bestIdx]/10).toFixed(0) + "cm", "nav");
+          }
+        }
+
+        navTimerRef.current = navNow;
+        const prevM = navLastMotorRef.current;
+        if (l !== prevM.l || r !== prevM.r) {
+          setMotors(l, r);
+          navLastMotorRef.current = { l, r };
+        }
+        leftMotorRef.current = l;
+        rightMotorRef.current = r;
+      }
     }
 
     // Physical simulation (LATIHAN only)
@@ -596,7 +802,7 @@ export default function SimulasiPage() {
     };
     const handleKeyUp = (e: KeyboardEvent) => {
       keys.delete(e.key.toLowerCase());
-      if (keys.size === 0 && !joyActiveRef.current) setMotors(0, 0);
+      if (keys.size === 0 && !joyActiveRef.current && !modul2ActiveRef.current) setMotors(0, 0);
     };
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
@@ -604,7 +810,7 @@ export default function SimulasiPage() {
     let running = true;
     const loop = () => {
       if (!running) return;
-      if (!joyActiveRef.current && !editMode && !(modeRef.current === "NYATA" && !telemetryRef.current)) {
+      if (!joyActiveRef.current && !editMode && !modul2ActiveRef.current && !(modeRef.current === "NYATA" && !telemetryRef.current)) {
         let lm = 0, rm = 0;
         if (keys.has("w") || keys.has("arrowup")) { lm = 255; rm = 255; }
         if (keys.has("s") || keys.has("arrowdown")) { lm = -255; rm = -255; }
