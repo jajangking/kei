@@ -593,15 +593,44 @@ export default function SimulasiPage() {
         const slowDist = 200; // mulai slow down di 20cm
         const stopDist = 80;  // berhenti & reverse di ~8cm
 
+        // Corridor check: skip failSet at corners
+        const sd_cor = sectorDataRef.current;
+        const left_cor = sd_cor.slice(0, 3).filter(d => d > 0);
+        const right_cor = sd_cor.slice(11, 14).filter(d => d > 0);
+        const inCorridor = left_cor.length > 0 && right_cor.length > 0
+          && Math.min(...left_cor) < 300 && Math.min(...right_cor) < 300;
         if (frontDist > 0 && frontDist < stopDist && tick > 5) {
-          if (modul3TargetRef.current >= 0) {
-            m3FailSetRef.current.add(modul3TargetRef.current);
-            logEvent("M3 x" + (SECTORS[modul3TargetRef.current]?.id || "?") + " front=" + (frontDist/10).toFixed(0) + "cm failSet=" + m3FailSetRef.current.size, "nav");
+          // Corner check: open path to side?
+          const sd_cnr = sectorDataRef.current;
+          let cornerIdx = -1;
+          let cornerDist = 0;
+          for (let i = 0; i < sd_cnr.length; i++) {
+            const d = sd_cnr[i];
+            if (d > frontDist + 100) {
+              if (d > cornerDist) { cornerDist = d; cornerIdx = i; }
+            }
           }
-          m3StateRef.current = "REVERSE"; m3TickRef.current = 0;
-          m3StallCntRef.current = 0;
-          modul3StateRef.current = "REVERSE";
-          setModul3Info("MENTOK!");
+          if (cornerIdx >= 0) {
+            const bestD = sd_cnr[cornerIdx];
+            logEvent("M3 CORNER " + SECTORS[cornerIdx].id + " d=" + (bestD/10).toFixed(0) + "cm ->TURN", "nav");
+            modul3TargetRef.current = cornerIdx;
+            const targetCx = SECTORS[cornerIdx].cx;
+            m3TargetHdgRef.current = headingRef.current + (targetCx - 90) * Math.PI / 180;
+            m3StateRef.current = "TURN"; m3TickRef.current = 0;
+            modul3StateRef.current = "TURN";
+            setModul3Info("BELOK ->" + SECTORS[cornerIdx].id);
+          } else {
+            if (modul3TargetRef.current >= 0 && !inCorridor) {
+              m3FailSetRef.current.add(modul3TargetRef.current);
+              logEvent("M3 x" + (SECTORS[modul3TargetRef.current]?.id || "?") + " front=" + (frontDist/10).toFixed(0) + "cm failSet=" + m3FailSetRef.current.size, "nav");
+            } else if (inCorridor && modul3TargetRef.current >= 0) {
+              logEvent("M3 CORRIDOR BUMP " + (SECTORS[modul3TargetRef.current]?.id || "?") + " front=" + (frontDist/10).toFixed(0) + "cm", "nav");
+            }
+            m3StateRef.current = "REVERSE"; m3TickRef.current = 0;
+            m3StallCntRef.current = 0;
+            modul3StateRef.current = "REVERSE";
+            setModul3Info("MENTOK!");
+          }
         } else {
           const target = m3TargetHdgRef.current;
           let err = 0;
@@ -649,17 +678,31 @@ export default function SimulasiPage() {
         if (tick === 0) {
           logEvent("M3 REVERSE consecFail=" + m3ConsecFailRef.current + " failSet=" + m3FailSetRef.current.size + " pos=(" + Math.round(posRef.current.x) + "," + Math.round(posRef.current.y) + ")", "nav");
         }
+
+        // Corridor check: left (S1-S3) + right (S12-S14) both close
+        const sd = sectorDataRef.current;
+        const leftSectors = sd.slice(0, 3).filter(d => d > 0);
+        const rightSectors = sd.slice(11, 14).filter(d => d > 0);
+        const leftClose = leftSectors.length > 0 && Math.min(...leftSectors) < 300;
+        const rightClose = rightSectors.length > 0 && Math.min(...rightSectors) < 300;
+        const inCorridor = leftClose && rightClose;
+
+        if (inCorridor && tick > 20 && tick % 10 === 0) {
+          logEvent("M3 CORRIDOR L=" + (Math.min(...leftSectors)/10).toFixed(0) + "cm R=" + (Math.min(...rightSectors)/10).toFixed(0) + "cm t=" + tick, "nav");
+        }
+
+        const dir = m3ConsecFailRef.current % 2 === 0 ? 1 : -1;
+
         if (tick < 25) {
           l = -180; r = -180;
         } else if (tick < 60) {
-          const dir = m3ConsecFailRef.current % 2 === 0 ? 1 : -1;
           l = dir * 130; r = -dir * 130;
         } else if (tick < 80) {
           l = 0; r = 0;
         } else {
           m3StateRef.current = "IDLE"; m3TickRef.current = 0;
           m3ConsecFailRef.current++;
-          logEvent("M3 REVERSE selesai consecFail=" + m3ConsecFailRef.current, "nav");
+          logEvent("M3 REVERSE selesai consecFail=" + m3ConsecFailRef.current + " corridor=" + inCorridor, "nav");
           if (m3ConsecFailRef.current > 3) {
             m3FailSetRef.current.clear();
             m3ConsecFailRef.current = 0;
