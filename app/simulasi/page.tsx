@@ -63,6 +63,7 @@ export default function SimulasiPage() {
   const m3RotatingRef = useRef(false);
   const m3TargetHeadingRef = useRef(0);
   const m3SectorAngleRef = useRef<number[]>(SECTORS.map(() => -1));
+  const m3MovingForwardRef = useRef(false);
   const [modulesOpen, setModulesOpen] = useState(false);
   const sectorDataRef = useRef<number[]>(SECTORS.map(() => -1));
   const [sectorData, setSectorData] = useState<number[]>(SECTORS.map(() => -1));
@@ -332,15 +333,41 @@ export default function SimulasiPage() {
       if (Math.abs(err) < 0.087) { // ~5°
         m3RotatingRef.current = false;
         if (m3LockCx >= 0) {
-          // Rotation done — servo ke 90 (lurus)
+          // Rotation done — reset angular velocity zero biar ga drift
+          angVelRef.current = 0;
+          velRef.current = { x: 0, y: 0 };
+          // servo ke 90, maju ke arah sector
           if (modeRef.current === "NYATA") sendServo(90);
           else servoRef.current = 90;
+          m3MovingForwardRef.current = true;
+          setMotors(180, 180);
+        } else {
+          setMotors(0, 0);
         }
-        setMotors(0, 0);
       } else {
         const power = Math.min(255, Math.max(80, Math.abs(err) * 300));
         if (err > 0) setMotors(Math.round(power), -Math.round(power));
         else setMotors(-Math.round(power), Math.round(power));
+      }
+    }
+    // M3 forward — maju lurus ke arah sector setelah rotation done
+    if (modul3ActiveRef.current && m3MovingForwardRef.current) {
+      const dNow = distanceRef.current;
+      if (dNow > 0 && dNow <= modul1ThresholdRef.current) {
+        // Nyampe tembok → stop, rescan dari awal
+        m3MovingForwardRef.current = false;
+        m3LockedRef.current = false;
+        m3LockAngleRef.current = -1;
+        m3SectorsReadyRef.current = false;
+        m3SectorAngleRef.current = SECTORS.map(() => -1);
+        sectorDataRef.current = SECTORS.map(() => -1);
+        m3BestDistRef.current = 0;
+        m3BestAngleRef.current = -1;
+        setMotors(0, 0);
+        logEvent("M3 sampai tembok → rescan", "nav");
+      } else {
+        // Maju lurus
+        setMotors(180, 180);
       }
     }
     // Servo sweep (tetep jalan selama turn-around, mati cuma pas lock-rotate)
