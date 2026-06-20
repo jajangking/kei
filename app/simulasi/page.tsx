@@ -471,7 +471,7 @@ export default function SimulasiPage() {
         if (tick % 20 === 0 && tick > 0) {
           logEvent(`M3 SCAN t=${tick} fresh=${fresh}/${SECTORS.length} pos=(${Math.round(posRef.current.x)},${Math.round(posRef.current.y)})`, "nav");
         }
-        if (tick > 80 && (fresh >= Math.ceil(SECTORS.length * 0.7) || tick > 240)) {
+        if (tick > 80 && (fresh >= Math.ceil(SECTORS.length * 0.5) || tick > 240)) {
           m3ScanBufRef.current = [...sectorDataRef.current];
           let bestIdx = -1;
           let bestScore = -Infinity;
