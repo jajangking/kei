@@ -71,6 +71,7 @@ export default function SimulasiPage() {
   const m3FailSetRef = useRef(new Set<number>()); // sectors that led to dead-end
   const m3ScanBufRef = useRef<number[]>([]); // sector snapshot at decision time
   const m3ConsecFailRef = useRef(0);      // consecutive failed attempts
+  const m3SkipSectorRef = useRef(-1);      // sector to avoid (corner loop)
 
   // M4: Groq AI Hybrid
   const [modul4Active, setModul4Active] = useState(false);
@@ -551,6 +552,9 @@ export default function SimulasiPage() {
 
       // -- TURN: putar di tempat ke heading target --
       else if (st === "TURN") {
+        // Normalize heading to [-PI, PI]
+        while (headingRef.current > Math.PI) headingRef.current -= 2 * Math.PI;
+        while (headingRef.current < -Math.PI) headingRef.current += 2 * Math.PI;
         const target = m3TargetHdgRef.current;
         if (target === null) {
           m3StateRef.current = "SCAN"; m3TickRef.current = 0;
@@ -590,46 +594,48 @@ export default function SimulasiPage() {
       else if (st === "DRIVE") {
         const frontDist = distanceRef.current > 0 ? distanceRef.current : 400;
 
-        const slowDist = 200; // mulai slow down di 20cm
-        const stopDist = 80;  // berhenti & reverse di ~8cm
+        const slowDist = 200;
+        const stopDist = 80;
 
-        // Corridor check: skip failSet at corners
-        const sd_cor = sectorDataRef.current;
-        const left_cor = sd_cor.slice(0, 3).filter(d => d > 0);
-        const right_cor = sd_cor.slice(11, 14).filter(d => d > 0);
-        const inCorridor = left_cor.length > 0 && right_cor.length > 0
-          && Math.min(...left_cor) < 300 && Math.min(...right_cor) < 300;
         if (frontDist > 0 && frontDist < stopDist && tick > 5) {
-          // Corner check: open path to side?
+          // Corridor check: kiri+kanan tembok
           const sd_cnr = sectorDataRef.current;
-          let cornerIdx = -1;
-          let cornerDist = 0;
-          for (let i = 0; i < sd_cnr.length; i++) {
-            const d = sd_cnr[i];
-            if (d > frontDist + 100) {
-              if (d > cornerDist) { cornerDist = d; cornerIdx = i; }
-            }
-          }
-          if (cornerIdx >= 0) {
-            const bestD = sd_cnr[cornerIdx];
-            logEvent("M3 CORNER " + SECTORS[cornerIdx].id + " d=" + (bestD/10).toFixed(0) + "cm ->TURN", "nav");
-            modul3TargetRef.current = cornerIdx;
-            const targetCx = SECTORS[cornerIdx].cx;
-            m3TargetHdgRef.current = headingRef.current + (targetCx - 90) * Math.PI / 180;
-            m3StateRef.current = "TURN"; m3TickRef.current = 0;
-            modul3StateRef.current = "TURN";
-            setModul3Info("BELOK ->" + SECTORS[cornerIdx].id);
+          const leftW = sd_cnr.filter(function(v, i) { return i < 3 && v > 0; });
+          const rightW = sd_cnr.filter(function(v, i) { return i >= 11 && i < 14 && v > 0; });
+          const inCorridor = leftW.length > 0 && rightW.length > 0
+            && Math.min.apply(null, leftW) < 300 && Math.min.apply(null, rightW) < 300;
+
+          if (inCorridor) {
+            l = 60; r = 60;
+            logEvent("M3 CORRIDOR slow f=" + (frontDist/10).toFixed(0) + "cm", "nav");
           } else {
-            if (modul3TargetRef.current >= 0 && !inCorridor) {
-              m3FailSetRef.current.add(modul3TargetRef.current);
-              logEvent("M3 x" + (SECTORS[modul3TargetRef.current]?.id || "?") + " front=" + (frontDist/10).toFixed(0) + "cm failSet=" + m3FailSetRef.current.size, "nav");
-            } else if (inCorridor && modul3TargetRef.current >= 0) {
-              logEvent("M3 CORRIDOR BUMP " + (SECTORS[modul3TargetRef.current]?.id || "?") + " front=" + (frontDist/10).toFixed(0) + "cm", "nav");
+            let cornerIdx = -1;
+            let cornerDist = 0;
+            for (let i = 0; i < sd_cnr.length; i++) {
+              const d = sd_cnr[i];
+              if (d > frontDist + 100 && i !== m3SkipSectorRef.current) {
+                if (d > cornerDist) { cornerDist = d; cornerIdx = i; }
+              }
             }
-            m3StateRef.current = "REVERSE"; m3TickRef.current = 0;
-            m3StallCntRef.current = 0;
-            modul3StateRef.current = "REVERSE";
-            setModul3Info("MENTOK!");
+            if (cornerIdx >= 0) {
+              const bestD = sd_cnr[cornerIdx];
+              logEvent("M3 CORNER " + SECTORS[cornerIdx].id + " d=" + (bestD/10).toFixed(0) + "cm ->TURN", "nav");
+              modul3TargetRef.current = cornerIdx;
+              const targetCx = SECTORS[cornerIdx].cx;
+              m3TargetHdgRef.current = headingRef.current + (targetCx - 90) * Math.PI / 180;
+              m3StateRef.current = "TURN"; m3TickRef.current = 0;
+              modul3StateRef.current = "TURN";
+              setModul3Info("BELOK ->" + SECTORS[cornerIdx].id);
+            } else {
+              if (modul3TargetRef.current >= 0) {
+                m3FailSetRef.current.add(modul3TargetRef.current);
+                logEvent("M3 x" + (SECTORS[modul3TargetRef.current]?.id || "?") + " front=" + (frontDist/10).toFixed(0) + "cm failSet=" + m3FailSetRef.current.size, "nav");
+              }
+              m3StateRef.current = "REVERSE"; m3TickRef.current = 0;
+              m3StallCntRef.current = 0;
+              modul3StateRef.current = "REVERSE";
+              setModul3Info("MENTOK!");
+            }
           }
         } else {
           const target = m3TargetHdgRef.current;
@@ -678,6 +684,7 @@ export default function SimulasiPage() {
         if (tick === 0) {
           logEvent("M3 REVERSE consecFail=" + m3ConsecFailRef.current + " failSet=" + m3FailSetRef.current.size + " pos=(" + Math.round(posRef.current.x) + "," + Math.round(posRef.current.y) + ")", "nav");
         }
+          m3SkipSectorRef.current = -1;
 
         // Corridor check: left (S1-S3) + right (S12-S14) both close
         const sd = sectorDataRef.current;
@@ -686,10 +693,6 @@ export default function SimulasiPage() {
         const leftClose = leftSectors.length > 0 && Math.min(...leftSectors) < 300;
         const rightClose = rightSectors.length > 0 && Math.min(...rightSectors) < 300;
         const inCorridor = leftClose && rightClose;
-
-        if (inCorridor && tick > 20 && tick % 10 === 0) {
-          logEvent("M3 CORRIDOR L=" + (Math.min(...leftSectors)/10).toFixed(0) + "cm R=" + (Math.min(...rightSectors)/10).toFixed(0) + "cm t=" + tick, "nav");
-        }
 
         const dir = m3ConsecFailRef.current % 2 === 0 ? 1 : -1;
 
@@ -749,6 +752,9 @@ export default function SimulasiPage() {
 
       headingRef.current = h + dh;
     }
+    // Normalize heading for both modes
+    while (headingRef.current > Math.PI) headingRef.current -= 2 * Math.PI;
+    while (headingRef.current < -Math.PI) headingRef.current += 2 * Math.PI;
 
     const trail = trailRef.current;
     if (trail.length === 0 || Math.hypot(trail[trail.length - 1].x - p.x, trail[trail.length - 1].y - p.y) > 3) {
