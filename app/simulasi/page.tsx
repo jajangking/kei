@@ -276,6 +276,7 @@ export default function SimulasiPage() {
         break;
       }
     }
+    if (done.every(v => v)) { done.fill(false); logEvent("M3 semua sektor stuck → reset", "nav"); }
   }, [logEvent]);
   const resetM3Forward = useCallback(() => {
     m3MovingForwardRef.current = false;
@@ -401,10 +402,8 @@ export default function SimulasiPage() {
           m3StallIdleTicksRef.current = 0;
           setMotors(180, 180);
         } else {
-          // Rotation tanpa lock — reset semua, tunggu data baru
+          // Rotation tanpa lock — reset data scan aja, done tetap biar gak milih celah yg sama
           m3SectorsReadyRef.current = false;
-          m3SectorDoneRef.current = SECTORS.map(() => false);
-          m3NoRunCountRef.current = 0;
           sectorDataRef.current = SECTORS.map(() => -1);
           setSectorData(SECTORS.map(() => -1));
           m3SectorAngleRef.current = SECTORS.map(() => -1);
@@ -578,11 +577,11 @@ export default function SimulasiPage() {
       if (m3SectorsReadyRef.current && !m3LockedRef.current && !m3ReversingRef.current) {
         const sd = sectorDataRef.current;
         const done = m3SectorDoneRef.current;
-        // Cari longest contiguous run of sectors distance > 200 (skip yg done)
+        // Cari longest contiguous run of sectors distance > 120 (skip yg done)
         let bestRunStart = -1, bestRunLen = 0;
         let curStart = -1, curLen = 0;
         for (let i = 0; i < SECTORS.length; i++) {
-          if (sd[i] > 200 && !done[i]) {
+          if (sd[i] > 120 && !done[i]) {
             if (curStart < 0) curStart = i;
             curLen++;
             if (curLen > bestRunLen) { bestRunLen = curLen; bestRunStart = curStart; }
@@ -612,11 +611,12 @@ export default function SimulasiPage() {
           // Ga dapet run — corner detection: semua sektor terisi pendek
           m3NoRunCountRef.current++;
           const filledVals = sd.filter(v => v > 0);
-          const shortCount = filledVals.filter(v => v < 100).length;
+          const shortCount = filledVals.filter(v => v < 80).length;
           const allShort = filledVals.length >= 6 && shortCount === filledVals.length;
           if (allShort || m3NoRunCountRef.current >= 3) {
-            // Corner — tandai sektor terpendek sbg done, mundur
+            // Corner atau semua celah diblok done
             if (allShort) {
+              // Corner beneran — tandai terpendek, mundur
               let minIdx = -1, minD = Infinity;
               for (let i = 0; i < sd.length; i++) {
                 if (sd[i] > 0 && sd[i] < minD) { minD = sd[i]; minIdx = i; }
@@ -627,18 +627,29 @@ export default function SimulasiPage() {
                 m3SectorDoneRef.current.fill(false);
                 logEvent("M3 semua sektor done → reset", "nav");
               }
+              // Reset state scan + reverse
+              m3SectorsReadyRef.current = false;
+              sectorDataRef.current = SECTORS.map(() => -1);
+              m3SectorAngleRef.current = SECTORS.map(() => -1);
+              m3BestDistRef.current = 0;
+              m3BestAngleRef.current = -1;
+              m3NoRunCountRef.current = 0;
+              m3ReversingRef.current = true;
+              m3ReverseTicksRef.current = 0;
+              setMotors(-200, -200);
+              logEvent("M3 corner → mundur", "nav");
+            } else {
+              // Celah ada tapi diblok done → reset done, scan ulang
+              m3SectorDoneRef.current.fill(false);
+              m3SectorsReadyRef.current = false;
+              sectorDataRef.current = SECTORS.map(() => -1);
+              m3SectorAngleRef.current = SECTORS.map(() => -1);
+              m3BestDistRef.current = 0;
+              m3BestAngleRef.current = -1;
+              m3NoRunCountRef.current = 0;
+              setMotors(0, 0);
+              logEvent("M3 reset done — celah baru tersedia", "nav");
             }
-            // Reset state scan + reverse
-            m3SectorsReadyRef.current = false;
-            sectorDataRef.current = SECTORS.map(() => -1);
-            m3SectorAngleRef.current = SECTORS.map(() => -1);
-            m3BestDistRef.current = 0;
-            m3BestAngleRef.current = -1;
-            m3NoRunCountRef.current = 0;
-            m3ReversingRef.current = true;
-            m3ReverseTicksRef.current = 0;
-            setMotors(-200, -200);
-            logEvent("M3 corner → mundur", "nav");
           } else {
             // Masih ada celah — muter balik, scan ulang
             m3RotatingRef.current = true;
