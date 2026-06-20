@@ -52,15 +52,25 @@ export default function SimulasiPage() {
   const modul1BrakingRef = useRef(false);
   const [modul2Active, setModul2Active] = useState(false);
   const modul2ActiveRef = useRef(false);
-  // M3: Navigasi Otomatis
+  // M3: Navigasi Otomatis (otak cerdas)
   const [modul3Active, setModul3Active] = useState(false);
   const modul3ActiveRef = useRef(false);
   const modul3TargetRef = useRef(-1); // sector index target
-  const modul3StateRef = useRef<"MAJU" | "MUNDUR" | "PUTAR">("MAJU");
-  const [modul3Info, setModul3Info] = useState("—");
+  const modul3StateRef = useRef<string>("--");
+  const [modul3Info, setModul3Info] = useState("--");
   const [modulesOpen, setModulesOpen] = useState(false);
   const sectorDataRef = useRef<number[]>(SECTORS.map(() => -1));
   const [sectorData, setSectorData] = useState<number[]>(SECTORS.map(() => -1));
+
+  // M3 state machine
+  const m3StateRef = useRef<"IDLE"|"SCAN"|"TURN"|"DRIVE"|"REVERSE">("IDLE");
+  const m3TargetHdgRef = useRef<number | null>(null);
+  const m3TickRef = useRef(0);            // ticks in current state
+  const m3StallPosRef = useRef({x:0, y:0});
+  const m3StallCntRef = useRef(0);
+  const m3FailSetRef = useRef(new Set<number>()); // sectors that led to dead-end
+  const m3ScanBufRef = useRef<number[]>([]); // sector snapshot at decision time
+  const m3ConsecFailRef = useRef(0);      // consecutive failed attempts
 
   // M4: Groq AI Hybrid
   const [modul4Active, setModul4Active] = useState(false);
@@ -69,7 +79,7 @@ export default function SimulasiPage() {
   const aiSuggestionWeightRef = useRef(0);
   const aiLastCallRef = useRef(0);
   const aiCallCountRef = useRef(0);
-  const [aiStatus, setAiStatus] = useState("—");
+  const [aiStatus, setAiStatus] = useState("--");
   const [groqApiKey, setGroqApiKey] = useState("");
   const groqApiKeyRef = useRef("");
 
@@ -306,9 +316,14 @@ export default function SimulasiPage() {
       }
     }
 
-    // Servo sweep
+    // Servo sweep -- M3 takes over during DRIVE (forward only)
     if (modul2ActiveRef.current) {
-      let newAngle = Math.round(90 + Math.sin(Date.now() / 1000 * 0.7) * 70);
+      let newAngle: number;
+      if (modul3ActiveRef.current && (modul3StateRef.current === "DRIVE" || modul3StateRef.current === "TURN")) {
+        newAngle = 90; // forward -- avoid when turning
+      } else {
+        newAngle = Math.round(90 + Math.sin(Date.now() / 1000 * 0.7) * 70);
+      }
       if (modeRef.current === "NYATA") {
         if (Math.abs(newAngle - servoRef.current) >= 3) sendServo(newAngle);
       } else {
@@ -410,9 +425,9 @@ export default function SimulasiPage() {
       }
     } else setBuzzerActive(false);
 
-    // Modul 1: Collision
+    // Modul 1: Collision -- disabled when M3 auto-navigation active
     const movingForward = l > 30 && r > 30;
-    if (modul1ActiveRef.current && d_now > 0 && d_now <= modul1ThresholdRef.current && movingForward) {
+    if (modul1ActiveRef.current && !modul3ActiveRef.current && d_now > 0 && d_now <= modul1ThresholdRef.current && movingForward) {
       l = 0; r = 0;
       setMotors(0, 0);
       leftMotorRef.current = 0;
@@ -427,52 +442,233 @@ export default function SimulasiPage() {
       modul1BrakingRef.current = false;
     }
 
-    // Modul 3: Navigasi otomatis — cari arah kosong dari sector
+    // -- Modul 3: Navigasi otomatis (otak cerdas) --
     if (modul3ActiveRef.current && !modul1BrakingRef.current) {
-      const sd = sectorDataRef.current;
-      let bestIdx = -1;
-      let bestDist = -1;
-      // Cari sector dengan jarak terjauh, prefer yang dekat tengah (90°)
-      for (let i = 0; i < sd.length; i++) {
-        const d = sd[i];
-        if (d <= 0) continue;
-        // Weight: jarak * bias tengah (cx makin dekat 90 → bias 1.0)
-        const cx = SECTORS[i].cx;
-        const centerBias = 1.0 - Math.abs(cx - 90) / 90 * 0.3; // 0.7–1.0
-        const weighted = d * centerBias;
-        if (weighted > bestDist) {
-          bestDist = weighted;
-          bestIdx = i;
-        }
+      const st = m3StateRef.current;
+      const tick = m3TickRef.current++;
+      const hdgDeg = (headingRef.current * 180 / Math.PI).toFixed(1);
+
+      // Periodic position + heading log (every 20 tick, non-IDLE)
+      if (st !== "IDLE" && tick % 20 === 0) {
+        logEvent(`M3 pos=(${Math.round(posRef.current.x)},${Math.round(posRef.current.y)}) hdg=${hdgDeg} deg`, "nav");
       }
 
-      if (bestIdx >= 0) {
-        const targetCx = SECTORS[bestIdx].cx;
-        const targetDist = sd[bestIdx];
-        modul3TargetRef.current = bestIdx;
+      // -- IDLE -> SCAN --
+      if (st === "IDLE") {
+        logEvent(`M3 ->SCAN consecFail=${m3ConsecFailRef.current} failSet=${m3FailSetRef.current.size}`, "nav");
+        sectorDataRef.current = SECTORS.map(() => -1);
+        setSectorData([...sectorDataRef.current]);
+        m3StateRef.current = "SCAN";
+        m3TickRef.current = 0;
+        modul3StateRef.current = "SCAN";
+        setModul3Info("SCAN...");
+        l = 0; r = 0;
+      }
 
-        // Jika semua sektor terlalu dekat (< 30cm), mundur & putar
-        const allBlocked = sd.every(d => d > 0 && d < 30);
-        if (allBlocked && targetDist < 30) {
-          modul3StateRef.current = "MUNDUR";
-          setModul3Info(`MUNDUR semua ${targetDist.toFixed(0)}cm`);
-          l = -150; r = -150;
+      // -- SCAN: tunggu servo sweep kumpulin data --
+      else if (st === "SCAN") {
+        const fresh = sectorDataRef.current.filter(d => d > 0).length;
+        if (tick % 20 === 0 && tick > 0) {
+          logEvent(`M3 SCAN t=${tick} fresh=${fresh}/${SECTORS.length} pos=(${Math.round(posRef.current.x)},${Math.round(posRef.current.y)})`, "nav");
+        }
+        if (tick > 80 && (fresh >= Math.ceil(SECTORS.length * 0.7) || tick > 240)) {
+          m3ScanBufRef.current = [...sectorDataRef.current];
+          let bestIdx = -1;
+          let bestScore = -Infinity;
+
+          let bestExplore = 0;
+          let bestDistPct = 0, bestCenterBias = 0, bestFailPen = 0;
+          for (let i = 0; i < m3ScanBufRef.current.length; i++) {
+            const d = m3ScanBufRef.current[i];
+            if (d <= 0) continue;
+            const cx = SECTORS[i].cx;
+            const aRad = (cx - 90) * Math.PI / 180;
+            const rx = Math.sin(headingRef.current + aRad);
+            const ry = -Math.cos(headingRef.current + aRad);
+            let unexplored = 0;
+            for (let s = GRID_STEP; s < d; s += GRID_STEP) {
+              if (getGrid(occupancyRef.current,
+                posRef.current.x + rx * s,
+                posRef.current.y + ry * s) === 0) unexplored++;
+            }
+            const distPct = Math.min(d, MAX_SENSE) / MAX_SENSE * 100;
+            const centerBias = 1 - Math.abs(cx - 90) / 90 * 0.25;
+            const explore = unexplored * 15;
+            const failPen = m3FailSetRef.current.has(i) ? 200 : 0;
+            const score = distPct * centerBias + explore - failPen;
+            if (score > bestScore) {
+              bestScore = score; bestIdx = i; bestExplore = explore;
+              bestDistPct = distPct; bestCenterBias = centerBias; bestFailPen = failPen;
+            }
+          }
+
+          if (bestIdx >= 0 && m3ScanBufRef.current[bestIdx] > 0) {
+            const maxDist = Math.max(...m3ScanBufRef.current.filter(d => d > 0));
+            const tight = maxDist < 25;
+
+            if (tight) {
+              m3StateRef.current = "REVERSE"; m3TickRef.current = 0;
+              modul3StateRef.current = "REVERSE";
+              setModul3Info("SEMPIT! " + (maxDist/10).toFixed(0) + "cm");
+              logEvent("M3 SEMPIT max=" + (maxDist/10).toFixed(0) + "cm ->REVERSE", "nav");
+            } else {
+            modul3TargetRef.current = bestIdx;
+            const targetCx = SECTORS[bestIdx].cx;
+            m3TargetHdgRef.current = headingRef.current + (targetCx - 90) * Math.PI / 180;
+
+            const d = m3ScanBufRef.current[bestIdx];
+            const u = m3ScanBufRef.current.reduce((n, v) => v > 0 ? n + 1 : n, 0);
+            const allBlocked = u >= SECTORS.length - 2 &&
+              m3ScanBufRef.current.every(v => v > 0 && v < 50);
+
+            if (allBlocked) {
+              m3StateRef.current = "REVERSE"; m3TickRef.current = 0;
+              modul3StateRef.current = "REVERSE";
+              setModul3Info("MUNDUR semua!");
+              logEvent("M3 semua sektor buntu ->REVERSE", "nav");
+            } else {
+              m3StateRef.current = "TURN"; m3TickRef.current = 0;
+              modul3StateRef.current = "TURN";
+              const targetDeg = (m3TargetHdgRef.current * 180 / Math.PI).toFixed(1);
+              setModul3Info("PUTAR ->" + SECTORS[bestIdx].id + " " + (d/10).toFixed(0) + "cm E" + Math.round(bestExplore));
+              logEvent(
+                "M3 pilih " + SECTORS[bestIdx].id + " d=" + (d/10).toFixed(0) + "cm " +
+                "D" + bestDistPct.toFixed(0) + " C" + (bestCenterBias*100).toFixed(0) + " " +
+                "E" + Math.round(bestExplore) + " F" + bestFailPen + " " +
+                "S" + bestScore.toFixed(0) + " hdg->" + targetDeg + "deg",
+                "nav");
+            }
+            }
+          } else {
+            m3StateRef.current = "REVERSE"; m3TickRef.current = 0;
+            modul3StateRef.current = "REVERSE";
+            setModul3Info("cari ulang...");
+            logEvent("M3 SCAN tdk dpt sektor valid ->REVERSE", "nav");
+          }
+        }
+        l = 0; r = 0;
+      }
+
+      // -- TURN: putar di tempat ke heading target --
+      else if (st === "TURN") {
+        const target = m3TargetHdgRef.current;
+        if (target === null) {
+          m3StateRef.current = "SCAN"; m3TickRef.current = 0;
+          logEvent("M3 TURN target null ->SCAN", "nav");
         } else {
-          // Steer ke arah target
-          const error = (targetCx - 90) / 70; // -1..1
-          const baseSpeed = 180;
-          const steer = Math.round(error * 120);
-          l = baseSpeed - steer;
-          r = baseSpeed + steer;
-          modul3StateRef.current = "MAJU";
-          setModul3Info(`${SECTORS[bestIdx].id} ${(targetDist/10).toFixed(0)}cm`);
+          let err = target - headingRef.current;
+          while (err > Math.PI) err -= 2 * Math.PI;
+          while (err < -Math.PI) err += 2 * Math.PI;
+          const errDeg = Math.abs(err) * 180 / Math.PI;
+
+          if (errDeg < 6) {
+            logEvent("M3 TURN selesai err=" + errDeg.toFixed(1) + "deg ->DRIVE tick=" + tick, "nav");
+            m3StateRef.current = "DRIVE"; m3TickRef.current = 0;
+            modul3StateRef.current = "DRIVE";
+            m3StallPosRef.current = { x: posRef.current.x, y: posRef.current.y };
+            m3StallCntRef.current = 0;
+            setModul3Info("MAJU ->" + (SECTORS[modul3TargetRef.current]?.id || "?"));
+          } else {
+            if (tick % 10 === 0) {
+              const curDeg = (headingRef.current * 180 / Math.PI).toFixed(1);
+              const tgtDeg = (target * 180 / Math.PI).toFixed(1);
+              logEvent("M3 TURN hdg=" + curDeg + "deg->" + tgtDeg + "deg err=" + errDeg.toFixed(1) + "deg", "nav");
+            }
+            const spd = Math.round(Math.min(200, 120 + errDeg));
+            if (err > 0) { l = spd; r = -spd; }
+            else { l = -spd; r = spd; }
+          }
         }
-      } else {
-        // Tidak ada data sector — jalan pelan
-        l = 100; r = 100;
-        modul3StateRef.current = "MAJU";
-        setModul3Info("cari...");
+        if (tick > 150) {
+          logEvent("M3 TURN timeout sektor " + modul3TargetRef.current + " failSet=" + m3FailSetRef.current.size, "nav");
+          if (modul3TargetRef.current >= 0) m3FailSetRef.current.add(modul3TargetRef.current);
+          m3StateRef.current = "REVERSE"; m3TickRef.current = 0;
+        }
       }
+
+      // -- DRIVE: maju lurus, koreksi heading minor --
+      else if (st === "DRIVE") {
+        const frontDist = distanceRef.current > 0 ? distanceRef.current : 400;
+
+        const slowDist = 200; // mulai slow down di 20cm
+        const stopDist = 80;  // berhenti & reverse di ~8cm
+
+        if (frontDist > 0 && frontDist < stopDist && tick > 5) {
+          if (modul3TargetRef.current >= 0) {
+            m3FailSetRef.current.add(modul3TargetRef.current);
+            logEvent("M3 x" + (SECTORS[modul3TargetRef.current]?.id || "?") + " front=" + (frontDist/10).toFixed(0) + "cm failSet=" + m3FailSetRef.current.size, "nav");
+          }
+          m3StateRef.current = "REVERSE"; m3TickRef.current = 0;
+          m3StallCntRef.current = 0;
+          modul3StateRef.current = "REVERSE";
+          setModul3Info("MENTOK!");
+        } else {
+          const target = m3TargetHdgRef.current;
+          let err = 0;
+          if (target !== null) {
+            let e = target - headingRef.current;
+            while (e > Math.PI) e -= 2 * Math.PI;
+            while (e < -Math.PI) e += 2 * Math.PI;
+            err = Math.max(-1, Math.min(1, e * 2.5));
+          }
+
+          let speed = 180;
+          if (frontDist < slowDist) {
+            speed = Math.round(50 + (frontDist / slowDist) * 130);
+          }
+          l = Math.round(speed + err * 50);
+          r = Math.round(speed - err * 50);
+
+          if (tick % 20 === 0) {
+            logEvent("M3 DRIVE f=" + (frontDist/10).toFixed(0) + "cm spd=" + speed + " err=" + err.toFixed(2), "nav");
+          }
+
+          if (tick % 15 === 0) {
+            const moved = Math.hypot(
+              posRef.current.x - m3StallPosRef.current.x,
+              posRef.current.y - m3StallPosRef.current.y);
+            if (moved < 3 && tick > 40) {
+              m3StallCntRef.current++;
+              logEvent("M3 STALL cnt=" + m3StallCntRef.current + " moved=" + moved.toFixed(1) + " tick=" + tick, "nav");
+            } else if (moved > 5) { m3StallCntRef.current = 0; m3StallPosRef.current = { ...posRef.current }; }
+          }
+
+          if (m3StallCntRef.current >= 4) {
+            logEvent("M3 STALL! sektor=" + modul3TargetRef.current + " cnt=" + m3StallCntRef.current, "nav");
+            if (modul3TargetRef.current >= 0) m3FailSetRef.current.add(modul3TargetRef.current);
+            m3StateRef.current = "REVERSE"; m3TickRef.current = 0;
+            m3StallCntRef.current = 0;
+            modul3StateRef.current = "REVERSE";
+            setModul3Info("STALL!");
+          }
+        }
+      }
+
+      // -- REVERSE: mundur + putar cari jalan baru --
+      else if (st === "REVERSE") {
+        if (tick === 0) {
+          logEvent("M3 REVERSE consecFail=" + m3ConsecFailRef.current + " failSet=" + m3FailSetRef.current.size + " pos=(" + Math.round(posRef.current.x) + "," + Math.round(posRef.current.y) + ")", "nav");
+        }
+        if (tick < 25) {
+          l = -180; r = -180;
+        } else if (tick < 60) {
+          const dir = m3ConsecFailRef.current % 2 === 0 ? 1 : -1;
+          l = dir * 130; r = -dir * 130;
+        } else if (tick < 80) {
+          l = 0; r = 0;
+        } else {
+          m3StateRef.current = "IDLE"; m3TickRef.current = 0;
+          m3ConsecFailRef.current++;
+          logEvent("M3 REVERSE selesai consecFail=" + m3ConsecFailRef.current, "nav");
+          if (m3ConsecFailRef.current > 3) {
+            m3FailSetRef.current.clear();
+            m3ConsecFailRef.current = 0;
+            logEvent("M3 reset semua fail sector", "nav");
+          }
+          setModul3Info("SCAN ulang...");
+        }
+      }
+
       setMotors(l, r);
       leftMotorRef.current = l;
       rightMotorRef.current = r;
@@ -518,7 +714,7 @@ export default function SimulasiPage() {
     }
   }, [logEvent, sendServo, setMotors]);
 
-  // Draw — simplified, delegates to renderer
+  // Draw -- simplified, delegates to renderer
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -663,7 +859,8 @@ export default function SimulasiPage() {
     let running = true;
     const loop = () => {
       if (!running) return;
-      if (!joyActiveRef.current && !editMode && !(modeRef.current === "NYATA" && !telemetryRef.current)) {
+      // Skip keyboard motor control when auto-navigation is active
+      if (!joyActiveRef.current && !editMode && !modul3ActiveRef.current && !(modeRef.current === "NYATA" && !telemetryRef.current)) {
         let lm = 0, rm = 0;
         if (keys.has("w") || keys.has("arrowup")) { lm = 255; rm = 255; }
         if (keys.has("s") || keys.has("arrowdown")) { lm = -255; rm = -255; }
@@ -931,7 +1128,7 @@ export default function SimulasiPage() {
   useEffect(() => { trackingRef.current = tracking; }, [tracking]);
 
   // ═══════════════════════════════════════════════════════════════
-  // JSX (unchanged from original — same markup)
+  // JSX (unchanged from original -- same markup)
   // ═══════════════════════════════════════════════════════════════
   return (
     <main className="fixed inset-0 bg-black select-none touch-none">
@@ -1359,11 +1556,11 @@ export default function SimulasiPage() {
                     if (!t) return null;
                     return (
                       <>
-                        <span>jarak: {t.distance > 0 ? `${(t.distance / 10).toFixed(0)}cm` : "—"}</span>
-                        <span>gyro: {t.gyroZ?.toFixed(1) ?? "—"}°/s</span>
-                        <span>arah: {t.yaw?.toFixed(0) ?? "—"}°</span>
-                        <span>baterai: {t.battery ?? "—"}</span>
-                        <span>RSSI: {t.rssi ?? "—"}dBm</span>
+                        <span>jarak: {t.distance > 0 ? `${(t.distance / 10).toFixed(0)}cm` : "--"}</span>
+                        <span>gyro: {t.gyroZ?.toFixed(1) ?? "--"}°/s</span>
+                        <span>arah: {t.yaw?.toFixed(0) ?? "--"}°</span>
+                        <span>baterai: {t.battery ?? "--"}</span>
+                        <span>RSSI: {t.rssi ?? "--"}dBm</span>
                       </>
                     );
                   })()}
