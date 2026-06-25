@@ -125,11 +125,6 @@ export default function SimulasiPage() {
   const setMotors = useCallback((l: number, r: number) => {
     const prevL = leftMotorRef.current;
     const prevR = rightMotorRef.current;
-    if (modeRef.current === "NYATA") {
-      const clampMin = (v: number) => v === 0 ? 0 : Math.round(v > 0 ? Math.max(80, v) : Math.min(-80, v));
-      l = clampMin(l);
-      r = clampMin(r);
-    }
     leftMotorRef.current = l;
     rightMotorRef.current = r;
     setLeftMotor(l);
@@ -272,13 +267,9 @@ export default function SimulasiPage() {
       const l = leftMotorRef.current;
       const r = rightMotorRef.current;
       if (l !== 0 || r !== 0) {
-        const vl = Math.max(-1, Math.min(1, l / 255));
-        const vr = Math.max(-1, Math.min(1, r / 255));
-        const V = (vl + vr) / 2 * 0.4;
-        const dx = V * Math.sin(headingRef.current);
-        const dy = -V * Math.cos(headingRef.current);
-        p.x += dx;
-        p.y += dy;
+        const avg = (l + r) / 510;
+        p.x += Math.sin(headingRef.current) * avg * 2;
+        p.y -= Math.cos(headingRef.current) * avg * 2;
         const trail = trailRef.current;
         if (trail.length === 0 || Math.hypot(trail[trail.length - 1].x - p.x, trail[trail.length - 1].y - p.y) > 3) {
           trail.push({ x: p.x, y: p.y });

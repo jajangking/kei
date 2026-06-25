@@ -21,6 +21,7 @@ void retrySensor();
 bool initMPU6050();
 bool isMPUReady();
 void readMPU6050();
+void retryMPU(); // retry init di background kalo gagal
 float getRoll();
 float getPitch();
 float getYaw();

@@ -217,6 +217,18 @@ static int calSampleCount = 0;
 static float calSum = 0;
 
 bool initMPU6050() {
+  // Hard reset MPU via PWR1 register bit 7
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(MPU_PWR1); Wire.write(0x80);  // DEVICE_RESET
+  Wire.endTransmission();
+  delay(100);
+
+  // Wake from sleep
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(MPU_PWR1); Wire.write(0x00);  // SLEEP=0
+  Wire.endTransmission();
+  delay(50);
+
   for (int attempt = 0; attempt < 3; attempt++) {
     Wire.beginTransmission(MPU_ADDR);
     if (Wire.endTransmission() == 0) {
@@ -237,10 +249,21 @@ bool initMPU6050() {
     delay(50);
   }
 
-  Serial.println("[MPU] not found after 3 attempts");
+  Serial.println("[MPU] not found after 3 attempts, background retry aktif");
   mpuReady = false;
   calState = CAL_IDLE;
   return false;
+}
+
+// Retry MPU init di background loop kalo gagal
+void retryMPU() {
+  if (mpuReady) return;
+  static unsigned long lastRetry = 0;
+  unsigned long now = millis();
+  if (now - lastRetry < 5000) return;  // coba tiap 5 detik
+  lastRetry = now;
+  Serial.println("[MPU] retry init...");
+  resetWire0();
 }
 
 bool isMPUReady() { return mpuReady; }

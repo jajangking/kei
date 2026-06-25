@@ -288,6 +288,7 @@ void loop() {
   // Sensors
   int obstacleDist = readDistance();
   readMPU6050();
+  retryMPU();
 
   // Apply motors
   if (!emergencyStop) rampMotors();
