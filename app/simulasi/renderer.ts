@@ -47,6 +47,8 @@ export interface DrawState {
   modul1Braking: boolean;
   modul1Threshold: number;
   modul2Active: boolean;
+  modul3Active: boolean;
+  m3LockLabel: string;
   modul4Active: boolean;
 
   // Edit mode
@@ -95,6 +97,8 @@ export function drawScene(ctx: CanvasRenderingContext2D, st: DrawState): void {
     modul1Braking,
     modul1Threshold,
     modul2Active,
+    modul3Active,
+    m3LockLabel,
     modul4Active,
     editMode,
     editTool,
@@ -544,6 +548,11 @@ export function drawScene(ctx: CanvasRenderingContext2D, st: DrawState): void {
     ctx.fillStyle = "rgba(34, 211, 238, 0.2)";
     ctx.font = "8px monospace";
     ctx.fillText(`SWEEP:${sweepPoints.length}pt`, 8, vh - 48);
+  }
+  if (modul3Active && m3LockLabel) {
+    ctx.fillStyle = "rgba(245, 158, 11, 0.25)";
+    ctx.font = "bold 8px monospace";
+    ctx.fillText(`M3:${m3LockLabel}`, 8, vh - 52);
   }
   if (modul1Active) {
     ctx.fillStyle = modul1Braking

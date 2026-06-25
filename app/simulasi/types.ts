@@ -39,6 +39,7 @@ export interface NavDebugData {
   occupancyRef: React.MutableRefObject<Map<string, number>>;
   modul1Active: boolean;
   modul2Active: boolean;
+  modul3Active: boolean;
   modul4Active: boolean;
   camActive: boolean;
   ttsActive: boolean;

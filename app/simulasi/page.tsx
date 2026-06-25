@@ -11,6 +11,8 @@ import { snap, collides, rayIntersect, castRayAngle, gridCellKey, getGrid, setGr
 import { drawScene, type DrawState } from "./renderer";
 import MonitorPanel from "./monitor-panel";
 
+const M3_ANGLES = [20, 35, 50, 65, 80, 95, 110, 125, 140, 155];
+
 export default function SimulasiPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const posRef = useRef({ x: 0, y: 350 });
@@ -52,14 +54,28 @@ export default function SimulasiPage() {
   const modul1BrakingRef = useRef(false);
   const [modul2Active, setModul2Active] = useState(false);
   const modul2ActiveRef = useRef(false);
+  const [modul3Active, setModul3Active] = useState(false);
+  const modul3ActiveRef = useRef(false);
+  // M3 Autopilot state
+  const m3StateRef = useRef<"idle" | "scanning" | "locked">("idle");
+  const m3IdxRef = useRef(0);
+  const m3HoldRef = useRef(0);
+  const m3BufRef = useRef<number[]>([]);
+  const m3LockAngleRef = useRef(90);
+  const m3LockDistRef = useRef(-1);
+  const m3TargetHeadingRef = useRef(0);
+  const m3RetryRef = useRef(0);
+  const m3RampRef = useRef(0);
+  const m3StallRef = useRef(0);
+  const [m3LockLabel, setM3LockLabel] = useState("");
+  const keyActiveRef = useRef(false);
   const [modulesOpen, setModulesOpen] = useState(false);
   const sectorDataRef = useRef<number[]>(SECTORS.map(() => -1));
   const [sectorData, setSectorData] = useState<number[]>(SECTORS.map(() => -1));
 
   // M4: Groq AI Hybrid
   const [modul4Active, setModul4Active] = useState(false);
-  const modul4ActiveRef = useRef(false);
-  const aiSuggestionRef = useRef(-1);
+  const modul4ActiveRef = useRef(false);  const aiSuggestionRef = useRef(-1);
   const aiSuggestionWeightRef = useRef(0);
   const aiLastCallRef = useRef(0);
   const aiCallCountRef = useRef(0);
@@ -107,6 +123,7 @@ export default function SimulasiPage() {
   const [telemetryTick, setTelemetryTick] = useState(0);
   const [servoAngle, setServoAngle] = useState(90);
   const servoRef = useRef(90);
+  const telemetryYawRef = useRef(0);
   const sendServo = useCallback((deg: number) => {
     const prev = servoRef.current;
     const a = Math.round(Math.max(0, Math.min(180, deg)));
@@ -114,7 +131,7 @@ export default function SimulasiPage() {
     servoRef.current = a;
     if (a !== prev) logEvent(`Servo ${prev}° → ${a}°`, "sensor");
     if (modeRef.current === "NYATA" && wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ servo: a }));
+      wsRef.current.send(JSON.stringify({ servo: 180 - a })); // servo fisik terbalik
     }
   }, [logEvent]);
 
@@ -125,6 +142,11 @@ export default function SimulasiPage() {
   const setMotors = useCallback((l: number, r: number) => {
     const prevL = leftMotorRef.current;
     const prevR = rightMotorRef.current;
+    if (modeRef.current === "NYATA") {
+      const clampMin = (v: number) => v === 0 ? 0 : Math.round(v > 0 ? Math.max(80, v) : Math.min(-80, v));
+      l = clampMin(l);
+      r = clampMin(r);
+    }
     leftMotorRef.current = l;
     rightMotorRef.current = r;
     setLeftMotor(l);
@@ -237,8 +259,9 @@ export default function SimulasiPage() {
       setSensorDist(d > 0 ? `${d.toFixed(0)}cm` : "---");
       gyroRef.current = (tele?.gyroZ ?? 0) * 0.002;
 
+      telemetryYawRef.current = tele?.yaw ?? 0;
       const y = tele?.yaw;
-      if (y != null) headingRef.current = y * Math.PI / 180;
+      if (y != null) headingRef.current = -y * Math.PI / 180; // MPU terbalik
 
       const dots = scanDotsRef.current;
       const gyroMag = Math.abs(tele?.gyroZ ?? 0);
@@ -291,8 +314,8 @@ export default function SimulasiPage() {
       }
     }
 
-    // Servo sweep
-    if (modul2ActiveRef.current) {
+    // Servo sweep — skip if M3 autopilot taking over
+    if (modul2ActiveRef.current && !modul3ActiveRef.current) {
       let newAngle = Math.round(90 + Math.sin(Date.now() / 1000 * 0.7) * 70);
       if (modeRef.current === "NYATA") {
         if (Math.abs(newAngle - servoRef.current) >= 3) sendServo(newAngle);
@@ -379,6 +402,115 @@ export default function SimulasiPage() {
           }
           break;
         }
+      }
+    }
+
+    // ═══ M3 Autopilot (NYATA only) ═══
+    if (modeRef.current === "NYATA" && modul3ActiveRef.current) {
+      if (m3StateRef.current === "idle") {
+        m3StateRef.current = "scanning";
+        m3IdxRef.current = 0;
+        m3BufRef.current = [];
+        m3HoldRef.current = 0;
+        m3RetryRef.current = 0;
+        setM3LockLabel("SCAN");
+        sendServo(M3_ANGLES[0]);
+        logEvent("M3: scan start", "nav");
+      }
+      if (m3StateRef.current === "scanning") {
+        // Phase 1: wait for servo to settle + accumulate best reading
+        if (m3HoldRef.current < 40) {
+          m3HoldRef.current++;
+          const cur = distanceRef.current;
+          if (cur > 0 && (m3BufRef.current[m3IdxRef.current] || 0) < cur) {
+            m3BufRef.current[m3IdxRef.current] = cur;
+          }
+        }
+        // Phase 2: move to next angle
+        if (m3HoldRef.current >= 40) {
+          if (!m3BufRef.current[m3IdxRef.current]) {
+            m3RetryRef.current++;
+            if (m3RetryRef.current >= 3) {
+              m3BufRef.current[m3IdxRef.current] = -1; // mark as failed
+              m3RetryRef.current = 0;
+            } else {
+              m3HoldRef.current = 0; // retry same angle
+              return;
+            }
+          }
+          const next = m3IdxRef.current + 1;
+          if (next >= M3_ANGLES.length) {
+            let best = 0, bestD = -1;
+            for (let i = 0; i < M3_ANGLES.length; i++) {
+              const d = m3BufRef.current[i];
+              if (d > 0 && d > bestD) { bestD = d; best = i; }
+            }
+            // Fallback kalo semua gagal
+            if (bestD < 0) {
+              m3LockAngleRef.current = servoRef.current;
+              m3LockDistRef.current = -1;
+            } else {
+              m3LockAngleRef.current = M3_ANGLES[best];
+              m3LockDistRef.current = bestD;
+            }
+            sendServo(m3LockAngleRef.current);
+            // Target heading dari servo angle (fisik terbalik: 180-UI)
+            // Servo 160° = 70° kanan → robot harus mutar 70° ke kanan
+            const rawYaw = telemetryYawRef.current;
+            m3TargetHeadingRef.current = rawYaw + (90 - m3LockAngleRef.current);
+            m3StateRef.current = "locked";
+            const lbl = bestD > 0 ? `${m3LockAngleRef.current}° ${(bestD/10).toFixed(0)}cm` : "FAIL";
+            setM3LockLabel(lbl);
+            logEvent(`M3: → ${lbl}`, "nav");
+          } else {
+            m3IdxRef.current = next;
+            sendServo(M3_ANGLES[next]);
+            m3HoldRef.current = 0;
+            m3RetryRef.current = 0;
+          }
+        }
+      }
+    } else if (m3StateRef.current !== "idle") {
+      m3StateRef.current = "idle";
+      m3IdxRef.current = 0;
+      m3BufRef.current = [];
+      setM3LockLabel("");
+    }
+
+    // ═══ M3 Drive: rotate toward locked heading (PD + clampMin) ═══
+    if (m3StateRef.current === "locked" && !joyActiveRef.current && !keyActiveRef.current) {
+      const target = m3TargetHeadingRef.current;
+      const cur = telemetryYawRef.current;
+      let rawErr = target - cur;
+      while (rawErr > 180) rawErr -= 360;
+      while (rawErr < -180) rawErr += 360;
+      const absErr = Math.abs(rawErr);
+      // Hold servo toward target
+      const servoUI = Math.max(5, Math.min(175, Math.round(90 - rawErr)));
+      sendServo(servoUI);
+      if (absErr > 15) {
+        const gyroDeg = (telemetryRef.current?.gyroZ ?? 0);
+        let pwr = Math.round(rawErr * 1.2 - gyroDeg * 3);
+        pwr = Math.max(-100, Math.min(100, pwr));
+        m3RampRef.current += (pwr - m3RampRef.current) * 0.10;
+        let speed = Math.round(m3RampRef.current);
+        if (Math.abs(gyroDeg) < 2 && Math.abs(speed) > 15) {
+          m3StallRef.current++;
+          if (m3StallRef.current > 3) speed += Math.min(80, (m3StallRef.current - 3) * 8);
+        } else m3StallRef.current = 0;
+        speed = Math.max(-130, Math.min(130, speed));
+        leftMotorRef.current = -speed; rightMotorRef.current = speed;
+        setLeftMotor(-speed); setRightMotor(speed);
+        if (wsRef.current?.readyState === WebSocket.OPEN)
+          wsRef.current.send(JSON.stringify({ leftMotor: -speed, rightMotor: speed }));
+        setM3LockLabel(rawErr > 0 ? `${Math.round(90-rawErr)}° kiri` : `${Math.round(90-rawErr)}° kanan`);
+      } else {
+        leftMotorRef.current = 0; rightMotorRef.current = 0;
+        setLeftMotor(0); setRightMotor(0);
+        if (wsRef.current?.readyState === WebSocket.OPEN)
+          wsRef.current.send(JSON.stringify({ leftMotor: 0, rightMotor: 0 }));
+        m3RampRef.current = 0; m3StallRef.current = 0;
+        setM3LockLabel(`${servoUI}° siap`);
       }
     }
 
@@ -495,6 +627,8 @@ export default function SimulasiPage() {
       modul1Braking,
       modul1Threshold,
       modul2Active,
+      modul3Active,
+      m3LockLabel,
       modul4Active,
       leds,
       buzzerActive,
@@ -509,7 +643,7 @@ export default function SimulasiPage() {
   }, [
     sensorDist, editMode, editTool,
     modul1Active, modul1Braking, modul1Threshold,
-    modul2Active, modul4Active,
+    modul2Active, modul3Active, m3LockLabel, modul4Active,
     leds, buzzerActive, camActive, aiStatus,
   ]);
 
@@ -580,6 +714,7 @@ export default function SimulasiPage() {
     const keys = new Set<string>();
     const handleKeyDown = (e: KeyboardEvent) => {
       keys.add(e.key.toLowerCase());
+      keyActiveRef.current = true;
       if (["arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(e.key.toLowerCase())) e.preventDefault();
       if (e.key === "Tab") { e.preventDefault(); setEditMode(p => !p); }
       if (e.key.toLowerCase() === "q") sendServo(servoRef.current - 5);
@@ -587,7 +722,10 @@ export default function SimulasiPage() {
     };
     const handleKeyUp = (e: KeyboardEvent) => {
       keys.delete(e.key.toLowerCase());
-      if (keys.size === 0 && !joyActiveRef.current) setMotors(0, 0);
+      if (keys.size === 0) {
+        keyActiveRef.current = false;
+        if (!joyActiveRef.current && m3StateRef.current !== "locked") setMotors(0, 0);
+      }
     };
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
@@ -595,7 +733,7 @@ export default function SimulasiPage() {
     let running = true;
     const loop = () => {
       if (!running) return;
-      if (!joyActiveRef.current && !editMode && !(modeRef.current === "NYATA" && !telemetryRef.current)) {
+      if (!joyActiveRef.current && !editMode && !(modeRef.current === "NYATA" && !telemetryRef.current) && (keyActiveRef.current || m3StateRef.current !== "locked")) {
         let lm = 0, rm = 0;
         if (keys.has("w") || keys.has("arrowup")) { lm = 255; rm = 255; }
         if (keys.has("s") || keys.has("arrowdown")) { lm = -255; rm = -255; }
@@ -652,6 +790,7 @@ export default function SimulasiPage() {
   useEffect(() => { modul1ThresholdRef.current = modul1Threshold; }, [modul1Threshold]);
   useEffect(() => { modul1BrakingRef.current = modul1Braking; }, [modul1Braking]);
   useEffect(() => { modul2ActiveRef.current = modul2Active; }, [modul2Active]);
+  useEffect(() => { modul3ActiveRef.current = modul3Active; }, [modul3Active]);
   useEffect(() => { modul4ActiveRef.current = modul4Active; }, [modul4Active]);
   useEffect(() => {
     const saved = localStorage.getItem("kei_groq_key");
@@ -970,6 +1109,30 @@ export default function SimulasiPage() {
                 })}
               </div>
             )}
+            {/* M3: Autopilot */}
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-[8px] font-mono text-zinc-500">M3</span>
+                <span className="text-[10px] font-mono text-zinc-300">AUTOPILOT</span>
+              </div>
+              <button
+                onClick={() => setModul3Active(p => !p)}
+                className={`px-2 py-0.5 rounded-full text-[8px] font-mono font-bold border transition-colors active:scale-90 ${
+                  modul3Active
+                    ? "bg-amber-600 border-amber-500 text-white"
+                    : "bg-zinc-800 border-zinc-700 text-zinc-500"
+                }`}
+              >
+                {modul3Active ? "ON" : "OFF"}
+              </button>
+            </div>
+            {modul3Active && (
+              <div className="pl-4 text-[8px] font-mono">
+                <span className={m3LockLabel ? (m3LockLabel === "SCAN" ? "text-yellow-400" : "text-amber-400") : "text-zinc-600"}>
+                  {m3LockLabel || "—"}
+                </span>
+              </div>
+            )}
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <span className="text-[8px] font-mono text-zinc-500">M4</span>
@@ -1093,6 +1256,7 @@ export default function SimulasiPage() {
               occupancyRef,
               modul1Active,
               modul2Active,
+              modul3Active,
               modul4Active,
               camActive,
               ttsActive,
