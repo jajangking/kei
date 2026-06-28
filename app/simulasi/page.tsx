@@ -76,6 +76,13 @@ export default function SimulasiPage() {
   const m3PhaseRef = useRef<"start" | "moving">("start");
   const m3BaseSpeedRef = useRef(0);
   const m3TargetLoggedRef = useRef(false);
+  const m3DriveReadyRef = useRef(0);
+  const m3DriveActiveRef = useRef(false);
+  const m3DriveDistRef = useRef(0);
+  const m3DriveDistStallRef = useRef(0);
+  const m3RotFloorRef = useRef(50);
+  const m3RotFloorCountRef = useRef(0);
+  const m3ServoLockRef = useRef(90);
   const [m3LockLabel, setM3LockLabel] = useState("");
   const keyActiveRef = useRef(false);
   const [modulesOpen, setModulesOpen] = useState(false);
@@ -422,6 +429,7 @@ export default function SimulasiPage() {
         m3BufRef.current = [];
         m3HoldRef.current = 0;
         m3RetryRef.current = 0;
+        m3ServoLockRef.current = 90;
         setM3LockLabel("SCAN");
         sendServo(M3_ANGLES[0]);
         logEvent("M3: scan start", "nav");
@@ -473,6 +481,8 @@ export default function SimulasiPage() {
             m3PhaseRef.current = "start";
             m3BaseSpeedRef.current = 0;
             m3TargetLoggedRef.current = false;
+            m3DriveActiveRef.current = false;
+            m3DriveReadyRef.current = 0;
             m3StateRef.current = "locked";
             const lbl = bestD > 0 ? `${m3LockAngleRef.current}° ${(bestD/10).toFixed(0)}cm` : "FAIL";
             setM3LockLabel(lbl);
@@ -496,6 +506,9 @@ export default function SimulasiPage() {
       m3YawStallRef.current = 0;
       m3RecoveryRef.current = 0;
       m3RetryCountRef.current = 0;
+      m3DriveActiveRef.current = false;
+      m3DriveReadyRef.current = 0;
+      m3ServoLockRef.current = 90;
       setM3LockLabel("");
     }
 
@@ -507,8 +520,8 @@ export default function SimulasiPage() {
       while (rawErr > 180) rawErr -= 360;
       while (rawErr < -180) rawErr += 360;
       const absErr = Math.abs(rawErr);
-      const servoUI = Math.max(5, Math.min(175, Math.round(90 - rawErr)));
-      sendServo(servoUI);
+      const servoRaw = Math.max(5, Math.min(175, Math.round(90 - rawErr)));
+      const headingThreshold = m3DriveActiveRef.current ? 25 : 15;
 
       // Yaw-based stall: cuma hitung pas telemetry beneran update (ESP ~1Hz)
       const telemUpdated = telemetryTick !== m3LastTelemetryRef.current;
@@ -516,7 +529,16 @@ export default function SimulasiPage() {
       const yawDelta = telemUpdated ? Math.abs(cur - m3LastYawRef.current) : 0;
       if (telemUpdated) m3LastYawRef.current = cur;
 
-      if (absErr > 15) {
+      if (absErr > headingThreshold) {
+        // Update servo during rotation
+        sendServo(servoRaw);
+
+        // Reset drive kalo lagi maju terus kehilangan heading
+        if (m3DriveActiveRef.current) {
+          m3DriveActiveRef.current = false;
+          m3DriveReadyRef.current = 0;
+          logEvent("M3: koreksi heading", "nav");
+        }
         const gyroDeg = (telemetryRef.current?.gyroZ ?? 0);
 
         // Deteksi stuck: cuma pas telemetry update, butuh 3× berturut-turut (~3 detik)
@@ -559,8 +581,11 @@ export default function SimulasiPage() {
               m3StateRef.current = "scanning";
               m3IdxRef.current = 0;
               m3BufRef.current = [];
+              m3DriveActiveRef.current = false;
+              m3DriveReadyRef.current = 0;
               m3HoldRef.current = 0;
               m3RetryRef.current = 0;
+              m3ServoLockRef.current = 90;
               setM3LockLabel("SCAN");
               sendServo(M3_ANGLES[0]);
             }
@@ -574,9 +599,19 @@ export default function SimulasiPage() {
         // ── PD control: speed = Kp × err - Kd × gyro ──
         const Kp = 1.5, Kd = 1.0;
         let speed = Math.round(rawErr * Kp - gyroDeg * Kd);
-        // Floor biar motor ESP merespon
-        if (speed > 0 && speed < 50) speed = 50;
-        if (speed < 0 && speed > -50) speed = -50;
+        // Adaptive floor: kalo gyro gak gerak padahal masih jauh dari target, naikin
+        if (absErr > 10 && Math.abs(gyroDeg) < 2) {
+          m3RotFloorCountRef.current++;
+          if (m3RotFloorCountRef.current > 8) {
+            m3RotFloorRef.current = Math.min(130, m3RotFloorRef.current + 5);
+            m3RotFloorCountRef.current = 0;
+            logEvent(`M3: floor ${m3RotFloorRef.current} gy${gyroDeg.toFixed(0)}° err${absErr.toFixed(0)}°`, "nav");
+          }
+        } else if (Math.abs(gyroDeg) >= 2) {
+          m3RotFloorCountRef.current = 0;
+        }
+        if (speed > 0 && speed < m3RotFloorRef.current) speed = m3RotFloorRef.current;
+        if (speed < 0 && speed > -m3RotFloorRef.current) speed = -m3RotFloorRef.current;
         speed = Math.max(-130, Math.min(130, speed));
         leftMotorRef.current = -speed; rightMotorRef.current = speed;
         setLeftMotor(-speed); setRightMotor(speed);
@@ -588,20 +623,108 @@ export default function SimulasiPage() {
           logEvent(`M3: PD err${absErr.toFixed(0)}° s${speed} gy${gyroDeg.toFixed(0)}°/s`, "nav");
         }
       } else {
-        setMotors(0, 0);
+        // Heading tercapai → lock servo, reset floor, siap maju
+        m3RotFloorRef.current = 50;
+        m3RotFloorCountRef.current = 0;
+        if (!m3DriveActiveRef.current && m3DriveReadyRef.current === 0) {
+          m3ServoLockRef.current = servoRaw;
+        }
+        sendServo(m3ServoLockRef.current);
+
         if (!m3TargetLoggedRef.current) {
           m3TargetLoggedRef.current = true;
-          logEvent(`M3: ✅ target err=${absErr.toFixed(0)}° servo=${servoUI}° yaw=${cur.toFixed(0)}°`, "nav");
+          logEvent(`M3: ✅ heading err${absErr.toFixed(0)}° servo${m3ServoLockRef.current}° yaw${cur.toFixed(0)}°`, "nav");
         }
+
+        // Stabil dulu 10 tick, baru maju
+        if (!m3DriveActiveRef.current) {
+          m3DriveReadyRef.current++;
+          setMotors(0, 0);
+          setM3LockLabel(`${m3ServoLockRef.current}° siap ${m3DriveReadyRef.current}`);
+          if (m3DriveReadyRef.current > 10) {
+            m3DriveActiveRef.current = true;
+            m3DriveReadyRef.current = 0;
+            m3LogThrottleRef.current = 0;
+            m3DriveDistRef.current = distanceRef.current;
+            m3DriveDistStallRef.current = 0;
+            logEvent("M3: maju!", "nav");
+          }
+        }
+
+        // Fase maju
+        if (m3DriveActiveRef.current) {
+          const dNow = distanceRef.current;
+          // Stop kalo ada halangan
+          if (dNow > 0 && dNow < 20) {
+            setMotors(0, 0);
+            logEvent(`M3: halangan ${(dNow/10).toFixed(0)}cm → scan ulang`, "warn");
+            m3StateRef.current = "scanning";
+            m3IdxRef.current = 0;
+            m3BufRef.current = [];
+            m3DriveActiveRef.current = false;
+            m3DriveReadyRef.current = 0;
+            m3HoldRef.current = 0;
+            m3RetryRef.current = 0;
+            m3PhaseRef.current = "start";
+            m3BaseSpeedRef.current = 0;
+            m3TargetLoggedRef.current = false;
+            m3LastTelemetryRef.current = 0;
+            m3ServoLockRef.current = 90;
+            setM3LockLabel("SCAN");
+            sendServo(M3_ANGLES[0]);
+          } else {
+            // Forward stall: kalo maju tapi jarak gak berubah (~2cm) selama >2 detik
+            if (dNow > 0) {
+              if (Math.abs(dNow - m3DriveDistRef.current) < 2) {
+                m3DriveDistStallRef.current++;
+              } else {
+                m3DriveDistStallRef.current = 0;
+                m3DriveDistRef.current = dNow;
+              }
+              if (m3DriveDistStallRef.current > 120) {
+                logEvent(`M3: maju stuck d${(dNow/10).toFixed(0)}cm ${m3DriveDistStallRef.current}tick`, "warn");
+                m3DriveActiveRef.current = false;
+                m3DriveReadyRef.current = 0;
+                m3StateRef.current = "scanning";
+                m3IdxRef.current = 0;
+                m3BufRef.current = [];
+                m3PhaseRef.current = "start";
+                m3BaseSpeedRef.current = 0;
+                m3TargetLoggedRef.current = false;
+                m3HoldRef.current = 0;
+                m3RetryRef.current = 0;
+                m3ServoLockRef.current = 90;
+                setM3LockLabel("SCAN");
+                sendServo(M3_ANGLES[0]);
+                setMotors(-80, -80);
+                setTimeout(() => setMotors(0, 0), 500);
+                return;
+              }
+            } else {
+              m3DriveDistStallRef.current = 0;
+            }
+            // Maju dengan koreksi heading dikit
+            const corr = Math.round(rawErr * 0.8 - (telemetryRef.current?.gyroZ ?? 0) * 0.5);
+            const base = 60;
+            let lm = base - corr;
+            let rm = base + corr;
+            lm = Math.max(30, Math.min(130, lm));
+            rm = Math.max(30, Math.min(130, rm));
+            setMotors(lm, rm);
+            setM3LockLabel(`maju ${(dNow/10).toFixed(0)}cm`);
+            m3LogThrottleRef.current++;
+            if (m3LogThrottleRef.current % 10 === 0) {
+              logEvent(`M3: maju err${absErr.toFixed(0)}° d${(dNow/10).toFixed(0)}cm lm${lm} rm${rm}`, "nav");
+            }
+          }
+        }
+
         m3PhaseRef.current = "start";
         m3BaseSpeedRef.current = 0;
         m3RampRef.current = 0; m3StallRef.current = 0;
         m3YawStallRef.current = 0;
         m3RecoveryRef.current = 0;
         m3RetryCountRef.current = 0;
-        m3LogThrottleRef.current = 0;
-        m3LastTelemetryRef.current = 0;
-        setM3LockLabel(`${servoUI}° siap`);
       }
     }
 
