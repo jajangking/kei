@@ -86,6 +86,8 @@ export default function SimulasiPage() {
   const m3StuckAngleRef = useRef(-1);
   const m3RotStuckRef = useRef(0);
   const [m3LockLabel, setM3LockLabel] = useState("");
+  const [motorTrim, setMotorTrim] = useState(0);
+  const motorTrimRef = useRef(0);
   const keyActiveRef = useRef(false);
   const [modulesOpen, setModulesOpen] = useState(false);
   const sectorDataRef = useRef<number[]>(SECTORS.map(() => -1));
@@ -165,6 +167,8 @@ export default function SimulasiPage() {
       l = clampMin(l);
       r = clampMin(r);
     }
+    l = Math.max(-255, Math.min(255, l + motorTrimRef.current));
+    r = Math.max(-255, Math.min(255, r));
     leftMotorRef.current = l;
     rightMotorRef.current = r;
     setLeftMotor(l);
@@ -740,12 +744,14 @@ export default function SimulasiPage() {
             }
             // Maju dengan koreksi heading dikit
             const corr = Math.round(rawErr * 0.8 - (telemetryRef.current?.gyroZ ?? 0) * 0.5);
-            const base = 60;
-            let lm = base - corr;
-            let rm = base + corr;
+            let lm = 60 - corr + motorTrimRef.current;
+            let rm = 60 + corr;
             lm = Math.max(30, Math.min(130, lm));
             rm = Math.max(30, Math.min(130, rm));
-            setMotors(lm, rm);
+            leftMotorRef.current = lm; rightMotorRef.current = rm;
+            setLeftMotor(lm); setRightMotor(rm);
+            if (wsRef.current?.readyState === WebSocket.OPEN)
+              wsRef.current.send(JSON.stringify({ leftMotor: lm, rightMotor: rm }));
             setM3LockLabel(`maju ${(dNow/10).toFixed(0)}cm`);
             m3LogThrottleRef.current++;
             if (m3LogThrottleRef.current % 10 === 0) {
@@ -1040,6 +1046,7 @@ export default function SimulasiPage() {
   useEffect(() => { modul1BrakingRef.current = modul1Braking; }, [modul1Braking]);
   useEffect(() => { modul2ActiveRef.current = modul2Active; }, [modul2Active]);
   useEffect(() => { modul3ActiveRef.current = modul3Active; }, [modul3Active]);
+  useEffect(() => { motorTrimRef.current = motorTrim; }, [motorTrim]);
   useEffect(() => { modul4ActiveRef.current = modul4Active; }, [modul4Active]);
   useEffect(() => {
     const saved = localStorage.getItem("kei_groq_key");
@@ -1382,6 +1389,15 @@ export default function SimulasiPage() {
                 </span>
               </div>
             )}
+            <div className="flex items-center gap-2">
+              <span className="text-[8px] font-mono text-zinc-500">TRIM</span>
+              <input
+                type="range" min="-30" max="30" value={motorTrim}
+                onChange={e => setMotorTrim(Number(e.target.value))}
+                className="w-16 h-1 accent-cyan-500"
+              />
+              <span className="text-[9px] font-mono w-5 text-zinc-400">{motorTrim > 0 ? "+" : ""}{motorTrim}</span>
+            </div>
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <span className="text-[8px] font-mono text-zinc-500">M4</span>
