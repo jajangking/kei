@@ -89,6 +89,7 @@ export default function SimulasiPage() {
   const [motorTrim, setMotorTrim] = useState(0);
   const motorTrimRef = useRef(0);
   const keyActiveRef = useRef(false);
+  const [modePanelOpen, setModePanelOpen] = useState(true);
   const [modulesOpen, setModulesOpen] = useState(false);
   const sectorDataRef = useRef<number[]>(SECTORS.map(() => -1));
   const [sectorData, setSectorData] = useState<number[]>(SECTORS.map(() => -1));
@@ -1366,14 +1367,14 @@ export default function SimulasiPage() {
               </div>
             )}
             {/* M3: Autopilot */}
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1">
                 <span className="text-[8px] font-mono text-zinc-500">M3</span>
-                <span className="text-[10px] font-mono text-zinc-300">AUTOPILOT</span>
+                <span className="text-[9px] font-mono text-zinc-300">AUTO</span>
               </div>
               <button
                 onClick={() => setModul3Active(p => !p)}
-                className={`px-2 py-0.5 rounded-full text-[8px] font-mono font-bold border transition-colors active:scale-90 ${
+                className={`px-1.5 py-0.5 rounded text-[7px] font-mono font-bold border transition-colors active:scale-90 ${
                   modul3Active
                     ? "bg-amber-600 border-amber-500 text-white"
                     : "bg-zinc-800 border-zinc-700 text-zinc-500"
@@ -1381,23 +1382,19 @@ export default function SimulasiPage() {
               >
                 {modul3Active ? "ON" : "OFF"}
               </button>
-            </div>
-            {modul3Active && (
-              <div className="pl-4 text-[8px] font-mono">
-                <span className={m3LockLabel ? (m3LockLabel === "SCAN" ? "text-yellow-400" : "text-amber-400") : "text-zinc-600"}>
-                  {m3LockLabel || "—"}
-                </span>
+              <div className="flex items-center gap-0.5">
+                <span className="text-[7px] font-mono text-zinc-600">T</span>
+                <input
+                  type="range" min="-30" max="30" value={motorTrim}
+                  onChange={e => setMotorTrim(Number(e.target.value))}
+                  className="w-12 h-1 accent-cyan-500"
+                />
+                <span className="text-[7px] font-mono w-4 text-zinc-500">{motorTrim > 0 ? "+" : ""}{motorTrim}</span>
               </div>
-            )}
-            <div className="flex items-center gap-2">
-              <span className="text-[8px] font-mono text-zinc-500">TRIM</span>
-              <input
-                type="range" min="-30" max="30" value={motorTrim}
-                onChange={e => setMotorTrim(Number(e.target.value))}
-                className="w-16 h-1 accent-cyan-500"
-              />
-              <span className="text-[9px] font-mono w-5 text-zinc-400">{motorTrim > 0 ? "+" : ""}{motorTrim}</span>
             </div>
+            {modul3Active && m3LockLabel && (
+              <span className="text-[7px] font-mono text-zinc-500">{m3LockLabel}</span>
+            )}
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <span className="text-[8px] font-mono text-zinc-500">M4</span>
@@ -1640,31 +1637,37 @@ export default function SimulasiPage() {
       {/* Mode + ESP */}
       {!editMode && (
         <div className="fixed top-3 left-3 flex flex-col gap-1.5 items-start">
-          <button
-            onClick={() => {
-              const next: SimulasiMode = mode === "NYATA" ? "LATIHAN" : "NYATA";
-              setMode(next);
-              modeRef.current = next;
-              if (next === "NYATA") {
-                obstaclesRef.current = [];
-                setObstacleCount(0);
-              } else {
-                obstaclesRef.current = PRESETS.LABIRIN.map(o => ({ ...o }));
-                setObstacleCount(obstaclesRef.current.length);
-                syncGridFromObstacles(occupancyRef.current, obstaclesRef.current);
-              }
-              if (next === "LATIHAN") disconnectESP();
-              logEvent(`Mode ${next}`, "info");
-            }}
-            className={`px-2 py-1 rounded-full text-[9px] font-mono font-bold border active:scale-90 ${
-              mode === "NYATA"
-                ? "bg-cyan-600 border-cyan-500 text-white"
-                : "bg-zinc-800 border-zinc-700 text-zinc-400 hover:text-white"
-            }`}
-          >
-            {mode}
-          </button>
-          {mode === "NYATA" && (
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => {
+                const next: SimulasiMode = mode === "NYATA" ? "LATIHAN" : "NYATA";
+                setMode(next);
+                modeRef.current = next;
+                if (next === "NYATA") {
+                  obstaclesRef.current = [];
+                  setObstacleCount(0);
+                } else {
+                  obstaclesRef.current = PRESETS.LABIRIN.map(o => ({ ...o }));
+                  setObstacleCount(obstaclesRef.current.length);
+                  syncGridFromObstacles(occupancyRef.current, obstaclesRef.current);
+                }
+                if (next === "LATIHAN") disconnectESP();
+                logEvent(`Mode ${next}`, "info");
+              }}
+              className={`px-2 py-1 rounded-full text-[9px] font-mono font-bold border active:scale-90 ${
+                mode === "NYATA"
+                  ? "bg-cyan-600 border-cyan-500 text-white"
+                  : "bg-zinc-800 border-zinc-700 text-zinc-400 hover:text-white"
+              }`}
+            >
+              {mode}
+            </button>
+            <button
+              onClick={() => setModePanelOpen(p => !p)}
+              className="size-5 flex items-center justify-center rounded text-[9px] font-mono text-zinc-600 hover:text-white hover:bg-zinc-800 transition-colors"
+            >{modePanelOpen ? "▲" : "▼"}</button>
+          </div>
+          {modePanelOpen && mode === "NYATA" && (
             <div className="flex flex-col gap-1.5 bg-zinc-900/60 backdrop-blur-sm p-2 rounded-xl border border-white/10">
               <div className="flex gap-1">
                 <input
