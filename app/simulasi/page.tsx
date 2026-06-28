@@ -680,7 +680,7 @@ export default function SimulasiPage() {
           } else {
             // Forward stall: kalo maju tapi jarak gak berubah (~2cm) selama >2 detik
             if (dNow > 0) {
-              if (Math.abs(dNow - m3DriveDistRef.current) < 2) {
+              if (Math.abs(dNow - m3DriveDistRef.current) < 4) {
                 m3DriveDistStallRef.current++;
               } else {
                 m3DriveDistStallRef.current = 0;
