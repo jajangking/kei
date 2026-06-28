@@ -83,6 +83,7 @@ export default function SimulasiPage() {
   const m3RotFloorRef = useRef(50);
   const m3RotFloorCountRef = useRef(0);
   const m3ServoLockRef = useRef(90);
+  const m3StuckAngleRef = useRef(-1);
   const [m3LockLabel, setM3LockLabel] = useState("");
   const keyActiveRef = useRef(false);
   const [modulesOpen, setModulesOpen] = useState(false);
@@ -465,9 +466,11 @@ export default function SimulasiPage() {
             let scanSummary = "";
             for (let i = 0; i < M3_ANGLES.length; i++) {
               const d = m3BufRef.current[i];
-              if (d > 0 && d > bestD) { bestD = d; best = i; }
+              const skip = m3StuckAngleRef.current > 0 && M3_ANGLES[i] === m3StuckAngleRef.current;
+              if (d > 0 && d > bestD && !skip) { bestD = d; best = i; }
               scanSummary += ` ${M3_ANGLES[i]}°:${d > 0 ? (d/10).toFixed(0) : 'x'}cm`;
             }
+            m3StuckAngleRef.current = -1;
             const rawYaw = telemetryYawRef.current;
             if (bestD < 0) {
               m3LockAngleRef.current = servoRef.current;
@@ -509,6 +512,7 @@ export default function SimulasiPage() {
       m3DriveActiveRef.current = false;
       m3DriveReadyRef.current = 0;
       m3ServoLockRef.current = 90;
+      m3StuckAngleRef.current = -1;
       setM3LockLabel("");
     }
 
@@ -670,6 +674,7 @@ export default function SimulasiPage() {
             m3TargetLoggedRef.current = false;
             m3LastTelemetryRef.current = 0;
             m3ServoLockRef.current = 90;
+            m3StuckAngleRef.current = m3LockAngleRef.current;
             setM3LockLabel("SCAN");
             sendServo(M3_ANGLES[0]);
           } else {
@@ -694,6 +699,7 @@ export default function SimulasiPage() {
                 m3HoldRef.current = 0;
                 m3RetryRef.current = 0;
                 m3ServoLockRef.current = 90;
+                m3StuckAngleRef.current = m3LockAngleRef.current;
                 setM3LockLabel("SCAN");
                 sendServo(M3_ANGLES[0]);
                 setMotors(-80, -80);
