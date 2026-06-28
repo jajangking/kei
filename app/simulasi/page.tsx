@@ -49,7 +49,7 @@ export default function SimulasiPage() {
   const [modul1Active, setModul1Active] = useState(true);
   const modul1ActiveRef = useRef(true);
   const [modul1Braking, setModul1Braking] = useState(false);
-  const [modul1Threshold, setModul1Threshold] = useState(30);
+  const [modul1Threshold, setModul1Threshold] = useState(10);
   const modul1ThresholdRef = useRef(30);
   const modul1BrakingRef = useRef(false);
   const [modul2Active, setModul2Active] = useState(false);
@@ -67,6 +67,15 @@ export default function SimulasiPage() {
   const m3RetryRef = useRef(0);
   const m3RampRef = useRef(0);
   const m3StallRef = useRef(0);
+  const m3YawStallRef = useRef(0);
+  const m3LastYawRef = useRef(0);
+  const m3RecoveryRef = useRef(0);
+  const m3RetryCountRef = useRef(0);
+  const m3LogThrottleRef = useRef(0);
+  const m3LastTelemetryRef = useRef(0);
+  const m3PhaseRef = useRef<"start" | "moving">("start");
+  const m3BaseSpeedRef = useRef(0);
+  const m3TargetLoggedRef = useRef(false);
   const [m3LockLabel, setM3LockLabel] = useState("");
   const keyActiveRef = useRef(false);
   const [modulesOpen, setModulesOpen] = useState(false);
@@ -428,24 +437,30 @@ export default function SimulasiPage() {
         }
         // Phase 2: move to next angle
         if (m3HoldRef.current >= 40) {
-          if (!m3BufRef.current[m3IdxRef.current]) {
+          const reading = m3BufRef.current[m3IdxRef.current];
+          if (!reading) {
             m3RetryRef.current++;
             if (m3RetryRef.current >= 3) {
-              m3BufRef.current[m3IdxRef.current] = -1; // mark as failed
+              m3BufRef.current[m3IdxRef.current] = -1;
               m3RetryRef.current = 0;
+              logEvent(`M3: ${M3_ANGLES[m3IdxRef.current]}° → gagal`, "warn");
             } else {
-              m3HoldRef.current = 0; // retry same angle
+              m3HoldRef.current = 0;
               return;
             }
+          } else {
+            logEvent(`M3: ${M3_ANGLES[m3IdxRef.current]}° → ${(reading/10).toFixed(0)}cm`, "sensor");
           }
           const next = m3IdxRef.current + 1;
           if (next >= M3_ANGLES.length) {
             let best = 0, bestD = -1;
+            let scanSummary = "";
             for (let i = 0; i < M3_ANGLES.length; i++) {
               const d = m3BufRef.current[i];
               if (d > 0 && d > bestD) { bestD = d; best = i; }
+              scanSummary += ` ${M3_ANGLES[i]}°:${d > 0 ? (d/10).toFixed(0) : 'x'}cm`;
             }
-            // Fallback kalo semua gagal
+            const rawYaw = telemetryYawRef.current;
             if (bestD < 0) {
               m3LockAngleRef.current = servoRef.current;
               m3LockDistRef.current = -1;
@@ -454,14 +469,15 @@ export default function SimulasiPage() {
               m3LockDistRef.current = bestD;
             }
             sendServo(m3LockAngleRef.current);
-            // Target heading dari servo angle (fisik terbalik: 180-UI)
-            // Servo 160° = 70° kanan → robot harus mutar 70° ke kanan
-            const rawYaw = telemetryYawRef.current;
             m3TargetHeadingRef.current = rawYaw + (90 - m3LockAngleRef.current);
+            m3PhaseRef.current = "start";
+            m3BaseSpeedRef.current = 0;
+            m3TargetLoggedRef.current = false;
             m3StateRef.current = "locked";
             const lbl = bestD > 0 ? `${m3LockAngleRef.current}° ${(bestD/10).toFixed(0)}cm` : "FAIL";
             setM3LockLabel(lbl);
-            logEvent(`M3: → ${lbl}`, "nav");
+            logEvent(`M3: scan${scanSummary}`, "nav");
+            logEvent(`M3: → ${lbl} yaw=${rawYaw.toFixed(0)}° target=${m3TargetHeadingRef.current.toFixed(0)}° err=${(m3TargetHeadingRef.current - rawYaw).toFixed(0)}°`, "nav");
           } else {
             m3IdxRef.current = next;
             sendServo(M3_ANGLES[next]);
@@ -474,6 +490,12 @@ export default function SimulasiPage() {
       m3StateRef.current = "idle";
       m3IdxRef.current = 0;
       m3BufRef.current = [];
+      m3PhaseRef.current = "start";
+      m3BaseSpeedRef.current = 0;
+      m3TargetLoggedRef.current = false;
+      m3YawStallRef.current = 0;
+      m3RecoveryRef.current = 0;
+      m3RetryCountRef.current = 0;
       setM3LockLabel("");
     }
 
@@ -485,31 +507,100 @@ export default function SimulasiPage() {
       while (rawErr > 180) rawErr -= 360;
       while (rawErr < -180) rawErr += 360;
       const absErr = Math.abs(rawErr);
-      // Hold servo toward target
       const servoUI = Math.max(5, Math.min(175, Math.round(90 - rawErr)));
       sendServo(servoUI);
+
+      // Yaw-based stall: cuma hitung pas telemetry beneran update (ESP ~1Hz)
+      const telemUpdated = telemetryTick !== m3LastTelemetryRef.current;
+      m3LastTelemetryRef.current = telemetryTick;
+      const yawDelta = telemUpdated ? Math.abs(cur - m3LastYawRef.current) : 0;
+      if (telemUpdated) m3LastYawRef.current = cur;
+
       if (absErr > 15) {
         const gyroDeg = (telemetryRef.current?.gyroZ ?? 0);
-        let pwr = Math.round(rawErr * 1.2 - gyroDeg * 3);
-        pwr = Math.max(-100, Math.min(100, pwr));
-        m3RampRef.current += (pwr - m3RampRef.current) * 0.10;
-        let speed = Math.round(m3RampRef.current);
-        if (Math.abs(gyroDeg) < 2 && Math.abs(speed) > 15) {
-          m3StallRef.current++;
-          if (m3StallRef.current > 3) speed += Math.min(80, (m3StallRef.current - 3) * 8);
-        } else m3StallRef.current = 0;
+
+        // Deteksi stuck: cuma pas telemetry update, butuh 3× berturut-turut (~3 detik)
+        if (telemUpdated && yawDelta < 1 && gyroDeg < 3) {
+          m3YawStallRef.current++;
+        } else if (telemUpdated) {
+          m3YawStallRef.current = 0;
+        }
+
+        // Stuck recovery
+        if (m3YawStallRef.current >= 3) {
+          if (m3RecoveryRef.current === 0) {
+            logEvent(`M3: STALL ${m3YawStallRef.current}× yawΔ${yawDelta.toFixed(1)}° gyro${gyroDeg.toFixed(0)}°/s err${absErr.toFixed(0)}°`, "warn");
+          }
+          m3RecoveryRef.current++;
+          if (m3RecoveryRef.current < 15) {
+            const bk = -100;
+            setMotors(bk, bk);
+            setM3LockLabel(`mundur ${15 - m3RecoveryRef.current}`);
+            if (m3RecoveryRef.current === 1) logEvent("M3: recovery mundur", "nav");
+          } else if (m3RecoveryRef.current < 22) {
+            setMotors(0, 0);
+            setM3LockLabel("recovery stop...");
+            if (m3RecoveryRef.current === 15) logEvent("M3: recovery stop", "nav");
+          } else {
+            m3YawStallRef.current = 0;
+            m3RecoveryRef.current = 0;
+            m3RetryCountRef.current++;
+            if (m3RetryCountRef.current >= 3) {
+              logEvent(`M3: ⛔ gagal ${m3RetryCountRef.current}×, matikan`, "warn");
+              setModul3Active(false);
+              modul3ActiveRef.current = false;
+              m3StateRef.current = "idle";
+              m3PhaseRef.current = "start";
+              m3BaseSpeedRef.current = 0;
+              m3RetryCountRef.current = 0;
+              setM3LockLabel("");
+            } else {
+              logEvent(`M3: recovery #${m3RetryCountRef.current} scan ulang`, "warn");
+              m3StateRef.current = "scanning";
+              m3IdxRef.current = 0;
+              m3BufRef.current = [];
+              m3HoldRef.current = 0;
+              m3RetryRef.current = 0;
+              setM3LockLabel("SCAN");
+              sendServo(M3_ANGLES[0]);
+            }
+          }
+          return;
+        }
+
+        m3YawStallRef.current = 0;
+        m3TargetLoggedRef.current = false;
+
+        // ── PD control: speed = Kp × err - Kd × gyro ──
+        const Kp = 1.5, Kd = 1.0;
+        let speed = Math.round(rawErr * Kp - gyroDeg * Kd);
+        // Floor biar motor ESP merespon
+        if (speed > 0 && speed < 50) speed = 50;
+        if (speed < 0 && speed > -50) speed = -50;
         speed = Math.max(-130, Math.min(130, speed));
         leftMotorRef.current = -speed; rightMotorRef.current = speed;
         setLeftMotor(-speed); setRightMotor(speed);
         if (wsRef.current?.readyState === WebSocket.OPEN)
           wsRef.current.send(JSON.stringify({ leftMotor: -speed, rightMotor: speed }));
-        setM3LockLabel(rawErr > 0 ? `${Math.round(90-rawErr)}° kiri` : `${Math.round(90-rawErr)}° kanan`);
+        setM3LockLabel(rawErr > 0 ? `${Math.round(90-rawErr)}° kiri ${speed}` : `${Math.round(90-rawErr)}° kanan ${speed}`);
+        m3LogThrottleRef.current++;
+        if (m3LogThrottleRef.current % 5 === 0) {
+          logEvent(`M3: PD err${absErr.toFixed(0)}° s${speed} gy${gyroDeg.toFixed(0)}°/s`, "nav");
+        }
       } else {
-        leftMotorRef.current = 0; rightMotorRef.current = 0;
-        setLeftMotor(0); setRightMotor(0);
-        if (wsRef.current?.readyState === WebSocket.OPEN)
-          wsRef.current.send(JSON.stringify({ leftMotor: 0, rightMotor: 0 }));
+        setMotors(0, 0);
+        if (!m3TargetLoggedRef.current) {
+          m3TargetLoggedRef.current = true;
+          logEvent(`M3: ✅ target err=${absErr.toFixed(0)}° servo=${servoUI}° yaw=${cur.toFixed(0)}°`, "nav");
+        }
+        m3PhaseRef.current = "start";
+        m3BaseSpeedRef.current = 0;
         m3RampRef.current = 0; m3StallRef.current = 0;
+        m3YawStallRef.current = 0;
+        m3RecoveryRef.current = 0;
+        m3RetryCountRef.current = 0;
+        m3LogThrottleRef.current = 0;
+        m3LastTelemetryRef.current = 0;
         setM3LockLabel(`${servoUI}° siap`);
       }
     }
@@ -1056,16 +1147,16 @@ export default function SimulasiPage() {
             {modul1Active && (
               <div className="flex items-center gap-2 pl-4">
                 <span className="text-[8px] font-mono text-zinc-500">JARAK</span>
-                <input
-                  type="range"
-                  min="30"
-                  max="500"
-                  step="10"
-                  value={modul1Threshold}
-                  onChange={e => { setModul1Threshold(Number(e.target.value)); modul1ThresholdRef.current = Number(e.target.value); }}
-                  className="flex-1 h-1 accent-cyan-500 cursor-pointer"
-                />
-                <span className="text-[9px] font-mono text-cyan-400 w-9 text-right">{(modul1Threshold / 10).toFixed(0)}cm</span>
+                  <input
+                    type="range"
+                    min="10"
+                    max="500"
+                    step="10"
+                    value={modul1Threshold}
+                    onChange={e => { setModul1Threshold(Number(e.target.value)); modul1ThresholdRef.current = Number(e.target.value); }}
+                    className="flex-1 h-1 accent-cyan-500 cursor-pointer"
+                  />
+                    <span className="text-[9px] font-mono text-cyan-400 w-9 text-right">{modul1Threshold}cm</span>
               </div>
             )}
             <div className="flex items-center justify-between gap-3">

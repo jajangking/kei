@@ -561,8 +561,8 @@ export function drawScene(ctx: CanvasRenderingContext2D, st: DrawState): void {
     ctx.font = "bold 8px monospace";
     ctx.fillText(
       modul1Braking
-        ? `! HENTI ! <${(modul1Threshold / 10).toFixed(0)}cm`
-        : `M1 <${(modul1Threshold / 10).toFixed(0)}cm`,
+        ? `! HENTI ! <${modul1Threshold}cm`
+        : `M1 <${modul1Threshold}cm`,
       8,
       vh - 58
     );
