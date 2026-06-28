@@ -84,6 +84,7 @@ export default function SimulasiPage() {
   const m3RotFloorCountRef = useRef(0);
   const m3ServoLockRef = useRef(90);
   const m3StuckAngleRef = useRef(-1);
+  const m3RotStuckRef = useRef(0);
   const [m3LockLabel, setM3LockLabel] = useState("");
   const keyActiveRef = useRef(false);
   const [modulesOpen, setModulesOpen] = useState(false);
@@ -546,7 +547,7 @@ export default function SimulasiPage() {
         const gyroDeg = (telemetryRef.current?.gyroZ ?? 0);
 
         // Deteksi stuck: cuma pas telemetry update, butuh 3× berturut-turut (~3 detik)
-        if (telemUpdated && yawDelta < 1 && gyroDeg < 3) {
+        if (telemUpdated && yawDelta < 5 && gyroDeg < 3) {
           m3YawStallRef.current++;
         } else if (telemUpdated) {
           m3YawStallRef.current = 0;
@@ -613,6 +614,34 @@ export default function SimulasiPage() {
           }
         } else if (Math.abs(gyroDeg) >= 2) {
           m3RotFloorCountRef.current = 0;
+        }
+        // Rotasi stuck: floor max 130 tapi gyro masih 0 → robot gak bisa muter fisik
+        if (m3RotFloorRef.current >= 130 && Math.abs(gyroDeg) < 2 && absErr > 10) {
+          m3RotStuckRef.current++;
+          if (m3RotStuckRef.current > 30) {
+            logEvent(`M3: rotasi stuck floor130 gy${gyroDeg.toFixed(0)}° err${absErr.toFixed(0)}° → recovery`, "warn");
+            m3RotFloorRef.current = 50;
+            m3RotFloorCountRef.current = 0;
+            m3RotStuckRef.current = 0;
+            m3StateRef.current = "scanning";
+            m3IdxRef.current = 0;
+            m3BufRef.current = [];
+            m3DriveActiveRef.current = false;
+            m3DriveReadyRef.current = 0;
+            m3PhaseRef.current = "start";
+            m3BaseSpeedRef.current = 0;
+            m3TargetLoggedRef.current = false;
+            m3HoldRef.current = 0;
+            m3RetryRef.current = 0;
+            m3ServoLockRef.current = 90;
+            setM3LockLabel("SCAN");
+            sendServo(M3_ANGLES[0]);
+            setMotors(-80, -80);
+            setTimeout(() => setMotors(0, 0), 500);
+            return;
+          }
+        } else {
+          m3RotStuckRef.current = 0;
         }
         if (speed > 0 && speed < m3RotFloorRef.current) speed = m3RotFloorRef.current;
         if (speed < 0 && speed > -m3RotFloorRef.current) speed = -m3RotFloorRef.current;
