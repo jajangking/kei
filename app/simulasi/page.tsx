@@ -85,6 +85,7 @@ export default function SimulasiPage() {
   const m3ServoLockRef = useRef(90);
   const m3StuckAngleRef = useRef(-1);
   const m3RotStuckRef = useRef(0);
+  const m3DriveStuckCountRef = useRef(0);
   const [m3LockLabel, setM3LockLabel] = useState("");
   const [motorTrim, setMotorTrim] = useState(0);
   const motorTrimRef = useRef(0);
@@ -519,6 +520,7 @@ export default function SimulasiPage() {
       m3DriveReadyRef.current = 0;
       m3ServoLockRef.current = 90;
       m3StuckAngleRef.current = -1;
+      m3DriveStuckCountRef.current = 0;
       setM3LockLabel("");
     }
 
@@ -721,23 +723,44 @@ export default function SimulasiPage() {
                 m3DriveDistRef.current = dNow;
               }
               if (m3DriveDistStallRef.current > 120) {
-                logEvent(`M3: maju stuck d${(dNow/10).toFixed(0)}cm ${m3DriveDistStallRef.current}tick`, "warn");
+                m3DriveStuckCountRef.current++;
+                logEvent(`M3: maju stuck #${m3DriveStuckCountRef.current} d${(dNow/10).toFixed(0)}cm`, "warn");
                 m3DriveActiveRef.current = false;
                 m3DriveReadyRef.current = 0;
-                m3StateRef.current = "scanning";
-                m3IdxRef.current = 0;
-                m3BufRef.current = [];
-                m3PhaseRef.current = "start";
-                m3BaseSpeedRef.current = 0;
-                m3TargetLoggedRef.current = false;
-                m3HoldRef.current = 0;
-                m3RetryRef.current = 0;
                 m3ServoLockRef.current = 90;
-                m3StuckAngleRef.current = m3LockAngleRef.current;
-                setM3LockLabel("SCAN");
-                sendServo(M3_ANGLES[0]);
                 setMotors(-80, -80);
                 setTimeout(() => setMotors(0, 0), 500);
+                if (m3DriveStuckCountRef.current >= 2) {
+                  // Stuck 2× → skip scan, langsung cari angle lain
+                  const stuckAngle = m3LockAngleRef.current;
+                  const idx = M3_ANGLES.indexOf(stuckAngle);
+                  const nextAngle = M3_ANGLES[(idx + 1) % M3_ANGLES.length];
+                  m3StuckAngleRef.current = stuckAngle;
+                  m3LockAngleRef.current = nextAngle;
+                  m3LockDistRef.current = -1;
+                  sendServo(nextAngle);
+                  const rawYaw = telemetryYawRef.current;
+                  m3TargetHeadingRef.current = rawYaw + (90 - nextAngle);
+                  m3PhaseRef.current = "start";
+                  m3BaseSpeedRef.current = 0;
+                  m3TargetLoggedRef.current = false;
+                  m3StateRef.current = "locked";
+                  setM3LockLabel(`${nextAngle}° ?cm`);
+                  logEvent(`M3: skip scan → ${nextAngle}°`, "nav");
+                  m3DriveStuckCountRef.current = 0;
+                } else {
+                  m3StateRef.current = "scanning";
+                  m3IdxRef.current = 0;
+                  m3BufRef.current = [];
+                  m3HoldRef.current = 0;
+                  m3RetryRef.current = 0;
+                  m3PhaseRef.current = "start";
+                  m3BaseSpeedRef.current = 0;
+                  m3TargetLoggedRef.current = false;
+                  m3StuckAngleRef.current = m3LockAngleRef.current;
+                  setM3LockLabel("SCAN");
+                  sendServo(M3_ANGLES[0]);
+                }
                 return;
               }
             } else {
