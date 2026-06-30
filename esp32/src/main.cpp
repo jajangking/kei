@@ -87,17 +87,65 @@ static void updateLED() {
 }
 
 // ============================================================
-// Buzzer
+// Buzzer + Melody
 // ============================================================
+struct Note { uint16_t freq; uint16_t dur; };
+
+#define MELODY_NONE     0
+#define MELODY_STARTUP  1
+#define MELODY_BIRTHDAY 2
+
+static int melodyActive = MELODY_NONE;
+static int melodyIdx = 0;
+static unsigned long melodyTick = 0;
+
+static const Note melStartup[] = {
+  {523, 80}, {659, 80}, {784, 120}, {0, 1}
+};
+static const Note melBirthday[] = {
+  {262, 200}, {262, 200}, {294, 400}, {262, 400}, {349, 400}, {330, 800},
+  {262, 200}, {262, 200}, {294, 400}, {262, 400}, {392, 400}, {349, 800},
+  {262, 200}, {262, 200}, {523, 400}, {440, 400}, {349, 400}, {330, 400}, {294, 800},
+  {494, 200}, {494, 200}, {440, 400}, {349, 400}, {392, 400}, {349, 800},
+  {0, 1}
+};
+
 static void buzzerOn() { ledcWrite(PWM_BUZZ, 128); }
 static void buzzerOff() { ledcWrite(PWM_BUZZ, 0); }
 
+static void buzzerFreq(int freq) {
+  if (freq > 0) { ledcWriteTone(PWM_BUZZ, freq); ledcWrite(PWM_BUZZ, 128); }
+  else buzzerOff();
+}
+
+static void playMelody(int id) {
+  melodyActive = id;
+  melodyIdx = 0;
+  melodyTick = millis();
+}
+
+static void updateMelody() {
+  if (melodyActive == MELODY_NONE) return;
+  unsigned long now = millis();
+  const Note* mel = nullptr;
+  int len = 0;
+  if (melodyActive == MELODY_STARTUP) { mel = melStartup; len = sizeof(melStartup)/sizeof(Note); }
+  else if (melodyActive == MELODY_BIRTHDAY) { mel = melBirthday; len = sizeof(melBirthday)/sizeof(Note); }
+  if (!mel) { melodyActive = MELODY_NONE; return; }
+  if (melodyIdx >= len - 1) { buzzerOff(); melodyActive = MELODY_NONE; return; }
+  if (now - melodyTick >= mel[melodyIdx].dur) {
+    melodyIdx++;
+    melodyTick = now;
+    if (melodyIdx < len) buzzerFreq(mel[melodyIdx].freq);
+  }
+}
+
 static void updateBuzzer() {
+  if (melodyActive != MELODY_NONE) { updateMelody(); return; }
   static unsigned long last = 0;
   static bool state = false;
   unsigned long now = millis();
 
-  // Proximity warning — priority: beep cepat kalo jarak <= 5cm
   int d = readDistance();
   if (d > 0 && d <= 50) {
     unsigned long interval = state ? 60 : 200;
@@ -119,12 +167,6 @@ static void updateBuzzer() {
     last = now; state = !state;
     if (state) buzzerOn(); else buzzerOff();
   }
-}
-
-static void playStartupMelody() {
-  ledcWrite(PWM_BUZZ, 128);
-  delay(50);
-  ledcWrite(PWM_BUZZ, 0);
 }
 
 // ============================================================
@@ -252,6 +294,12 @@ void handleMessage(const String &msg) {
   if (doc["deviceName"].is<String>()) { saveDeviceName(doc["deviceName"].as<String>()); return; }
   if (doc["reboot"] == true) { delay(100); ESP.restart(); return; }
   if (doc["retrySensor"] == true) { retrySensor(); return; }
+  if (doc["buzzer"].is<const char*>()) {
+    const char* s = doc["buzzer"].as<const char*>();
+    if (strcmp(s, "birthday") == 0) playMelody(MELODY_BIRTHDAY);
+    else if (strcmp(s, "startup") == 0) playMelody(MELODY_STARTUP);
+    return;
+  }
 
   if (doc["factoryReset"] == true) { factoryReset(); delay(100); ESP.restart(); return; }
 
@@ -324,7 +372,7 @@ void setup() {
 
   pinMode(PIN_LED, OUTPUT); digitalWrite(PIN_LED, LOW);
   ledcSetup(PWM_BUZZ, 1000, PWM_RES); ledcAttachPin(PIN_BUZZ, PWM_BUZZ); ledcWrite(PWM_BUZZ, 0);
-  playStartupMelody();
+  playMelody(MELODY_STARTUP);
 
   Wire.begin(PIN_SDA, PIN_SCL);   // Wire0 — MPU6050 doang
   Wire.setClock(100000);
