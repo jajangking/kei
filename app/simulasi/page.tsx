@@ -1279,6 +1279,7 @@ export default function SimulasiPage() {
               {[
                 { lbl: '♪ HBD', melody: 'birthday' },
                 { lbl: '♪ START', melody: 'startup' },
+                { lbl: '📯 KLAKSON', melody: 'klakson' },
               ].map(b => (
                 <button key={b.melody} onClick={() => {
                   if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ buzzer: b.melody }));

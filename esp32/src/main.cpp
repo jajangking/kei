@@ -95,6 +95,7 @@ struct Note { uint16_t freq; uint16_t dur; };
 #define MELODY_STARTUP  1
 #define MELODY_BIRTHDAY 2
 #define MELODY_CUSTOM   3
+#define MELODY_KLAKSON  4
 #define MELODY_MAX_NOTES 60
 
 static int melodyActive = MELODY_NONE;
@@ -112,6 +113,11 @@ static const Note melBirthday[] = {
   {262, 200}, {262, 200}, {523, 400}, {440, 400}, {349, 400}, {330, 400}, {294, 800},
   {494, 200}, {494, 200}, {440, 400}, {349, 400}, {392, 400}, {349, 800},
   {0, 1}
+};
+
+static const Note melKlakson[] = {
+  {880, 100}, {440, 100}, {880, 100}, {440, 100}, {880, 100}, {440, 100}, {880, 100}, {440, 100},
+  {880, 200}, {440, 150}, {880, 400}, {0, 1}
 };
 
 static int buzzerVol = 128;
@@ -137,6 +143,7 @@ static void updateMelody() {
   int len = 0;
   if (melodyActive == MELODY_STARTUP) { mel = melStartup; len = sizeof(melStartup)/sizeof(Note); }
   else if (melodyActive == MELODY_BIRTHDAY) { mel = melBirthday; len = sizeof(melBirthday)/sizeof(Note); }
+  else if (melodyActive == MELODY_KLAKSON) { mel = melKlakson; len = sizeof(melKlakson)/sizeof(Note); }
   else if (melodyActive == MELODY_CUSTOM) { mel = customMelody; len = customMelodyLen; }
   if (!mel || len == 0) { melodyActive = MELODY_NONE; return; }
   if (melodyIdx >= len - 1) { buzzerOff(); melodyActive = MELODY_NONE; return; }
@@ -306,6 +313,7 @@ void handleMessage(const String &msg) {
     const char* s = doc["buzzer"].as<const char*>();
     if (strcmp(s, "birthday") == 0) playMelody(MELODY_BIRTHDAY);
     else if (strcmp(s, "startup") == 0) playMelody(MELODY_STARTUP);
+    else if (strcmp(s, "klakson") == 0) playMelody(MELODY_KLAKSON);
     return;
   }
   if (doc["melody"].is<JsonArray>()) {
