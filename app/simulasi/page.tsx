@@ -57,7 +57,7 @@ export default function SimulasiPage() {
   const [modul3Active, setModul3Active] = useState(false);
   const modul3ActiveRef = useRef(false);
   // M3 Autopilot state
-  const m3StateRef = useRef<"idle" | "scanning" | "locked">("idle");
+  const m3StateRef = useRef<"idle" | "scanning" | "locked" | "drive" | "arrive">("idle");
   const m3IdxRef = useRef(0);
   const m3HoldRef = useRef(0);
   const m3BufRef = useRef<number[]>([]);
@@ -67,6 +67,11 @@ export default function SimulasiPage() {
   const m3RetryRef = useRef(0);
   const m3RampRef = useRef(0);
   const m3StallRef = useRef(0);
+  const m3ArriveHoldRef = useRef(0);
+  const m3DriveTicksRef = useRef(0);
+  const m3LogThrottleRef = useRef(0);
+  const m3StateStrRef = useRef("idle");
+  const m3LabelRef = useRef("");
   const [m3LockLabel, setM3LockLabel] = useState("");
   const keyActiveRef = useRef(false);
   const [modulesOpen, setModulesOpen] = useState(false);
@@ -127,9 +132,10 @@ export default function SimulasiPage() {
   const sendServo = useCallback((deg: number) => {
     const prev = servoRef.current;
     const a = Math.round(Math.max(0, Math.min(180, deg)));
+    if (a === prev) return; // skip kalo sama
     setServoAngle(a);
     servoRef.current = a;
-    if (a !== prev) logEvent(`Servo ${prev}° → ${a}°`, "sensor");
+    logEvent(`Servo ${prev}° → ${a}°`, "sensor");
     if (modeRef.current === "NYATA" && wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ servo: 180 - a })); // servo fisik terbalik
     }
@@ -405,20 +411,28 @@ export default function SimulasiPage() {
       }
     }
 
-    // ═══ M3 Autopilot (NYATA only) ═══
-    if (modeRef.current === "NYATA" && modul3ActiveRef.current) {
+    // ═══ M3 Autopilot (LATIHAN + NYATA) ═══
+    if (modul3ActiveRef.current) {
+      const m3Yaw = modeRef.current === "NYATA" ? telemetryYawRef.current : (headingRef.current * 180 / Math.PI);
+      const m3Gyro = modeRef.current === "NYATA" ? (telemetryRef.current?.gyroZ ?? 0) : (gyroRef.current * 180 / Math.PI);
+      const isNyata = modeRef.current === "NYATA";
+
+      // ═══ M3 Idle → Scanning ═══
       if (m3StateRef.current === "idle") {
         m3StateRef.current = "scanning";
         m3IdxRef.current = 0;
         m3BufRef.current = [];
         m3HoldRef.current = 0;
         m3RetryRef.current = 0;
+        m3ArriveHoldRef.current = 0;
+        m3LogThrottleRef.current = 0;
         setM3LockLabel("SCAN");
         sendServo(M3_ANGLES[0]);
         logEvent("M3: scan start", "nav");
       }
+
+      // ═══ M3 Scanning ═══
       if (m3StateRef.current === "scanning") {
-        // Phase 1: wait for servo to settle + accumulate best reading
         if (m3HoldRef.current < 40) {
           m3HoldRef.current++;
           const cur = distanceRef.current;
@@ -426,26 +440,35 @@ export default function SimulasiPage() {
             m3BufRef.current[m3IdxRef.current] = cur;
           }
         }
-        // Phase 2: move to next angle
         if (m3HoldRef.current >= 40) {
           if (!m3BufRef.current[m3IdxRef.current]) {
             m3RetryRef.current++;
             if (m3RetryRef.current >= 3) {
-              m3BufRef.current[m3IdxRef.current] = -1; // mark as failed
+              m3BufRef.current[m3IdxRef.current] = -1;
               m3RetryRef.current = 0;
             } else {
-              m3HoldRef.current = 0; // retry same angle
+              m3HoldRef.current = 0;
               return;
             }
           }
+          // Log per-angle result
+          const angleBest = m3BufRef.current[m3IdxRef.current];
+          logEvent(`M3 scan ${M3_ANGLES[m3IdxRef.current]}° → ${angleBest > 0 ? `${(angleBest/10).toFixed(0)}cm` : "FAIL"}`, "nav");
+
           const next = m3IdxRef.current + 1;
           if (next >= M3_ANGLES.length) {
+            // DECISION: pick farthest gap
             let best = 0, bestD = -1;
+            const bufStr = M3_ANGLES.map((a, i) => {
+              const d = m3BufRef.current[i];
+              return `${a}°:${d > 0 ? `${(d/10).toFixed(0)}cm` : "X"}`;
+            }).join(" ");
+            logEvent(`M3 decision [${bufStr}]`, "nav");
+
             for (let i = 0; i < M3_ANGLES.length; i++) {
               const d = m3BufRef.current[i];
               if (d > 0 && d > bestD) { bestD = d; best = i; }
             }
-            // Fallback kalo semua gagal
             if (bestD < 0) {
               m3LockAngleRef.current = servoRef.current;
               m3LockDistRef.current = -1;
@@ -454,14 +477,13 @@ export default function SimulasiPage() {
               m3LockDistRef.current = bestD;
             }
             sendServo(m3LockAngleRef.current);
-            // Target heading dari servo angle (fisik terbalik: 180-UI)
-            // Servo 160° = 70° kanan → robot harus mutar 70° ke kanan
-            const rawYaw = telemetryYawRef.current;
-            m3TargetHeadingRef.current = rawYaw + (90 - m3LockAngleRef.current);
+            // Target heading
+            m3TargetHeadingRef.current = m3Yaw + (90 - m3LockAngleRef.current);
+            m3DriveTicksRef.current = 0;
             m3StateRef.current = "locked";
             const lbl = bestD > 0 ? `${m3LockAngleRef.current}° ${(bestD/10).toFixed(0)}cm` : "FAIL";
             setM3LockLabel(lbl);
-            logEvent(`M3: → ${lbl}`, "nav");
+            logEvent(`M3 → ${lbl} yaw=${m3Yaw.toFixed(1)}° target=${m3TargetHeadingRef.current.toFixed(1)}°`, "nav");
           } else {
             m3IdxRef.current = next;
             sendServo(M3_ANGLES[next]);
@@ -470,49 +492,137 @@ export default function SimulasiPage() {
           }
         }
       }
+
+      // ═══ M3 Rotate toward target heading ═══
+      if (m3StateRef.current === "locked") {
+        m3DriveTicksRef.current++;
+        // Normalize yaw 0-360 for stable tracking
+        const normYaw = ((m3Yaw % 360) + 360) % 360;
+        const target = ((m3TargetHeadingRef.current % 360) + 360) % 360;
+        let rawErr = target - normYaw;
+        while (rawErr > 180) rawErr -= 360;
+        while (rawErr < -180) rawErr += 360;
+        const absErr = Math.abs(rawErr);
+
+        // Periodic debug during rotate (every ~1s)
+        m3LogThrottleRef.current++;
+        if (m3LogThrottleRef.current % 60 === 0) {
+          logEvent(`M3 rotate #${m3DriveTicksRef.current} err=${absErr.toFixed(1)}° yaw=${normYaw.toFixed(1)}° → ${target.toFixed(1)}°`, "nav");
+        }
+
+        // Servo diam 90° selama rotasi (biar gak chasing error)
+        sendServo(90);
+
+        // Timeout paksa maju (~5s)
+        if (m3DriveTicksRef.current > 300) {
+          m3StateRef.current = "drive";
+          m3DriveTicksRef.current = 0;
+          m3LogThrottleRef.current = 0;
+          logEvent("M3: timeout rotate → drive", "nav");
+          leftMotorRef.current = 0; rightMotorRef.current = 0;
+          setLeftMotor(0); setRightMotor(0);
+          if (isNyata && wsRef.current?.readyState === WebSocket.OPEN)
+            wsRef.current.send(JSON.stringify({ leftMotor: 0, rightMotor: 0 }));
+          setM3LockLabel("MAJU");
+        } else if (absErr > 15) {
+          // rawErr > 0 → robot perlu mutar CW (yaw naik) → L=R positif → CW
+          // rawErr < 0 → robot perlu mutar CCW (yaw turun) → L=R negatif → CCW
+          const speed = Math.max(-130, Math.min(130, Math.round(rawErr * 1.5)));
+          leftMotorRef.current = speed; rightMotorRef.current = -speed;
+          setLeftMotor(speed); setRightMotor(-speed);
+          if (isNyata && wsRef.current?.readyState === WebSocket.OPEN)
+            wsRef.current.send(JSON.stringify({ leftMotor: speed, rightMotor: -speed }));
+          setM3LockLabel(absErr > 45 ? `${Math.round(absErr)}° putar` : `${Math.round(absErr)}° lurus`);
+        } else {
+          // Converged → drive
+          m3StateRef.current = "drive";
+          m3DriveTicksRef.current = 0;
+          m3LogThrottleRef.current = 0;
+          leftMotorRef.current = 0; rightMotorRef.current = 0;
+          setLeftMotor(0); setRightMotor(0);
+          if (isNyata && wsRef.current?.readyState === WebSocket.OPEN)
+            wsRef.current.send(JSON.stringify({ leftMotor: 0, rightMotor: 0 }));
+          setM3LockLabel("MAJU");
+          logEvent(`M3: maju err=${absErr.toFixed(1)}° ticks=${m3DriveTicksRef.current}`, "nav");
+        }
+      }
+
+      // ═══ M3 Drive forward (heading hold) ═══
+      if (m3StateRef.current === "drive") {
+        m3DriveTicksRef.current++;
+        const normYaw = ((m3Yaw % 360) + 360) % 360;
+        const target = ((m3TargetHeadingRef.current % 360) + 360) % 360;
+        let rawErr = target - normYaw;
+        while (rawErr > 180) rawErr -= 360;
+        while (rawErr < -180) rawErr += 360;
+
+        // Heading hold: gentle correction
+        const baseSpeed = 130;
+        const correction = Math.round(rawErr * 0.5);
+        const lm = Math.max(-255, Math.min(255, baseSpeed - correction));
+        const rm = Math.max(-255, Math.min(255, baseSpeed + correction));
+        leftMotorRef.current = lm; rightMotorRef.current = rm;
+        setLeftMotor(lm); setRightMotor(rm);
+        if (isNyata && wsRef.current?.readyState === WebSocket.OPEN)
+          wsRef.current.send(JSON.stringify({ leftMotor: lm, rightMotor: rm }));
+
+        // Periodic debug during drive
+        m3LogThrottleRef.current++;
+        if (m3LogThrottleRef.current % 30 === 1) {
+          const d = distanceRef.current;
+          const dStr = d > 0 ? `${(d/10).toFixed(0)}cm` : "—";
+          logEvent(`M3 drive #${m3DriveTicksRef.current} L=${lm} R=${rm} err=${rawErr.toFixed(1)}° dist=${dStr}`, "nav");
+        }
+
+        // Arrival: obstacle dekat ATAU timeout
+        const d = distanceRef.current;
+        if ((d > 0 && d < 50) || m3DriveTicksRef.current > 480) {
+          m3StateRef.current = "arrive";
+          m3ArriveHoldRef.current = 0;
+          m3LogThrottleRef.current = 0;
+          leftMotorRef.current = 0; rightMotorRef.current = 0;
+          setLeftMotor(0); setRightMotor(0);
+          if (isNyata && wsRef.current?.readyState === WebSocket.OPEN)
+            wsRef.current.send(JSON.stringify({ leftMotor: 0, rightMotor: 0 }));
+          setM3LockLabel("TIBA");
+          const reason = d > 0 ? `${(d/10).toFixed(0)}cm` : "timeout";
+          logEvent(`M3: tiba #${m3DriveTicksRef.current} ticks ${reason}`, "nav");
+        }
+      }
+
+      // ═══ M3 Arrive → pause → re-scan ═══
+      if (m3StateRef.current === "arrive") {
+        m3ArriveHoldRef.current++;
+        if (m3ArriveHoldRef.current > 30) {
+          m3StateRef.current = "scanning";
+          m3IdxRef.current = 0;
+          m3BufRef.current = [];
+          m3HoldRef.current = 0;
+          m3RetryRef.current = 0;
+          setM3LockLabel("SCAN");
+          sendServo(M3_ANGLES[0]);
+          logEvent("M3: re-scan", "nav");
+        }
+      }
     } else if (m3StateRef.current !== "idle") {
+      // M3 turned off mid-operation
+      const wasDriving = m3StateRef.current === "drive" || m3StateRef.current === "locked";
+      logEvent(`M3: off (was ${m3StateRef.current})`, "nav");
       m3StateRef.current = "idle";
       m3IdxRef.current = 0;
       m3BufRef.current = [];
       setM3LockLabel("");
-    }
-
-    // ═══ M3 Drive: rotate toward locked heading (PD + clampMin) ═══
-    if (m3StateRef.current === "locked" && !joyActiveRef.current && !keyActiveRef.current) {
-      const target = m3TargetHeadingRef.current;
-      const cur = telemetryYawRef.current;
-      let rawErr = target - cur;
-      while (rawErr > 180) rawErr -= 360;
-      while (rawErr < -180) rawErr += 360;
-      const absErr = Math.abs(rawErr);
-      // Hold servo toward target
-      const servoUI = Math.max(5, Math.min(175, Math.round(90 - rawErr)));
-      sendServo(servoUI);
-      if (absErr > 15) {
-        const gyroDeg = (telemetryRef.current?.gyroZ ?? 0);
-        let pwr = Math.round(rawErr * 1.2 - gyroDeg * 3);
-        pwr = Math.max(-100, Math.min(100, pwr));
-        m3RampRef.current += (pwr - m3RampRef.current) * 0.10;
-        let speed = Math.round(m3RampRef.current);
-        if (Math.abs(gyroDeg) < 2 && Math.abs(speed) > 15) {
-          m3StallRef.current++;
-          if (m3StallRef.current > 3) speed += Math.min(80, (m3StallRef.current - 3) * 8);
-        } else m3StallRef.current = 0;
-        speed = Math.max(-130, Math.min(130, speed));
-        leftMotorRef.current = -speed; rightMotorRef.current = speed;
-        setLeftMotor(-speed); setRightMotor(speed);
-        if (wsRef.current?.readyState === WebSocket.OPEN)
-          wsRef.current.send(JSON.stringify({ leftMotor: -speed, rightMotor: speed }));
-        setM3LockLabel(rawErr > 0 ? `${Math.round(90-rawErr)}° kiri` : `${Math.round(90-rawErr)}° kanan`);
-      } else {
+      if (wasDriving) {
         leftMotorRef.current = 0; rightMotorRef.current = 0;
         setLeftMotor(0); setRightMotor(0);
-        if (wsRef.current?.readyState === WebSocket.OPEN)
+        if (modeRef.current === "NYATA" && wsRef.current?.readyState === WebSocket.OPEN)
           wsRef.current.send(JSON.stringify({ leftMotor: 0, rightMotor: 0 }));
-        m3RampRef.current = 0; m3StallRef.current = 0;
-        setM3LockLabel(`${servoUI}° siap`);
       }
     }
+
+    // Sync M3 refs for monitor panel
+    m3StateStrRef.current = m3StateRef.current;
+    m3LabelRef.current = m3LockLabel;
 
     const d_now = distanceRef.current;
     let l = leftMotorRef.current;
@@ -527,9 +637,9 @@ export default function SimulasiPage() {
       }
     } else setBuzzerActive(false);
 
-    // Modul 1: Collision
+    // Modul 1: Collision (skip when M3 actively driving)
     const movingForward = l > 30 && r > 30;
-    if (modul1ActiveRef.current && d_now > 0 && d_now <= modul1ThresholdRef.current && movingForward) {
+    if (modul1ActiveRef.current && m3StateRef.current !== "drive" && d_now > 0 && d_now <= modul1ThresholdRef.current && movingForward) {
       l = 0; r = 0;
       setMotors(0, 0);
       leftMotorRef.current = 0;
@@ -724,7 +834,7 @@ export default function SimulasiPage() {
       keys.delete(e.key.toLowerCase());
       if (keys.size === 0) {
         keyActiveRef.current = false;
-        if (!joyActiveRef.current && m3StateRef.current !== "locked") setMotors(0, 0);
+        if (!joyActiveRef.current && !modul3ActiveRef.current) setMotors(0, 0);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -733,7 +843,7 @@ export default function SimulasiPage() {
     let running = true;
     const loop = () => {
       if (!running) return;
-      if (!joyActiveRef.current && !editMode && !(modeRef.current === "NYATA" && !telemetryRef.current) && (keyActiveRef.current || m3StateRef.current !== "locked")) {
+      if (!joyActiveRef.current && !editMode && !(modeRef.current === "NYATA" && !telemetryRef.current) && keyActiveRef.current && m3StateRef.current === "idle") {
         let lm = 0, rm = 0;
         if (keys.has("w") || keys.has("arrowup")) { lm = 255; rm = 255; }
         if (keys.has("s") || keys.has("arrowdown")) { lm = -255; rm = -255; }
@@ -1116,7 +1226,7 @@ export default function SimulasiPage() {
                 <span className="text-[10px] font-mono text-zinc-300">AUTOPILOT</span>
               </div>
               <button
-                onClick={() => setModul3Active(p => !p)}
+                onClick={() => { setModul3Active(p => !p); modul3ActiveRef.current = !modul3Active; }}
                 className={`px-2 py-0.5 rounded-full text-[8px] font-mono font-bold border transition-colors active:scale-90 ${
                   modul3Active
                     ? "bg-amber-600 border-amber-500 text-white"
@@ -1257,6 +1367,8 @@ export default function SimulasiPage() {
               modul1Active,
               modul2Active,
               modul3Active,
+              modul3StateRef: m3StateStrRef as React.MutableRefObject<string>,
+              modul3LabelRef: m3LabelRef,
               modul4Active,
               camActive,
               ttsActive,

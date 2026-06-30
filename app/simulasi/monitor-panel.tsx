@@ -77,7 +77,7 @@ export default function MonitorPanel({
     if (sdBuf) log(sdBuf, "sensor");
     log(`grid=${n.occupancyRef.current.size}`, "nav");
     log(
-      `M1=${n.modul1Active} M2=${n.modul2Active} M3=${n.modul3Active} M4=${n.modul4Active} cam=${n.camActive} tts=${n.ttsActive}`,
+      `M1=${n.modul1Active} M2=${n.modul2Active} M3=${n.modul3Active}[${n.modul3StateRef?.current || "?"}/${n.modul3LabelRef?.current || ""}] M4=${n.modul4Active} cam=${n.camActive} tts=${n.ttsActive}`,
       "info"
     );
     log(`=== DEBUG END ===`, "nav");

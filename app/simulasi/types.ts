@@ -40,6 +40,8 @@ export interface NavDebugData {
   modul1Active: boolean;
   modul2Active: boolean;
   modul3Active: boolean;
+  modul3StateRef: React.MutableRefObject<string>;
+  modul3LabelRef: React.MutableRefObject<string>;
   modul4Active: boolean;
   camActive: boolean;
   ttsActive: boolean;
