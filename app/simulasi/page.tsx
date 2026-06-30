@@ -30,6 +30,9 @@ export default function SimulasiPage() {
   const sweepPointsRef = useRef<Array<{ x: number; y: number }>>([]);
   const lastSweepAngleRef = useRef(-1);
   const distanceRef = useRef(-1);
+  const [trimVal, setTrimVal] = useState(() => typeof window !== "undefined" ? Number(localStorage.getItem("kei_trim") || "0") : 0);
+  const trimRef = useRef(0);
+  useEffect(() => { trimRef.current = trimVal; localStorage.setItem("kei_trim", String(trimVal)); }, [trimVal]);
   const [sensorDist, setSensorDist] = useState("---");
   const gyroRef = useRef(0);
   const scanFrameCountRef = useRef(0);
@@ -141,7 +144,9 @@ export default function SimulasiPage() {
       }
     }
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ leftMotor: l, rightMotor: r }));
+      const tl = Math.max(-255, Math.min(255, l - trimRef.current));
+      const tr = Math.max(-255, Math.min(255, r + trimRef.current));
+      wsRef.current.send(JSON.stringify({ leftMotor: tl, rightMotor: tr }));
     }
   }, [logEvent]);
 
@@ -275,8 +280,8 @@ export default function SimulasiPage() {
     {
       const dt = 0.03;
       const speedFactor = 0.12;
-      const l = leftMotorRef.current;
-      const r = rightMotorRef.current;
+      const l = Math.max(-255, Math.min(255, leftMotorRef.current - trimRef.current));
+      const r = Math.max(-255, Math.min(255, rightMotorRef.current + trimRef.current));
       const avg = (l + r) / 2 * speedFactor;
       const ang = (r - l) / WHEEL_BASE * speedFactor;
       if (tele?.yaw == null) headingRef.current += ang * dt;
@@ -392,7 +397,9 @@ export default function SimulasiPage() {
         setLeftMotor(l);
         setRightMotor(r);
         if (wsRef.current?.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify({ leftMotor: l, rightMotor: r }));
+          const tl = Math.max(-255, Math.min(255, l - trimRef.current));
+          const tr = Math.max(-255, Math.min(255, r + trimRef.current));
+          wsRef.current.send(JSON.stringify({ leftMotor: tl, rightMotor: tr }));
         }
       } else {
         setMotors(0, 0);
@@ -463,7 +470,9 @@ export default function SimulasiPage() {
           setLeftMotor(s);
           setRightMotor(s);
           if (wsRef.current?.readyState === WebSocket.OPEN) {
-            wsRef.current.send(JSON.stringify({ leftMotor: s, rightMotor: s }));
+            const tl = Math.max(-255, Math.min(255, s - trimRef.current));
+            const tr = Math.max(-255, Math.min(255, s + trimRef.current));
+            wsRef.current.send(JSON.stringify({ leftMotor: tl, rightMotor: tr }));
           }
         }
       }
@@ -479,7 +488,9 @@ export default function SimulasiPage() {
       setLeftMotor(-s);
       setRightMotor(-s);
       if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ leftMotor: -s, rightMotor: -s }));
+        const tl = Math.max(-255, Math.min(255, -s - trimRef.current));
+        const tr = Math.max(-255, Math.min(255, -s + trimRef.current));
+        wsRef.current.send(JSON.stringify({ leftMotor: tl, rightMotor: tr }));
       }
       if (backTickRef.current > 80) {
         setMotors(0, 0);
@@ -1121,6 +1132,17 @@ export default function SimulasiPage() {
                 </div>
               </div>
             )}
+            <div className="flex flex-col gap-0.5 mt-1 text-[7px] font-mono text-zinc-500">
+              <div className="flex items-center gap-1">
+                <span className="text-zinc-600">TRIM:</span>
+                <input type="range" min="-100" max="100" step="1" value={trimVal}
+                  onChange={e => setTrimVal(Number(e.target.value))}
+                  className="w-16 h-1.5 accent-cyan-500 cursor-pointer" />
+                <input type="number" min="-100" max="100" value={trimVal}
+                  onChange={e => setTrimVal(Math.max(-100, Math.min(100, Number(e.target.value) || 0))) }
+                  className="w-10 px-1 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-300 text-[8px] font-mono text-center outline-none" />
+              </div>
+            </div>
           </div>
         )}
       </div>
