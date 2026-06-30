@@ -234,7 +234,7 @@ void handleMessage(const String &msg) {
     if (n > LED_COUNT) n = LED_COUNT;
     for (size_t i = 0; i < n; i++)
       if (arr[i].as<bool>()) mask |= (1 << i);
-    setLEDMode(LED_MODE_AUTO);
+    setLEDMode(LED_MODE_MANUAL);
     setLEDs(mask);
     return;
   }

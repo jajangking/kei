@@ -30,11 +30,11 @@ void setLED(int idx, bool on) {
 
 void setLEDs(int mask) {
   ledBase = mask & 0xF;
-  if (ledMode == LED_MODE_AUTO) writePins(ledBase);
+  if (ledMode == LED_MODE_AUTO || ledMode == LED_MODE_MANUAL) writePins(ledBase);
 }
 
 void setLEDMode(int mode) {
-  if (mode < 0 || mode > LED_MODE_SIGNAL_R) return;
+  if (mode < 0 || mode > LED_MODE_MANUAL) return;
   ledMode = mode;
   lastToggle = 0;
   if (mode == LED_MODE_AUTO) writePins(ledBase);
@@ -44,7 +44,7 @@ int getLEDs() { return ledMode == LED_MODE_AUTO ? ledBase : ledBlink; }
 int getLEDMode() { return ledMode; }
 
 void updateLEDs() {
-  if (ledMode == LED_MODE_AUTO) return;
+  if (ledMode == LED_MODE_AUTO || ledMode == LED_MODE_MANUAL) return;
 
   unsigned long interval;
   int blinkMask;

@@ -9,6 +9,7 @@
 #define LED_MODE_HAZARD   1
 #define LED_MODE_SIGNAL_L 2
 #define LED_MODE_SIGNAL_R 3
+#define LED_MODE_MANUAL  4
 
 void initLEDs();
 void setLED(int idx, bool on);
