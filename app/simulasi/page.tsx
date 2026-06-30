@@ -1201,6 +1201,42 @@ export default function SimulasiPage() {
                 );
               })}
             </div>
+            <div className="flex gap-1 mt-1">
+              {[
+                { lbl: '♪ HBD', melody: 'birthday' },
+                { lbl: '♪ START', melody: 'startup' },
+              ].map(b => (
+                <button key={b.melody} onClick={() => {
+                  if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ buzzer: b.melody }));
+                }}
+                  className="px-1.5 py-0.5 rounded-md text-[7px] font-mono font-bold border bg-zinc-800 border-zinc-700 text-zinc-400 active:scale-90 hover:text-white"
+                >
+                  {b.lbl}
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-1 mt-1">
+              <input type="text" id="melodyInput" placeholder="262/200,294/400,330/800"
+                className="flex-1 min-w-0 px-1 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-300 text-[7px] font-mono outline-none placeholder-zinc-600"
+              />
+              <button onClick={() => {
+                const el = document.getElementById('melodyInput') as HTMLInputElement;
+                if (!el) return;
+                const raw = el.value.trim();
+                if (!raw) return;
+                const parts = raw.split(',').map(s => s.trim());
+                const arr: number[][] = [];
+                for (const p of parts) {
+                  const m = p.match(/^(\d+)\/(\d+)$/);
+                  if (m) arr.push([parseInt(m[1]), parseInt(m[2])]);
+                }
+                if (arr.length && wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ melody: arr }));
+              }}
+                className="px-1.5 py-0.5 rounded-md text-[7px] font-mono font-bold border bg-zinc-800 border-zinc-700 text-zinc-400 active:scale-90 hover:text-white"
+              >
+                ▶
+              </button>
+            </div>
           </div>
         )}
       </div>
