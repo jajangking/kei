@@ -320,6 +320,9 @@ float getRoll() { return roll; }
 float getPitch() { return pitch; }
 float getYaw() { return yaw; }
 float getGyroZ() { return gyroZ; }
+float getAccelX() { return ax / 16384.0; }
+float getAccelY() { return ay / 16384.0; }
+float getAccelZ() { return az / 16384.0; }
 void resetYaw() { yaw = 0; }
 
 String getMPUDiagnostic() {

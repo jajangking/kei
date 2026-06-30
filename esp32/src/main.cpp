@@ -149,6 +149,9 @@ String buildTelemetryJson() {
   j += ",\"pitch\":" + String(round(getPitch() * 10) / 10);
   j += ",\"yaw\":" + String(round(getYaw() * 10) / 10);
   j += ",\"gyroZ\":" + String(round(getGyroZ() * 10) / 10);
+  j += ",\"accelX\":" + String(getAccelX());
+  j += ",\"accelY\":" + String(getAccelY());
+  j += ",\"accelZ\":" + String(getAccelZ());
   j += ",\"servo\":" + String(getServoAngle());
   j += ",\"led\":" + String(getLEDs());
   j += ",\"led_mode\":" + String(getLEDMode());

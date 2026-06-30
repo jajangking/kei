@@ -1,14 +1,15 @@
 import type { Obstacle, Sector } from "./types";
 
-export const GRID_STEP = 50;
+export const GRID_STEP = 25;
 export const TRAIL_LEN = 40;
 export const MAX_SENSE = 400;
 export const LIDAR_FOV = 7 * Math.PI / 180; // VL53L0X narrow beam ~14° total
 
 // Robot chassis 2WD (mm → 1 unit = 1cm roughly)
-export const ROBOT_W = 22;
-export const ROBOT_H = 16;
-export const ROBOT_R = 13;
+export const ROBOT_W = 15;
+export const ROBOT_H = 30;
+export const ROBOT_R = 15;
+export const SERVO_SCALE = 3; // fisik servo cuma noleh 1/SERVO_SCALE dari slider
 export const WHEEL_BASE = 14;
 
 // Physical simulation constants

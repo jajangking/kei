@@ -26,6 +26,9 @@ float getRoll();
 float getPitch();
 float getYaw();
 float getGyroZ();
+float getAccelX();
+float getAccelY();
+float getAccelZ();
 void resetYaw();
 String getMPUDiagnostic();
 

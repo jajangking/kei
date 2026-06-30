@@ -5,19 +5,18 @@ import { ObjectDetector, FaceDetector, FilesetResolver, type Detection } from "@
 import { loadDB, saveDB, registerFace, renameFace, deleteFace, recognize, type FaceRecord } from "../facerecog";
 import VoiceGroq from "../voicegroq";
 
-import type { Obstacle, EditTool, LogEntry, SimulasiMode, ServoRead, FacingMode, MotorRef } from "./types";
-import { GRID_STEP, TRAIL_LEN, MAX_SENSE, LIDAR_FOV, ROBOT_R, ROBOT_H, WHEEL_BASE, ACCEL, FRICTION, ANG_ACCEL, ANG_FRICTION, JOY_DEADZONE, MAX_LOG, SECTORS, PRESETS } from "./constants";
-import { snap, collides, rayIntersect, castRayAngle, gridCellKey, getGrid, setGrid, syncGridFromObstacles, findSafeSpawn } from "./utils";
+import type { LogEntry, ServoRead, FacingMode, MotorRef } from "./types";
+import { ROBOT_R, TRAIL_LEN, MAX_SENSE, JOY_DEADZONE, MAX_LOG, SECTORS, SERVO_SCALE } from "./constants";
+import { gridCellKey } from "./utils";
 import { drawScene, type DrawState } from "./renderer";
 import MonitorPanel from "./monitor-panel";
-
-const M3_ANGLES = [20, 35, 50, 65, 80, 95, 110, 125, 140, 155];
 
 export default function SimulasiPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const posRef = useRef({ x: 0, y: 350 });
   const headingRef = useRef(0);
-  const scaleRef = useRef(1);
+  const velRef = useRef({ x: 0, y: 0 });
+  const scaleRef = useRef(1.8);
 
   const leftMotorRef = useRef(0);
   const rightMotorRef = useRef(0);
@@ -27,16 +26,9 @@ export default function SimulasiPage() {
   const [joyPos, setJoyPos] = useState({ x: 0, y: 0 });
   const [leftMotor, setLeftMotor] = useState(0);
   const [rightMotor, setRightMotor] = useState(0);
-  const [editMode, setEditMode] = useState(false);
-  const [editTool, setEditTool] = useState<EditTool>("place");
-  const [showPresets, setShowPresets] = useState(false);
   const scanDotsRef = useRef<Array<{ x: number; y: number }>>([]);
   const sweepPointsRef = useRef<Array<{ x: number; y: number }>>([]);
   const lastSweepAngleRef = useRef(-1);
-  const obstaclesRef = useRef<Obstacle[]>([]);
-  const drawStartRef = useRef<{ x: number; y: number } | null>(null);
-  const drawEndRef = useRef<{ x: number; y: number } | null>(null);
-  const [obstacleCount, setObstacleCount] = useState(0);
   const distanceRef = useRef(-1);
   const [sensorDist, setSensorDist] = useState("---");
   const gyroRef = useRef(0);
@@ -46,33 +38,6 @@ export default function SimulasiPage() {
   const [buzzerActive, setBuzzerActive] = useState(false);
   const [leds, setLeds] = useState([0, 0, 0, 0]);
   const lastBuzzerRef = useRef(0);
-  const [modul1Active, setModul1Active] = useState(true);
-  const modul1ActiveRef = useRef(true);
-  const [modul1Braking, setModul1Braking] = useState(false);
-  const [modul1Threshold, setModul1Threshold] = useState(30);
-  const modul1ThresholdRef = useRef(30);
-  const modul1BrakingRef = useRef(false);
-  const [modul2Active, setModul2Active] = useState(false);
-  const modul2ActiveRef = useRef(false);
-  const [modul3Active, setModul3Active] = useState(false);
-  const modul3ActiveRef = useRef(false);
-  // M3 Autopilot state
-  const m3StateRef = useRef<"idle" | "scanning" | "locked" | "drive" | "arrive">("idle");
-  const m3IdxRef = useRef(0);
-  const m3HoldRef = useRef(0);
-  const m3BufRef = useRef<number[]>([]);
-  const m3LockAngleRef = useRef(90);
-  const m3LockDistRef = useRef(-1);
-  const m3TargetHeadingRef = useRef(0);
-  const m3RetryRef = useRef(0);
-  const m3RampRef = useRef(0);
-  const m3StallRef = useRef(0);
-  const m3ArriveHoldRef = useRef(0);
-  const m3DriveTicksRef = useRef(0);
-  const m3LogThrottleRef = useRef(0);
-  const m3StateStrRef = useRef("idle");
-  const m3LabelRef = useRef("");
-  const [m3LockLabel, setM3LockLabel] = useState("");
   const keyActiveRef = useRef(false);
   const [modulesOpen, setModulesOpen] = useState(false);
   const sectorDataRef = useRef<number[]>(SECTORS.map(() => -1));
@@ -101,6 +66,7 @@ export default function SimulasiPage() {
   ]);
   const [showLog, setShowLog] = useState(false);
   const [showVoice, setShowVoice] = useState(false);
+  const [nyataOpen, setNyataOpen] = useState(true);
   const [logTick, setLogTick] = useState(0);
   const logEvent = useCallback((msg: string, type: LogEntry["type"] = "info") => {
     const now = new Date();
@@ -110,13 +76,6 @@ export default function SimulasiPage() {
     setLogTick(t => t + 1);
   }, []);
 
-  // Physical State
-  const velRef = useRef({ x: 0, y: 0 });
-  const angVelRef = useRef(0);
-
-  // Mode
-  const [mode, setMode] = useState<SimulasiMode>("LATIHAN");
-  const modeRef = useRef<SimulasiMode>("LATIHAN");
   const wsRef = useRef<WebSocket | null>(null);
   const [espConnected, setEspConnected] = useState(false);
   const [espIp, setEspIp] = useState(() => typeof window !== "undefined" ? localStorage.getItem("kei_esp_ip") || "" : "");
@@ -135,9 +94,8 @@ export default function SimulasiPage() {
     if (a === prev) return; // skip kalo sama
     setServoAngle(a);
     servoRef.current = a;
-    logEvent(`Servo ${prev}° → ${a}°`, "sensor");
-    if (modeRef.current === "NYATA" && wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ servo: 180 - a })); // servo fisik terbalik
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ servo: 180 - a }));
     }
   }, [logEvent]);
 
@@ -148,11 +106,9 @@ export default function SimulasiPage() {
   const setMotors = useCallback((l: number, r: number) => {
     const prevL = leftMotorRef.current;
     const prevR = rightMotorRef.current;
-    if (modeRef.current === "NYATA") {
-      const clampMin = (v: number) => v === 0 ? 0 : Math.round(v > 0 ? Math.max(80, v) : Math.min(-80, v));
-      l = clampMin(l);
-      r = clampMin(r);
-    }
+    const clampMin = (v: number) => v === 0 ? 0 : Math.round(v > 0 ? Math.max(80, v) : Math.min(-80, v));
+    l = clampMin(l);
+    r = clampMin(r);
     leftMotorRef.current = l;
     rightMotorRef.current = r;
     setLeftMotor(l);
@@ -166,7 +122,7 @@ export default function SimulasiPage() {
         logEvent(`Motor ${isStop ? "STOP" : `L=${l} R=${r}`}`, "motor");
       }
     }
-    if (modeRef.current === "NYATA" && wsRef.current?.readyState === WebSocket.OPEN) {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ leftMotor: l, rightMotor: r }));
     }
   }, [logEvent]);
@@ -256,140 +212,79 @@ export default function SimulasiPage() {
     const p = posRef.current;
     const h = headingRef.current;
 
-    if (modeRef.current === "NYATA") {
-      const tele = telemetryRef.current;
-      const d = (tele?.distance != null && tele.distance >= 0)
-        ? Math.min(tele.distance / 10, MAX_SENSE)
-        : -1;
-      distanceRef.current = d;
-      setSensorDist(d > 0 ? `${d.toFixed(0)}cm` : "---");
-      gyroRef.current = (tele?.gyroZ ?? 0) * 0.002;
+    const tele = telemetryRef.current;
+    const dRaw = (tele?.distance != null && tele.distance >= 0) ? tele.distance / 10 : -1;
+    const prevD = distanceRef.current;
+    const d = (dRaw > 0 && prevD > 0 && Math.abs(dRaw - prevD) > 100) ? prevD : Math.min(dRaw, MAX_SENSE);
+    distanceRef.current = d;
+    if (d > 0) setSensorDist(`${d.toFixed(0)}cm`);
+    gyroRef.current = (tele?.gyroZ ?? 0) * 0.002;
 
-      telemetryYawRef.current = tele?.yaw ?? 0;
-      const y = tele?.yaw;
-      if (y != null) headingRef.current = -y * Math.PI / 180; // MPU terbalik
+    telemetryYawRef.current = tele?.yaw ?? 0;
+    const y = tele?.yaw;
+    if (y != null) headingRef.current = -y * Math.PI / 180;
 
-      const dots = scanDotsRef.current;
-      const gyroMag = Math.abs(tele?.gyroZ ?? 0);
-      const scanFrameCount = scanFrameCountRef.current;
-      scanFrameCountRef.current = scanFrameCount + 1;
-      if (dots.length > 10) {
-        const far = dots.filter(dot => Math.hypot(dot.x - p.x, dot.y - p.y) < 600);
-        if (far.length < dots.length) scanDotsRef.current = far.length > 10 ? far : dots.slice(-50);
-      }
-      if (d > 0 && gyroMag < 30 && scanFrameCount % 4 === 0) {
-        const hdg = headingRef.current;
-        const gridSize = 25;
-        const hitX = Math.round((p.x + Math.sin(hdg) * d) / gridSize) * gridSize;
-        const hitY = Math.round((p.y - Math.cos(hdg) * d) / gridSize) * gridSize;
-        let dup = false;
-        const cur = scanDotsRef.current;
-        for (let i = Math.max(0, cur.length - 20); i < cur.length; i++) {
-          if (cur[i].x === hitX && cur[i].y === hitY) { dup = true; break; }
-        }
-        if (!dup) {
-          cur.push({ x: hitX, y: hitY });
-          if (cur.length > 300) cur.splice(0, cur.length - 300);
-        }
-      }
-
-      const l = leftMotorRef.current;
-      const r = rightMotorRef.current;
-      if (l !== 0 || r !== 0) {
-        const avg = (l + r) / 510;
-        p.x += Math.sin(headingRef.current) * avg * 2;
-        p.y -= Math.cos(headingRef.current) * avg * 2;
-        const trail = trailRef.current;
-        if (trail.length === 0 || Math.hypot(trail[trail.length - 1].x - p.x, trail[trail.length - 1].y - p.y) > 3) {
-          trail.push({ x: p.x, y: p.y });
-          if (trail.length > TRAIL_LEN) trail.shift();
+    const dots = scanDotsRef.current;
+    const gyroMag = Math.abs(tele?.gyroZ ?? 0);
+    const motorMoving = leftMotorRef.current !== 0 || rightMotorRef.current !== 0;
+    const scanFrameCount = scanFrameCountRef.current;
+    scanFrameCountRef.current = scanFrameCount + 1;
+    if (dots.length > 500) {
+      scanDotsRef.current = dots.slice(-300);
+    }
+    if (d > 0 && gyroMag < 15 && !motorMoving && scanFrameCount % 3 === 0) {
+      const sa = servoRef.current;
+      const servoRad = ((sa - 90) / SERVO_SCALE) * (Math.PI / 180);
+      const hdg = headingRef.current + servoRad;
+      const hitX = p.x + Math.sin(hdg) * (ROBOT_R + d);
+      const hitY = p.y - Math.cos(hdg) * (ROBOT_R + d);
+      const cur = scanDotsRef.current;
+      let found = false;
+      for (let i = 0; i < cur.length; i++) {
+        if (Math.hypot(cur[i].x - hitX, cur[i].y - hitY) < 40) {
+          cur[i].x = (cur[i].x + hitX) * 0.5;
+          cur[i].y = (cur[i].y + hitY) * 0.5;
+          found = true;
+          break;
         }
       }
-
-      if (modul2ActiveRef.current && dots.length > 20) {
-        for (const dot of dots) {
-          const gk = gridCellKey(dot.x, dot.y);
-          if (occupancyRef.current.get(gk) !== 2) occupancyRef.current.set(gk, 2);
-        }
-        const rk = gridCellKey(p.x, p.y);
-        if (!occupancyRef.current.has(rk)) occupancyRef.current.set(rk, 1);
-        if (occupancyRef.current.size > 5000) {
-          const arr = [...occupancyRef.current];
-          occupancyRef.current = new Map(arr.slice(arr.length - 3000));
-        }
+      if (!found) {
+        cur.push({ x: hitX, y: hitY });
+        if (cur.length > 500) cur.splice(0, 100);
       }
     }
 
-    // Servo sweep — skip if M3 autopilot taking over
-    if (modul2ActiveRef.current && !modul3ActiveRef.current) {
-      let newAngle = Math.round(90 + Math.sin(Date.now() / 1000 * 0.7) * 70);
-      if (modeRef.current === "NYATA") {
-        if (Math.abs(newAngle - servoRef.current) >= 3) sendServo(newAngle);
-      } else {
-        servoRef.current = newAngle;
+    {
+      const ax = tele?.accelX ?? 0;
+      const dt = 0.03;
+      const accelFW = (-ax) * 981;
+      const worldDx = Math.sin(headingRef.current) * accelFW;
+      const worldDy = -Math.cos(headingRef.current) * accelFW;
+      velRef.current.x += worldDx * dt;
+      velRef.current.y += worldDy * dt;
+      if (Math.abs(ax) < 0.03 && Math.abs(tele?.gyroZ ?? 0) < 5) {
+        velRef.current.x *= 0.85;
+        velRef.current.y *= 0.85;
       }
+      p.x += velRef.current.x * dt;
+      p.y += velRef.current.y * dt;
     }
 
-    // LATIHAN: cast laser
-    if (modeRef.current !== "NYATA") {
-      const servoRad = (servoRef.current - 90) * Math.PI / 180;
-      const d = castRayAngle(servoRad, posRef.current, headingRef.current, obstaclesRef.current, scanDotsRef.current, true);
-      distanceRef.current = d;
-      setSensorDist(d > 0 ? `${(d / 10).toFixed(0)}cm` : "---");
-
-      if (modul2ActiveRef.current && d > 0) {
-        const angleDiff = Math.abs(servoRef.current - lastSweepAngleRef.current);
-        if (lastSweepAngleRef.current < 0 || angleDiff >= 3) {
-          lastSweepAngleRef.current = servoRef.current;
-          const sx = p.x + Math.sin(h + servoRad) * d;
-          const sy = p.y - Math.cos(h + servoRad) * d;
-          sweepPointsRef.current.push({ x: sx, y: sy });
-          if (sweepPointsRef.current.length > 2000) sweepPointsRef.current = sweepPointsRef.current.slice(-1500);
-        }
+    if (dots.length > 20) {
+      for (const dot of dots) {
+        const gk = gridCellKey(dot.x, dot.y);
+        if (occupancyRef.current.get(gk) !== 2) occupancyRef.current.set(gk, 2);
       }
-      if (d > 0) {
-        servoHistoryRef.current.push({ angle: servoRef.current, dist: d });
-        if (servoHistoryRef.current.length > 100) servoHistoryRef.current.shift();
+      const rk = gridCellKey(p.x, p.y);
+      if (!occupancyRef.current.has(rk)) occupancyRef.current.set(rk, 1);
+      if (occupancyRef.current.size > 5000) {
+        const arr = [...occupancyRef.current];
+        occupancyRef.current = new Map(arr.slice(arr.length - 3000));
       }
-      if (modul2ActiveRef.current && d > 0) {
-        const sr = servoRad;
-        const rayAngle = headingRef.current + sr;
-        const rx = Math.sin(rayAngle);
-        const ry = -Math.cos(rayAngle);
-        const step = GRID_STEP;
-        const steps = Math.floor(d / step);
-        for (let i = 0; i < steps; i++) {
-          const sx = p.x + rx * step * i;
-          const sy = p.y + ry * step * i;
-          if (getGrid(occupancyRef.current, sx, sy) === 0) setGrid(occupancyRef.current, sx, sy, 1);
-        }
-        const hitX = p.x + rx * d;
-        const hitY = p.y + ry * d;
-        if (getGrid(occupancyRef.current, hitX, hitY) === 0) setGrid(occupancyRef.current, hitX, hitY, 2);
-      }
-      {
-        if (getGrid(occupancyRef.current, posRef.current.x, posRef.current.y) === 0)
-          setGrid(occupancyRef.current, posRef.current.x, posRef.current.y, 1);
-      }
-      if (modul2ActiveRef.current) {
-        for (let i = 0; i < SECTORS.length; i++) {
-          const sd = sectorDataRef.current[i];
-          if (sd <= 0 || sd >= MAX_SENSE) continue;
-          const aRad = (SECTORS[i].cx - 90) * Math.PI / 180;
-          const rh = headingRef.current;
-          const hx = p.x + Math.sin(rh + aRad) * sd;
-          const hy = p.y - Math.cos(rh + aRad) * sd;
-          if (getGrid(occupancyRef.current, hx, hy) === 0) setGrid(occupancyRef.current, hx, hy, 2);
-        }
-      }
-    }
-
-    if (modeRef.current === "NYATA" && distanceRef.current > 0) {
-      setSensorDist(`${(distanceRef.current / 10).toFixed(0)}cm`);
     }
 
     // Sector data
-    if (modul2ActiveRef.current) {
+    {
       const s = servoRef.current;
       const currentDist = distanceRef.current;
       for (let i = 0; i < SECTORS.length; i++) {
@@ -398,231 +293,10 @@ export default function SimulasiPage() {
           const dist = currentDist > 0 ? currentDist : MAX_SENSE;
           sectorDataRef.current[i] = dist;
           setSectorData([...sectorDataRef.current]);
-          if (currentDist > 0) {
-            const qDist = Math.round(currentDist / 50) * 50;
-            const logKey = `${sec.id}_${qDist}`;
-            if (logKey !== (window as any).__lastSensorLog) {
-              (window as any).__lastSensorLog = logKey;
-              logEvent(`${sec.id} ${s}° → ${(currentDist/10).toFixed(0)}cm`, "sensor");
-            }
-          }
           break;
         }
       }
     }
-
-    // ═══ M3 Autopilot (LATIHAN + NYATA) ═══
-    if (modul3ActiveRef.current) {
-      const m3Yaw = modeRef.current === "NYATA" ? telemetryYawRef.current : (headingRef.current * 180 / Math.PI);
-      const m3Gyro = modeRef.current === "NYATA" ? (telemetryRef.current?.gyroZ ?? 0) : (gyroRef.current * 180 / Math.PI);
-      const isNyata = modeRef.current === "NYATA";
-
-      // ═══ M3 Idle → Scanning ═══
-      if (m3StateRef.current === "idle") {
-        m3StateRef.current = "scanning";
-        m3IdxRef.current = 0;
-        m3BufRef.current = [];
-        m3HoldRef.current = 0;
-        m3RetryRef.current = 0;
-        m3ArriveHoldRef.current = 0;
-        m3LogThrottleRef.current = 0;
-        setM3LockLabel("SCAN");
-        sendServo(M3_ANGLES[0]);
-        logEvent("M3: scan start", "nav");
-      }
-
-      // ═══ M3 Scanning ═══
-      if (m3StateRef.current === "scanning") {
-        if (m3HoldRef.current < 40) {
-          m3HoldRef.current++;
-          const cur = distanceRef.current;
-          if (cur > 0 && (m3BufRef.current[m3IdxRef.current] || 0) < cur) {
-            m3BufRef.current[m3IdxRef.current] = cur;
-          }
-        }
-        if (m3HoldRef.current >= 40) {
-          if (!m3BufRef.current[m3IdxRef.current]) {
-            m3RetryRef.current++;
-            if (m3RetryRef.current >= 3) {
-              m3BufRef.current[m3IdxRef.current] = -1;
-              m3RetryRef.current = 0;
-            } else {
-              m3HoldRef.current = 0;
-              return;
-            }
-          }
-          // Log per-angle result
-          const angleBest = m3BufRef.current[m3IdxRef.current];
-          logEvent(`M3 scan ${M3_ANGLES[m3IdxRef.current]}° → ${angleBest > 0 ? `${(angleBest/10).toFixed(0)}cm` : "FAIL"}`, "nav");
-
-          const next = m3IdxRef.current + 1;
-          if (next >= M3_ANGLES.length) {
-            // DECISION: pick farthest gap
-            let best = 0, bestD = -1;
-            const bufStr = M3_ANGLES.map((a, i) => {
-              const d = m3BufRef.current[i];
-              return `${a}°:${d > 0 ? `${(d/10).toFixed(0)}cm` : "X"}`;
-            }).join(" ");
-            logEvent(`M3 decision [${bufStr}]`, "nav");
-
-            for (let i = 0; i < M3_ANGLES.length; i++) {
-              const d = m3BufRef.current[i];
-              if (d > 0 && d > bestD) { bestD = d; best = i; }
-            }
-            if (bestD < 0) {
-              m3LockAngleRef.current = servoRef.current;
-              m3LockDistRef.current = -1;
-            } else {
-              m3LockAngleRef.current = M3_ANGLES[best];
-              m3LockDistRef.current = bestD;
-            }
-            sendServo(m3LockAngleRef.current);
-            // Target heading
-            m3TargetHeadingRef.current = m3Yaw + (90 - m3LockAngleRef.current);
-            m3DriveTicksRef.current = 0;
-            m3StateRef.current = "locked";
-            const lbl = bestD > 0 ? `${m3LockAngleRef.current}° ${(bestD/10).toFixed(0)}cm` : "FAIL";
-            setM3LockLabel(lbl);
-            logEvent(`M3 → ${lbl} yaw=${m3Yaw.toFixed(1)}° target=${m3TargetHeadingRef.current.toFixed(1)}°`, "nav");
-          } else {
-            m3IdxRef.current = next;
-            sendServo(M3_ANGLES[next]);
-            m3HoldRef.current = 0;
-            m3RetryRef.current = 0;
-          }
-        }
-      }
-
-      // ═══ M3 Rotate toward target heading ═══
-      if (m3StateRef.current === "locked") {
-        m3DriveTicksRef.current++;
-        // Normalize yaw 0-360 for stable tracking
-        const normYaw = ((m3Yaw % 360) + 360) % 360;
-        const target = ((m3TargetHeadingRef.current % 360) + 360) % 360;
-        let rawErr = target - normYaw;
-        while (rawErr > 180) rawErr -= 360;
-        while (rawErr < -180) rawErr += 360;
-        const absErr = Math.abs(rawErr);
-
-        // Periodic debug during rotate (every ~1s)
-        m3LogThrottleRef.current++;
-        if (m3LogThrottleRef.current % 60 === 0) {
-          logEvent(`M3 rotate #${m3DriveTicksRef.current} err=${absErr.toFixed(1)}° yaw=${normYaw.toFixed(1)}° → ${target.toFixed(1)}°`, "nav");
-        }
-
-        // Servo diam 90° selama rotasi (biar gak chasing error)
-        sendServo(90);
-
-        // Timeout paksa maju (~5s)
-        if (m3DriveTicksRef.current > 300) {
-          m3StateRef.current = "drive";
-          m3DriveTicksRef.current = 0;
-          m3LogThrottleRef.current = 0;
-          logEvent("M3: timeout rotate → drive", "nav");
-          leftMotorRef.current = 0; rightMotorRef.current = 0;
-          setLeftMotor(0); setRightMotor(0);
-          if (isNyata && wsRef.current?.readyState === WebSocket.OPEN)
-            wsRef.current.send(JSON.stringify({ leftMotor: 0, rightMotor: 0 }));
-          setM3LockLabel("MAJU");
-        } else if (absErr > 15) {
-          // rawErr > 0 → robot perlu mutar CW (yaw naik) → L=R positif → CW
-          // rawErr < 0 → robot perlu mutar CCW (yaw turun) → L=R negatif → CCW
-          const speed = Math.max(-130, Math.min(130, Math.round(rawErr * 1.5)));
-          leftMotorRef.current = speed; rightMotorRef.current = -speed;
-          setLeftMotor(speed); setRightMotor(-speed);
-          if (isNyata && wsRef.current?.readyState === WebSocket.OPEN)
-            wsRef.current.send(JSON.stringify({ leftMotor: speed, rightMotor: -speed }));
-          setM3LockLabel(absErr > 45 ? `${Math.round(absErr)}° putar` : `${Math.round(absErr)}° lurus`);
-        } else {
-          // Converged → drive
-          m3StateRef.current = "drive";
-          m3DriveTicksRef.current = 0;
-          m3LogThrottleRef.current = 0;
-          leftMotorRef.current = 0; rightMotorRef.current = 0;
-          setLeftMotor(0); setRightMotor(0);
-          if (isNyata && wsRef.current?.readyState === WebSocket.OPEN)
-            wsRef.current.send(JSON.stringify({ leftMotor: 0, rightMotor: 0 }));
-          setM3LockLabel("MAJU");
-          logEvent(`M3: maju err=${absErr.toFixed(1)}° ticks=${m3DriveTicksRef.current}`, "nav");
-        }
-      }
-
-      // ═══ M3 Drive forward (heading hold) ═══
-      if (m3StateRef.current === "drive") {
-        m3DriveTicksRef.current++;
-        const normYaw = ((m3Yaw % 360) + 360) % 360;
-        const target = ((m3TargetHeadingRef.current % 360) + 360) % 360;
-        let rawErr = target - normYaw;
-        while (rawErr > 180) rawErr -= 360;
-        while (rawErr < -180) rawErr += 360;
-
-        // Heading hold: gentle correction
-        const baseSpeed = 130;
-        const correction = Math.round(rawErr * 0.5);
-        const lm = Math.max(-255, Math.min(255, baseSpeed - correction));
-        const rm = Math.max(-255, Math.min(255, baseSpeed + correction));
-        leftMotorRef.current = lm; rightMotorRef.current = rm;
-        setLeftMotor(lm); setRightMotor(rm);
-        if (isNyata && wsRef.current?.readyState === WebSocket.OPEN)
-          wsRef.current.send(JSON.stringify({ leftMotor: lm, rightMotor: rm }));
-
-        // Periodic debug during drive
-        m3LogThrottleRef.current++;
-        if (m3LogThrottleRef.current % 30 === 1) {
-          const d = distanceRef.current;
-          const dStr = d > 0 ? `${(d/10).toFixed(0)}cm` : "—";
-          logEvent(`M3 drive #${m3DriveTicksRef.current} L=${lm} R=${rm} err=${rawErr.toFixed(1)}° dist=${dStr}`, "nav");
-        }
-
-        // Arrival: obstacle dekat ATAU timeout
-        const d = distanceRef.current;
-        if ((d > 0 && d < 50) || m3DriveTicksRef.current > 480) {
-          m3StateRef.current = "arrive";
-          m3ArriveHoldRef.current = 0;
-          m3LogThrottleRef.current = 0;
-          leftMotorRef.current = 0; rightMotorRef.current = 0;
-          setLeftMotor(0); setRightMotor(0);
-          if (isNyata && wsRef.current?.readyState === WebSocket.OPEN)
-            wsRef.current.send(JSON.stringify({ leftMotor: 0, rightMotor: 0 }));
-          setM3LockLabel("TIBA");
-          const reason = d > 0 ? `${(d/10).toFixed(0)}cm` : "timeout";
-          logEvent(`M3: tiba #${m3DriveTicksRef.current} ticks ${reason}`, "nav");
-        }
-      }
-
-      // ═══ M3 Arrive → pause → re-scan ═══
-      if (m3StateRef.current === "arrive") {
-        m3ArriveHoldRef.current++;
-        if (m3ArriveHoldRef.current > 30) {
-          m3StateRef.current = "scanning";
-          m3IdxRef.current = 0;
-          m3BufRef.current = [];
-          m3HoldRef.current = 0;
-          m3RetryRef.current = 0;
-          setM3LockLabel("SCAN");
-          sendServo(M3_ANGLES[0]);
-          logEvent("M3: re-scan", "nav");
-        }
-      }
-    } else if (m3StateRef.current !== "idle") {
-      // M3 turned off mid-operation
-      const wasDriving = m3StateRef.current === "drive" || m3StateRef.current === "locked";
-      logEvent(`M3: off (was ${m3StateRef.current})`, "nav");
-      m3StateRef.current = "idle";
-      m3IdxRef.current = 0;
-      m3BufRef.current = [];
-      setM3LockLabel("");
-      if (wasDriving) {
-        leftMotorRef.current = 0; rightMotorRef.current = 0;
-        setLeftMotor(0); setRightMotor(0);
-        if (modeRef.current === "NYATA" && wsRef.current?.readyState === WebSocket.OPEN)
-          wsRef.current.send(JSON.stringify({ leftMotor: 0, rightMotor: 0 }));
-      }
-    }
-
-    // Sync M3 refs for monitor panel
-    m3StateStrRef.current = m3StateRef.current;
-    m3LabelRef.current = m3LockLabel;
 
     const d_now = distanceRef.current;
     let l = leftMotorRef.current;
@@ -637,61 +311,6 @@ export default function SimulasiPage() {
       }
     } else setBuzzerActive(false);
 
-    // Modul 1: Collision (skip when M3 actively driving)
-    const movingForward = l > 30 && r > 30;
-    if (modul1ActiveRef.current && m3StateRef.current !== "drive" && d_now > 0 && d_now <= modul1ThresholdRef.current && movingForward) {
-      l = 0; r = 0;
-      setMotors(0, 0);
-      leftMotorRef.current = 0;
-      rightMotorRef.current = 0;
-      if (!modul1BrakingRef.current) {
-        setModul1Braking(true);
-        modul1BrakingRef.current = true;
-        logEvent(`M1 BRAKE! jarak=${(d_now/10).toFixed(0)}cm threshold=${(modul1ThresholdRef.current/10).toFixed(0)}cm`, "warn");
-      }
-    } else {
-      setModul1Braking(false);
-      modul1BrakingRef.current = false;
-    }
-
-    // Physical simulation (LATIHAN only)
-    if (modeRef.current !== "NYATA") {
-      const vl_target = Math.max(-1, Math.min(1, l / 255));
-      const vr_target = Math.max(-1, Math.min(1, r / 255));
-      const V_target = (vl_target + vr_target) / 2 * 1.5;
-      const w_target = (vl_target - vr_target) / WHEEL_BASE * 1.2;
-      const targetVx = V_target * Math.sin(h);
-      const targetVy = -V_target * Math.cos(h);
-
-      velRef.current.x += (targetVx - velRef.current.x) * ACCEL;
-      velRef.current.y += (targetVy - velRef.current.y) * ACCEL;
-      angVelRef.current += (w_target - angVelRef.current) * ANG_ACCEL;
-
-      if (l === 0 && r === 0) {
-        velRef.current.x *= FRICTION;
-        velRef.current.y *= FRICTION;
-        angVelRef.current *= ANG_FRICTION;
-      }
-
-      const dx = velRef.current.x;
-      const dy = velRef.current.y;
-      const dh = angVelRef.current;
-      gyroRef.current = dh;
-
-      if (!collides(p.x + dx, p.y, obstaclesRef.current)) p.x += dx;
-      else velRef.current.x *= -0.2;
-
-      if (!collides(p.x, p.y + dy, obstaclesRef.current)) p.y += dy;
-      else velRef.current.y *= -0.2;
-
-      headingRef.current = h + dh;
-    }
-
-    const trail = trailRef.current;
-    if (trail.length === 0 || Math.hypot(trail[trail.length - 1].x - p.x, trail[trail.length - 1].y - p.y) > 3) {
-      trail.push({ x: p.x, y: p.y });
-      if (trail.length > TRAIL_LEN) trail.shift();
-    }
   }, [logEvent, sendServo, setMotors]);
 
   // Draw — simplified, delegates to renderer
@@ -719,96 +338,20 @@ export default function SimulasiPage() {
       pos: posRef.current,
       heading: headingRef.current,
       scale: scaleRef.current,
-      leftMotor: leftMotorRef.current,
-      rightMotor: rightMotorRef.current,
-      sensorDist,
       sensorDistance: distanceRef.current,
       servoAngle: servoRef.current,
-      mode: modeRef.current,
-      editMode,
-      editTool,
-      obstacles: obstaclesRef.current,
-      drawStart: drawStartRef.current,
-      drawEnd: drawEndRef.current,
       scanDots: scanDotsRef.current,
-      sweepPoints: sweepPointsRef.current,
-      servoHistory: servoHistoryRef.current,
-      modul1Active,
-      modul1Braking,
-      modul1Threshold,
-      modul2Active,
-      modul3Active,
-      m3LockLabel,
-      modul4Active,
-      leds,
-      buzzerActive,
-      camActive,
-      detections: detectionsRef.current,
-      recognizedFace: recognizedFaceRef.current,
-      sectorDataRef: sectorDataRef.current,
-      aiStatus,
-      aiCallCount: aiCallCountRef.current,
     };
     drawScene(ctx, st);
-  }, [
-    sensorDist, editMode, editTool,
-    modul1Active, modul1Braking, modul1Threshold,
-    modul2Active, modul3Active, m3LockLabel, modul4Active,
-    leds, buzzerActive, camActive, aiStatus,
-  ]);
+  }, []);
 
-  // Pointer handlers
+  // Pointer handler (NYATA-only — no obstacle editor)
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (joyActiveRef.current) return;
-    if (editMode) {
-      if (editTool === "delete") {
-        const w = screenToWorld(e.clientX, e.clientY);
-        const obst = obstaclesRef.current;
-        for (let i = obst.length - 1; i >= 0; i--) {
-          const o = obst[i];
-          if (w.x >= o.x && w.x <= o.x + o.w && w.y >= o.y && w.y <= o.y + o.h) {
-            obst.splice(i, 1);
-            setObstacleCount(obst.length);
-            break;
-          }
-        }
-        return;
-      }
-      const w = screenToWorld(e.clientX, e.clientY);
-      drawStartRef.current = { x: w.x, y: w.y };
-      drawEndRef.current = { x: w.x, y: w.y };
-      return;
-    }
-  }, [editMode, editTool, screenToWorld]);
-
+  }, []);
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (editMode && editTool === "place") {
-      if (drawStartRef.current) {
-        const w = screenToWorld(e.clientX, e.clientY);
-        drawEndRef.current = { x: w.x, y: w.y };
-      }
-      return;
-    }
-  }, [editMode, editTool, screenToWorld]);
-
+  }, []);
   const handlePointerUp = useCallback(() => {
-    if (editMode && editTool === "place" && drawStartRef.current && drawEndRef.current) {
-      const sx = drawStartRef.current.x;
-      const sy = drawStartRef.current.y;
-      const ex = drawEndRef.current.x;
-      const ey = drawEndRef.current.y;
-      const rx = snap(Math.min(sx, ex));
-      const ry = snap(Math.min(sy, ey));
-      const rw = Math.max(snap(ex), snap(sx)) - rx;
-      const rh = Math.max(snap(ey), snap(sy)) - ry;
-      if (rw >= GRID_STEP && rh >= GRID_STEP) {
-        obstaclesRef.current.push({ x: rx, y: ry, w: rw, h: rh });
-        setObstacleCount(obstaclesRef.current.length);
-      }
-      drawStartRef.current = null;
-      drawEndRef.current = null;
-    }
-  }, [editMode, editTool]);
+  }, []);
 
   // Keyboard + render loop
   useEffect(() => {
@@ -826,7 +369,6 @@ export default function SimulasiPage() {
       keys.add(e.key.toLowerCase());
       keyActiveRef.current = true;
       if (["arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(e.key.toLowerCase())) e.preventDefault();
-      if (e.key === "Tab") { e.preventDefault(); setEditMode(p => !p); }
       if (e.key.toLowerCase() === "q") sendServo(servoRef.current - 5);
       if (e.key.toLowerCase() === "e") sendServo(servoRef.current + 5);
     };
@@ -834,7 +376,7 @@ export default function SimulasiPage() {
       keys.delete(e.key.toLowerCase());
       if (keys.size === 0) {
         keyActiveRef.current = false;
-        if (!joyActiveRef.current && !modul3ActiveRef.current) setMotors(0, 0);
+        if (!joyActiveRef.current) setMotors(0, 0);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -843,7 +385,7 @@ export default function SimulasiPage() {
     let running = true;
     const loop = () => {
       if (!running) return;
-      if (!joyActiveRef.current && !editMode && !(modeRef.current === "NYATA" && !telemetryRef.current) && keyActiveRef.current && m3StateRef.current === "idle") {
+      if (!joyActiveRef.current && telemetryRef.current && keyActiveRef.current) {
         let lm = 0, rm = 0;
         if (keys.has("w") || keys.has("arrowup")) { lm = 255; rm = 255; }
         if (keys.has("s") || keys.has("arrowdown")) { lm = -255; rm = -255; }
@@ -864,21 +406,12 @@ export default function SimulasiPage() {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, [tick, draw, setMotors, editMode, sendServo]);
+  }, [tick, draw, setMotors, sendServo]);
 
-  // Load LABIRIN preset on mount
+  // Init pos
   useEffect(() => {
-    if (modeRef.current !== "NYATA") {
-      obstaclesRef.current = PRESETS.LABIRIN.map(o => ({ ...o }));
-      setObstacleCount(obstaclesRef.current.length);
-      occupancyRef.current = new Map();
-      syncGridFromObstacles(occupancyRef.current, obstaclesRef.current);
-    }
-    const safePos = findSafeSpawn(obstaclesRef.current);
-    posRef.current = safePos;
+    posRef.current = { x: 0, y: 350 };
     headingRef.current = 0;
-    trailRef.current = [];
-    sweepPointsRef.current = [];
     lastSweepAngleRef.current = -1;
   }, []);
 
@@ -896,11 +429,6 @@ export default function SimulasiPage() {
   }, [leftMotor, rightMotor]);
 
   // Sync module refs
-  useEffect(() => { modul1ActiveRef.current = modul1Active; }, [modul1Active]);
-  useEffect(() => { modul1ThresholdRef.current = modul1Threshold; }, [modul1Threshold]);
-  useEffect(() => { modul1BrakingRef.current = modul1Braking; }, [modul1Braking]);
-  useEffect(() => { modul2ActiveRef.current = modul2Active; }, [modul2Active]);
-  useEffect(() => { modul3ActiveRef.current = modul3Active; }, [modul3Active]);
   useEffect(() => { modul4ActiveRef.current = modul4Active; }, [modul4Active]);
   useEffect(() => {
     const saved = localStorage.getItem("kei_groq_key");
@@ -1117,7 +645,7 @@ export default function SimulasiPage() {
     <main className="fixed inset-0 bg-black select-none touch-none">
       <canvas
         ref={canvasRef}
-        className={`w-full h-full ${editMode ? (editTool === "delete" ? "cursor-cell" : "cursor-crosshair") : "cursor-default"}`}
+        className="w-full h-full cursor-default"
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
@@ -1126,123 +654,18 @@ export default function SimulasiPage() {
       {/* Toolbar */}
       <div className="fixed top-3 left-1/2 -translate-x-1/2 flex gap-1.5">
         <button
-          onClick={() => setEditMode(p => !p)}
-          className={`px-3 py-1 rounded-full text-[10px] font-mono font-bold border transition-colors active:scale-90 ${
-            editMode
-              ? "bg-red-600 border-red-500 text-white"
-              : "bg-zinc-800 border-zinc-700 text-zinc-400 hover:text-white"
-          }`}
-        >
-          {editMode ? "EDIT" : "DRIVE"}
-        </button>
-        <button
           onClick={() => setModulesOpen(p => !p)}
           className={`px-2 py-1 rounded-full text-[10px] font-mono border active:scale-90 transition-colors ${
-            modulesOpen || modul1Braking
+            modulesOpen
               ? "bg-cyan-600 border-cyan-500 text-white"
               : "bg-zinc-800 border-zinc-700 text-zinc-400 hover:text-white"
           }`}
         >
-          MODUL{modul1Braking ? "!" : ""}
+          MODUL
         </button>
         {modulesOpen && (
           <div className="fixed top-14 left-1/2 -translate-x-1/2 flex flex-col gap-1.5 min-w-[220px] bg-zinc-900/80 backdrop-blur-md px-3 py-2.5 rounded-xl border border-white/10 z-50">
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <span className="text-[8px] font-mono text-zinc-500">M1</span>
-                <span className="text-[10px] font-mono text-zinc-300">COLLISION</span>
-              </div>
-              <button
-                onClick={() => { setModul1Active(p => !p); modul1ActiveRef.current = !modul1Active; }}
-                className={`px-2 py-0.5 rounded-full text-[8px] font-mono font-bold border transition-colors active:scale-90 ${
-                  modul1Active
-                    ? "bg-emerald-600 border-emerald-500 text-white"
-                    : "bg-zinc-800 border-zinc-700 text-zinc-500"
-                }`}
-              >
-                {modul1Active ? "ON" : "OFF"}
-              </button>
-            </div>
-            {modul1Active && (
-              <div className="flex items-center gap-2 pl-4">
-                <span className="text-[8px] font-mono text-zinc-500">JARAK</span>
-                <input
-                  type="range"
-                  min="30"
-                  max="500"
-                  step="10"
-                  value={modul1Threshold}
-                  onChange={e => { setModul1Threshold(Number(e.target.value)); modul1ThresholdRef.current = Number(e.target.value); }}
-                  className="flex-1 h-1 accent-cyan-500 cursor-pointer"
-                />
-                <span className="text-[9px] font-mono text-cyan-400 w-9 text-right">{(modul1Threshold / 10).toFixed(0)}cm</span>
-              </div>
-            )}
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <span className="text-[8px] font-mono text-zinc-500">M2</span>
-                <span className="text-[10px] font-mono text-zinc-300">SERVO LASER</span>
-              </div>
-              <button
-                onClick={() => setModul2Active(p => !p)}
-                className={`px-2 py-0.5 rounded-full text-[8px] font-mono font-bold border transition-colors active:scale-90 ${
-                  modul2Active
-                    ? "bg-emerald-600 border-emerald-500 text-white"
-                    : "bg-zinc-800 border-zinc-700 text-zinc-500"
-                }`}
-              >
-                {modul2Active ? "ON" : "OFF"}
-              </button>
-            </div>
-            {modul2Active && (
-              <div className="flex items-center gap-1 pl-4 text-[8px] font-mono">
-                {SECTORS.map((sec, i) => {
-                  const d = sectorData[i];
-                  const pct = d > 0 ? Math.min(d / MAX_SENSE, 1) * 100 : 0;
-                  return (
-                    <div key={sec.id} className="flex flex-col items-center gap-0.5">
-                      <span className="text-zinc-500">{sec.id}</span>
-                      <div className="w-5 h-12 bg-zinc-900 rounded-sm border border-zinc-800 relative overflow-hidden">
-                        <div
-                          className="absolute bottom-0 left-0 w-full transition-all duration-150"
-                          style={{
-                            height: `${pct}%`,
-                            background: d <= 0 ? "transparent" : d < 200 ? "rgba(239,68,68,0.5)" : "rgba(34,211,238,0.3)",
-                          }}
-                        />
-                      </div>
-                      <span className={d > 0 && d < 200 ? "text-rose-400" : "text-zinc-600"}>
-                        {d > 0 ? `${(d/10).toFixed(0)}` : "-"}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-            {/* M3: Autopilot */}
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <span className="text-[8px] font-mono text-zinc-500">M3</span>
-                <span className="text-[10px] font-mono text-zinc-300">AUTOPILOT</span>
-              </div>
-              <button
-                onClick={() => { setModul3Active(p => !p); modul3ActiveRef.current = !modul3Active; }}
-                className={`px-2 py-0.5 rounded-full text-[8px] font-mono font-bold border transition-colors active:scale-90 ${
-                  modul3Active
-                    ? "bg-amber-600 border-amber-500 text-white"
-                    : "bg-zinc-800 border-zinc-700 text-zinc-500"
-                }`}
-              >
-                {modul3Active ? "ON" : "OFF"}
-              </button>
-            </div>
-            {modul3Active && (
-              <div className="pl-4 text-[8px] font-mono">
-                <span className={m3LockLabel ? (m3LockLabel === "SCAN" ? "text-yellow-400" : "text-amber-400") : "text-zinc-600"}>
-                  {m3LockLabel || "—"}
-                </span>
-              </div>
-            )}
+
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <span className="text-[8px] font-mono text-zinc-500">M4</span>
@@ -1364,11 +787,6 @@ export default function SimulasiPage() {
               headingRef,
               sectorDataRef,
               occupancyRef,
-              modul1Active,
-              modul2Active,
-              modul3Active,
-              modul3StateRef: m3StateStrRef as React.MutableRefObject<string>,
-              modul3LabelRef: m3LabelRef,
               modul4Active,
               camActive,
               ttsActive,
@@ -1401,170 +819,74 @@ export default function SimulasiPage() {
             />
           </div>
         )}
-        {editMode && (
-          <>
-            <button
-              onClick={() => setEditTool("place")}
-              className={`px-2 py-1 rounded-full text-[10px] font-mono border active:scale-90 ${
-                editTool === "place"
-                  ? "bg-emerald-600 border-emerald-500 text-white"
-                  : "bg-zinc-800 border-zinc-700 text-zinc-400"
-              }`}
-            >
-              GAMBAR
-            </button>
-            <button
-              onClick={() => setEditTool("delete")}
-              className={`px-2 py-1 rounded-full text-[10px] font-mono border active:scale-90 ${
-                editTool === "delete"
-                  ? "bg-red-600 border-red-500 text-white"
-                  : "bg-zinc-800 border-zinc-700 text-zinc-400"
-              }`}
-            >
-              HAPUS
-            </button>
-            <button
-              onClick={() => {
-                obstaclesRef.current = [];
-                scanDotsRef.current = [];
-                sweepPointsRef.current = [];
-                lastSweepAngleRef.current = -1;
-                setObstacleCount(0);
-              }}
-              className="px-2 py-1 rounded-full bg-zinc-800 border border-zinc-700 text-zinc-400 text-[10px] font-mono active:scale-90"
-            >
-              ALL
-            </button>
-            <button
-              onClick={() => setShowPresets(p => !p)}
-              className={`px-2 py-1 rounded-full text-[10px] font-mono border active:scale-90 ${
-                showPresets
-                  ? "bg-cyan-600 border-cyan-500 text-white"
-                  : "bg-zinc-800 border-zinc-700 text-zinc-400"
-              }`}
-            >
-              PRESET
-            </button>
-            {showPresets && (
-              <div className="fixed top-20 left-1/2 -translate-x-1/2 flex flex-wrap justify-center gap-1.5 max-w-[90vw] bg-zinc-900/60 backdrop-blur-sm px-3 py-2 rounded-xl border border-white/5">
-                {Object.keys(PRESETS).map(name => (
-                  <button
-                    key={name}
-                    onClick={() => {
-                      obstaclesRef.current = PRESETS[name].map(o => ({ ...o }));
-                      scanDotsRef.current = [];
-                      sweepPointsRef.current = [];
-                      lastSweepAngleRef.current = -1;
-                      setObstacleCount(obstaclesRef.current.length);
-                      setShowPresets(false);
-                      setModul1Braking(false);
-                      occupancyRef.current = new Map();
-                      syncGridFromObstacles(occupancyRef.current, obstaclesRef.current);
-                      const safePos = findSafeSpawn(obstaclesRef.current);
-                      posRef.current = safePos;
-                      headingRef.current = 0;
-                      trailRef.current = [];
-                      logEvent(`Preset ${name} dimuat`, "info");
-                    }}
-                    className="px-2.5 py-1 rounded-full bg-zinc-800/90 border border-zinc-700 text-zinc-300 hover:text-white hover:border-cyan-500 text-[9px] font-mono active:scale-90 backdrop-blur-sm"
-                  >
-                    {name}
-                  </button>
-                ))}
-              </div>
-            )}
-          </>
-        )}
       </div>
 
-      {/* Edit hint */}
-      {editMode && (
-        <div className="fixed top-12 left-1/2 -translate-x-1/2 text-[8px] font-mono text-zinc-500 bg-zinc-900/80 px-3 py-1 rounded-full backdrop-blur-sm border border-white/5 whitespace-nowrap">
-          {editTool === "place" ? "Tap & drag buat gambar halangan" : "Tap halangan buat hapus"}
-        </div>
-      )}
-
-      {/* Mode + ESP */}
-      {!editMode && (
-        <div className="fixed top-3 left-3 flex flex-col gap-1.5 items-start">
+      {/* ESP Panel */}
+      <div className="fixed top-3 left-3 flex flex-col gap-1.5 items-start">
+        <div className="flex items-center gap-1">
+          <span className="px-2 py-1 rounded-full text-[9px] font-mono font-bold bg-cyan-600 border border-cyan-500 text-white">
+            NYATA
+          </span>
           <button
-            onClick={() => {
-              const next: SimulasiMode = mode === "NYATA" ? "LATIHAN" : "NYATA";
-              setMode(next);
-              modeRef.current = next;
-              if (next === "NYATA") {
-                obstaclesRef.current = [];
-                setObstacleCount(0);
-              } else {
-                obstaclesRef.current = PRESETS.LABIRIN.map(o => ({ ...o }));
-                setObstacleCount(obstaclesRef.current.length);
-                syncGridFromObstacles(occupancyRef.current, obstaclesRef.current);
-              }
-              if (next === "LATIHAN") disconnectESP();
-              logEvent(`Mode ${next}`, "info");
-            }}
-            className={`px-2 py-1 rounded-full text-[9px] font-mono font-bold border active:scale-90 ${
-              mode === "NYATA"
-                ? "bg-cyan-600 border-cyan-500 text-white"
-                : "bg-zinc-800 border-zinc-700 text-zinc-400 hover:text-white"
-            }`}
+            onClick={() => setNyataOpen(o => !o)}
+            className="size-5 flex items-center justify-center rounded-full bg-zinc-800 border border-zinc-700 text-zinc-400 hover:text-white text-[9px] font-mono active:scale-90"
           >
-            {mode}
+            {nyataOpen ? "▲" : "▼"}
           </button>
-          {mode === "NYATA" && (
-            <div className="flex flex-col gap-1.5 bg-zinc-900/60 backdrop-blur-sm p-2 rounded-xl border border-white/10">
-              <div className="flex gap-1">
-                <input
-                  value={espIp}
-                  onChange={e => saveEspIp(e.target.value)}
-                  placeholder="192.168.1.x"
-                  className="w-24 px-1.5 py-0.5 rounded-md bg-zinc-800 border border-zinc-700 text-[9px] font-mono text-zinc-300 outline-none"
-                />
-                <button
-                  onClick={() => espConnected ? disconnectESP() : connectESP(espIp)}
-                  className={`px-2 py-0.5 rounded-full text-[8px] font-mono font-bold border active:scale-90 ${
-                    espConnected
-                      ? "bg-emerald-600 border-emerald-500 text-white"
-                      : "bg-zinc-800 border-zinc-700 text-zinc-400"
-                  }`}
-                >
-                  {espConnected ? "ON" : "HUBUNG"}
-                </button>
-              </div>
-              {espConnected && (
-                <div className="flex flex-col gap-0.5 text-[7px] font-mono text-zinc-500">
-                  <span className="text-emerald-500">WS tersambung</span>
-                  {(() => {
-                    const t = telemetryRef.current;
-                    if (!t) return null;
-                    return (
-                      <>
-                        <span>jarak: {t.distance > 0 ? `${(t.distance / 10).toFixed(0)}cm` : "—"}</span>
-                        <span>gyro: {t.gyroZ?.toFixed(1) ?? "—"}°/s</span>
-                        <span>arah: {t.yaw?.toFixed(0) ?? "—"}°</span>
-                        <span>baterai: {t.battery ?? "—"}</span>
-                        <span>RSSI: {t.rssi ?? "—"}dBm</span>
-                      </>
-                    );
-                  })()}
-                  <div className="flex items-center gap-1 mt-1">
-                    <span className="text-zinc-600">S:</span>
-                    <input
-                      type="range"
-                      min="0"
-                      max="180"
-                      value={servoAngle}
-                      onChange={e => sendServo(Number(e.target.value))}
-                      className="w-16 h-1.5 accent-cyan-500 cursor-pointer"
-                    />
-                    <span className="text-cyan-400 w-5 text-center">{servoAngle}°</span>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
         </div>
-      )}
+        {nyataOpen && (
+          <div className="flex flex-col gap-1.5 bg-zinc-900/60 backdrop-blur-sm p-2 rounded-xl border border-white/10">
+            <div className="flex gap-1">
+              <input
+                value={espIp}
+                onChange={e => saveEspIp(e.target.value)}
+                placeholder="192.168.1.x"
+                className="w-24 px-1.5 py-0.5 rounded-md bg-zinc-800 border border-zinc-700 text-[9px] font-mono text-zinc-300 outline-none"
+              />
+              <button
+                onClick={() => espConnected ? disconnectESP() : connectESP(espIp)}
+                className={`px-2 py-0.5 rounded-full text-[8px] font-mono font-bold border active:scale-90 ${
+                  espConnected
+                    ? "bg-emerald-600 border-emerald-500 text-white"
+                    : "bg-zinc-800 border-zinc-700 text-zinc-400"
+                }`}
+              >
+                {espConnected ? "ON" : "HUBUNG"}
+              </button>
+            </div>
+            {espConnected && (
+              <div className="flex flex-col gap-0.5 text-[7px] font-mono text-zinc-500">
+                <span className="text-emerald-500">WS tersambung</span>
+                {(() => {
+                  const t = telemetryRef.current;
+                  if (!t) return null;
+                  return (
+                    <>
+                      <span>jarak: {t.distance > 0 ? `${(t.distance / 10).toFixed(0)}cm` : "—"}</span>
+                      <span>gyro: {t.gyroZ?.toFixed(1) ?? "—"}°/s</span>
+                      <span>arah: {t.yaw?.toFixed(0) ?? "—"}°</span>
+                      <span>baterai: {t.battery ?? "—"}</span>
+                      <span>RSSI: {t.rssi ?? "—"}dBm</span>
+                    </>
+                  );
+                })()}
+                <div className="flex items-center gap-1 mt-1">
+                  <span className="text-zinc-600">S:</span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="180"
+                    value={servoAngle}
+                    onChange={e => sendServo(Number(e.target.value))}
+                    className="w-16 h-1.5 accent-cyan-500 cursor-pointer"
+                  />
+                  <span className="text-cyan-400 w-5 text-center">{Math.round(90 + (servoAngle - 90) / SERVO_SCALE)}°</span>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Camera panel */}
       {showCamera && camActive && (
@@ -1585,7 +907,7 @@ export default function SimulasiPage() {
       {/* Joystick */}
       <div
         ref={joystickRef}
-        className={`fixed bottom-6 left-1/2 -translate-x-1/2 size-36 rounded-full bg-zinc-900/80 backdrop-blur-md border border-white/10 touch-none select-none transition-opacity ${editMode ? "opacity-30 pointer-events-none" : ""}`}
+        className="fixed bottom-6 left-1/2 -translate-x-1/2 size-36 rounded-full bg-zinc-900/80 backdrop-blur-md border border-white/10 touch-none select-none"
         onPointerDown={(e) => {
           e.preventDefault();
           e.stopPropagation();

@@ -6,8 +6,6 @@ export interface Obstacle {
   seen?: boolean;
 }
 
-export type EditTool = "place" | "delete";
-
 export type LogEntryType = "info" | "warn" | "error" | "nav" | "sensor" | "motor";
 
 export type LogEntry = {
@@ -15,8 +13,6 @@ export type LogEntry = {
   msg: string;
   type: LogEntryType;
 };
-
-export type SimulasiMode = "LATIHAN" | "NYATA";
 
 export type ServoRead = {
   angle: number;
@@ -37,11 +33,6 @@ export interface NavDebugData {
   headingRef: React.MutableRefObject<number>;
   sectorDataRef: React.MutableRefObject<number[]>;
   occupancyRef: React.MutableRefObject<Map<string, number>>;
-  modul1Active: boolean;
-  modul2Active: boolean;
-  modul3Active: boolean;
-  modul3StateRef: React.MutableRefObject<string>;
-  modul3LabelRef: React.MutableRefObject<string>;
   modul4Active: boolean;
   camActive: boolean;
   ttsActive: boolean;
