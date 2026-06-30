@@ -134,6 +134,14 @@ static void playMelody(int id) {
   melodyActive = id;
   melodyIdx = 0;
   melodyTick = millis();
+  // play first note immediately
+  const Note* mel = nullptr;
+  int len = 0;
+  if (id == MELODY_STARTUP) { mel = melStartup; len = sizeof(melStartup)/sizeof(Note); }
+  else if (id == MELODY_BIRTHDAY) { mel = melBirthday; len = sizeof(melBirthday)/sizeof(Note); }
+  else if (id == MELODY_KLAKSON) { mel = melKlakson; len = sizeof(melKlakson)/sizeof(Note); }
+  else if (id == MELODY_CUSTOM) { mel = customMelody; len = customMelodyLen; }
+  if (mel && len > 0) buzzerFreq(mel[0].freq);
 }
 
 static void updateMelody() {
