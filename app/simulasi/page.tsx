@@ -6,7 +6,7 @@ import { loadDB, saveDB, registerFace, renameFace, deleteFace, recognize, type F
 import VoiceGroq from "../voicegroq";
 
 import type { LogEntry, ServoRead, FacingMode, MotorRef } from "./types";
-import { ROBOT_R, TRAIL_LEN, MAX_SENSE, JOY_DEADZONE, MAX_LOG, SECTORS, SERVO_SCALE } from "./constants";
+import { ROBOT_R, TRAIL_LEN, MAX_SENSE, JOY_DEADZONE, MAX_LOG, SECTORS, SERVO_SCALE, WHEEL_BASE } from "./constants";
 import { gridCellKey } from "./utils";
 import { drawScene, type DrawState } from "./renderer";
 import MonitorPanel from "./monitor-panel";
@@ -42,6 +42,16 @@ export default function SimulasiPage() {
   const [modulesOpen, setModulesOpen] = useState(false);
   const sectorDataRef = useRef<number[]>(SECTORS.map(() => -1));
   const [sectorData, setSectorData] = useState<number[]>(SECTORS.map(() => -1));
+
+  // M3: Autopilot
+  const [modul3Active, setModul3Active] = useState(false);
+  const modul3ActiveRef = useRef(false);
+  const sweepDirRef = useRef(1);
+  const bestSectorRef = useRef(-1);
+  const prevBestSectorRef = useRef(-1);
+  const sweepLockedRef = useRef(false);
+  const m3PhaseRef = useRef<"SWEEP" | "DONE">("SWEEP");
+  const sweepTickRef = useRef(0);
 
   // M4: Groq AI Hybrid
   const [modul4Active, setModul4Active] = useState(false);
@@ -255,17 +265,15 @@ export default function SimulasiPage() {
     }
 
     {
-      const ax = tele?.accelX ?? 0;
       const dt = 0.03;
-      const accelFW = (-ax) * 981;
-      const worldDx = Math.sin(headingRef.current) * accelFW;
-      const worldDy = -Math.cos(headingRef.current) * accelFW;
-      velRef.current.x += worldDx * dt;
-      velRef.current.y += worldDy * dt;
-      if (Math.abs(ax) < 0.03 && Math.abs(tele?.gyroZ ?? 0) < 5) {
-        velRef.current.x *= 0.85;
-        velRef.current.y *= 0.85;
-      }
+      const speedFactor = 0.12;
+      const l = leftMotorRef.current;
+      const r = rightMotorRef.current;
+      const avg = (l + r) / 2 * speedFactor;
+      const ang = (r - l) / WHEEL_BASE * speedFactor;
+      if (tele?.yaw == null) headingRef.current += ang * dt;
+      velRef.current.x = Math.sin(headingRef.current) * avg;
+      velRef.current.y = -Math.cos(headingRef.current) * avg;
       p.x += velRef.current.x * dt;
       p.y += velRef.current.y * dt;
     }
@@ -283,6 +291,15 @@ export default function SimulasiPage() {
       }
     }
 
+    // M3: Servo auto-sweep
+    if (modul3ActiveRef.current && !sweepLockedRef.current) {
+      sweepTickRef.current++;
+      let sa = servoRef.current + sweepDirRef.current;
+      if (sa >= 160) { sa = 160; sweepDirRef.current = -1; }
+      if (sa <= 20) { sa = 20; sweepDirRef.current = 1; }
+      sendServo(sa);
+    }
+
     // Sector data
     {
       const s = servoRef.current;
@@ -295,6 +312,25 @@ export default function SimulasiPage() {
           setSectorData([...sectorDataRef.current]);
           break;
         }
+      }
+    }
+
+    // M3: pilih sector terjauh (min 10cm)
+    if (modul3ActiveRef.current && m3PhaseRef.current === "SWEEP" && !sweepLockedRef.current) {
+      let best = -1, bestDist = -1;
+      for (let i = 0; i < sectorDataRef.current.length; i++) {
+        if (sectorDataRef.current[i] > bestDist) {
+          bestDist = sectorDataRef.current[i];
+          best = i;
+        }
+      }
+      const ready = sweepTickRef.current > 300 && sectorDataRef.current.every(v => v >= 0);
+      if (ready && best >= 0 && bestDist > 10) {
+        bestSectorRef.current = best;
+        sweepLockedRef.current = true;
+        sendServo(SECTORS[best].cx);
+        logEvent(`M3 → ${SECTORS[best].id} (${bestDist.toFixed(0)}cm)`, "nav");
+        m3PhaseRef.current = "DONE";
       }
     }
 
@@ -341,6 +377,7 @@ export default function SimulasiPage() {
       sensorDistance: distanceRef.current,
       servoAngle: servoRef.current,
       scanDots: scanDotsRef.current,
+      vel: velRef.current,
     };
     drawScene(ctx, st);
   }, []);
@@ -429,6 +466,17 @@ export default function SimulasiPage() {
   }, [leftMotor, rightMotor]);
 
   // Sync module refs
+  useEffect(() => {
+    if (!modul3Active) {
+      sweepLockedRef.current = false;
+      prevBestSectorRef.current = -1;
+      bestSectorRef.current = -1;
+      m3PhaseRef.current = "SWEEP";
+      sweepTickRef.current = 0;
+      setMotors(0, 0);
+    }
+    modul3ActiveRef.current = modul3Active;
+  }, [modul3Active]);
   useEffect(() => { modul4ActiveRef.current = modul4Active; }, [modul4Active]);
   useEffect(() => {
     const saved = localStorage.getItem("kei_groq_key");
@@ -666,6 +714,27 @@ export default function SimulasiPage() {
         {modulesOpen && (
           <div className="fixed top-14 left-1/2 -translate-x-1/2 flex flex-col gap-1.5 min-w-[220px] bg-zinc-900/80 backdrop-blur-md px-3 py-2.5 rounded-xl border border-white/10 z-50">
 
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-[8px] font-mono text-zinc-500">M3</span>
+                <span className="text-[10px] font-mono text-zinc-300">AUTOPILOT</span>
+              </div>
+              <button
+                onClick={() => { setModul3Active(p => !p); modul3ActiveRef.current = !modul3Active; }}
+                className={`px-2 py-0.5 rounded-full text-[8px] font-mono font-bold border transition-colors active:scale-90 ${
+                  modul3Active
+                    ? "bg-emerald-600 border-emerald-500 text-white"
+                    : "bg-zinc-800 border-zinc-700 text-zinc-500"
+                }`}
+              >
+                {modul3Active ? "ON" : "OFF"}
+              </button>
+            </div>
+            {modul3Active && bestSectorRef.current >= 0 && (
+              <div className="pl-4 text-[9px] font-mono text-zinc-400">
+                → {SECTORS[bestSectorRef.current].id} ({sectorData[bestSectorRef.current].toFixed(0)}cm)
+              </div>
+            )}
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <span className="text-[8px] font-mono text-zinc-500">M4</span>

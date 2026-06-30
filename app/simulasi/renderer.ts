@@ -9,10 +9,11 @@ export interface DrawState {
   sensorDistance: number;
   servoAngle: number;
   scanDots: { x: number; y: number }[];
+  vel: { x: number; y: number };
 }
 
 export function drawScene(ctx: CanvasRenderingContext2D, st: DrawState): void {
-  const { vw, vh, pos: p, heading: h, scale: s, sensorDistance, servoAngle, scanDots } = st;
+  const { vw, vh, pos: p, heading: h, scale: s, sensorDistance, servoAngle, scanDots, vel } = st;
 
   ctx.fillStyle = "#18181b";
   ctx.fillRect(0, 0, vw, vh);
@@ -101,5 +102,12 @@ export function drawScene(ctx: CanvasRenderingContext2D, st: DrawState): void {
     }
   }
 
+  // ---- Odometry HUD ----
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = "rgba(255,255,255,0.15)";
+  ctx.font = "10px monospace";
+  ctx.fillText(`x:${p.x.toFixed(0)} y:${p.y.toFixed(0)}`, 8, 14);
+  ctx.fillText(`h:${((h*180)/Math.PI).toFixed(0)}°  v:${Math.hypot(vel.x,vel.y).toFixed(1)}`, 8, 27);
   ctx.restore();
 }
