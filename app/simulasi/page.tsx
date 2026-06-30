@@ -50,8 +50,11 @@ export default function SimulasiPage() {
   const bestSectorRef = useRef(-1);
   const prevBestSectorRef = useRef(-1);
   const sweepLockedRef = useRef(false);
-  const m3PhaseRef = useRef<"SWEEP" | "DONE">("SWEEP");
+  const m3PhaseRef = useRef<"SWEEP" | "TURN" | "DONE">("SWEEP");
   const sweepTickRef = useRef(0);
+  const turnTargetRadRef = useRef(0);
+  const turnSpeedRef = useRef(0);
+  const turnStuckCountRef = useRef(0);
 
   // M4: Groq AI Hybrid
   const [modul4Active, setModul4Active] = useState(false);
@@ -330,6 +333,50 @@ export default function SimulasiPage() {
         sweepLockedRef.current = true;
         sendServo(SECTORS[best].cx);
         logEvent(`M3 → ${SECTORS[best].id} (${bestDist.toFixed(0)}cm)`, "nav");
+        turnTargetRadRef.current = headingRef.current + (SECTORS[best].cx - 90) * Math.PI / 180;
+        turnSpeedRef.current = 0;
+        turnStuckCountRef.current = 0;
+        m3PhaseRef.current = "TURN";
+      }
+    }
+
+    // M3: TURN — putar gradual, deteksi stall dari gyroZ
+    if (modul3ActiveRef.current && m3PhaseRef.current === "TURN" && !joyActiveRef.current && !keyActiveRef.current) {
+      let diff = turnTargetRadRef.current - headingRef.current;
+      while (diff > Math.PI) diff -= 2 * Math.PI;
+      while (diff < -Math.PI) diff += 2 * Math.PI;
+      const degLeft = diff * 180 / Math.PI;
+      if (Math.abs(degLeft) > 1) {
+        const gyroZ = Math.abs(tele?.gyroZ ?? 0);
+        if (turnSpeedRef.current > 20 && gyroZ < 0.3) {
+          turnStuckCountRef.current++;
+          if (turnStuckCountRef.current > 20) {
+            turnSpeedRef.current = Math.min(turnSpeedRef.current + 5, 255);
+            turnStuckCountRef.current = 0;
+          }
+        } else {
+          turnStuckCountRef.current = 0;
+        }
+        const targetSpeed = Math.min(Math.abs(degLeft) * 3, 200);
+        if (turnSpeedRef.current < targetSpeed) {
+          turnSpeedRef.current = Math.min(turnSpeedRef.current + 1, targetSpeed);
+        } else if (turnSpeedRef.current > targetSpeed) {
+          turnSpeedRef.current = Math.max(turnSpeedRef.current - 1, targetSpeed);
+        }
+        const s = Math.round(turnSpeedRef.current);
+        const l = degLeft > 0 ? s : -s;
+        const r = degLeft > 0 ? -s : s;
+        leftMotorRef.current = l;
+        rightMotorRef.current = r;
+        setLeftMotor(l);
+        setRightMotor(r);
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ leftMotor: l, rightMotor: r }));
+        }
+      } else {
+        setMotors(0, 0);
+        turnSpeedRef.current = 0;
+        logEvent(`M3 heading OK ${(headingRef.current * 180 / Math.PI).toFixed(0)}°`, "nav");
         m3PhaseRef.current = "DONE";
       }
     }
@@ -473,6 +520,7 @@ export default function SimulasiPage() {
       bestSectorRef.current = -1;
       m3PhaseRef.current = "SWEEP";
       sweepTickRef.current = 0;
+      turnSpeedRef.current = 0;
       setMotors(0, 0);
     }
     modul3ActiveRef.current = modul3Active;
@@ -730,9 +778,11 @@ export default function SimulasiPage() {
                 {modul3Active ? "ON" : "OFF"}
               </button>
             </div>
-            {modul3Active && bestSectorRef.current >= 0 && (
+            {modul3Active && (
               <div className="pl-4 text-[9px] font-mono text-zinc-400">
-                → {SECTORS[bestSectorRef.current].id} ({sectorData[bestSectorRef.current].toFixed(0)}cm)
+                {m3PhaseRef.current === "SWEEP" && `sweep ${sweepTickRef.current}...`}
+                {m3PhaseRef.current === "TURN" && `→ ${SECTORS[bestSectorRef.current]?.id} putar...`}
+                {m3PhaseRef.current === "DONE" && `✓ ${SECTORS[bestSectorRef.current]?.id} (${sectorData[bestSectorRef.current]?.toFixed(0)}cm)`}
               </div>
             )}
             <div className="flex items-center justify-between gap-3">
