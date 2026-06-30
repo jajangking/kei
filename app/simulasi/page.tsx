@@ -50,7 +50,7 @@ export default function SimulasiPage() {
   const bestSectorRef = useRef(-1);
   const prevBestSectorRef = useRef(-1);
   const sweepLockedRef = useRef(false);
-  const m3PhaseRef = useRef<"SWEEP" | "TURN" | "DONE">("SWEEP");
+  const m3PhaseRef = useRef<"SWEEP" | "TURN" | "DRIVE" | "DONE">("SWEEP");
   const sweepTickRef = useRef(0);
   const turnTargetRadRef = useRef(0);
   const turnSpeedRef = useRef(0);
@@ -389,7 +389,48 @@ export default function SimulasiPage() {
         turnSpeedRef.current = 0;
         sendServo(90);
         logEvent(`M3 heading OK ${(headingRef.current * 180 / Math.PI).toFixed(0)}°`, "nav");
-        m3PhaseRef.current = "DONE";
+        turnTimeoutRef.current = 0;
+        m3PhaseRef.current = "DRIVE";
+      }
+    }
+
+    // M3: DRIVE — maju perlahan, stop di 20cm (biar aman)
+    if (modul3ActiveRef.current && m3PhaseRef.current === "DRIVE" && !joyActiveRef.current && !keyActiveRef.current) {
+      const d = distanceRef.current;
+      turnTimeoutRef.current++;
+      if (d > 0 && d <= 20) {
+        setMotors(0, 0);
+        turnSpeedRef.current = 0;
+        sweepLockedRef.current = false;
+        bestSectorRef.current = -1;
+        prevBestSectorRef.current = -1;
+        sweepTickRef.current = 0;
+        sweepDirRef.current = 1;
+        sectorDataRef.current = SECTORS.map(() => -1);
+        setSectorData([...sectorDataRef.current]);
+        logEvent(`M3 stop ${d.toFixed(0)}cm, loop`, "nav");
+        m3PhaseRef.current = "SWEEP";
+      } else {
+        const targetSpeed = d > 0 && d < 40 ? 40 : 70;
+        if (turnTimeoutRef.current > 100 && turnSpeedRef.current < targetSpeed) {
+          turnSpeedRef.current = Math.min(turnSpeedRef.current + 1, 150);
+        } else if (turnSpeedRef.current < targetSpeed) {
+          turnRampTickRef.current++;
+          if (turnRampTickRef.current % 3 === 0) {
+            turnSpeedRef.current = Math.min(turnSpeedRef.current + 1, targetSpeed);
+          }
+        } else if (turnSpeedRef.current > targetSpeed) {
+          turnRampTickRef.current = 0;
+          turnSpeedRef.current = Math.max(turnSpeedRef.current - 1, targetSpeed);
+        }
+        const s = Math.round(turnSpeedRef.current);
+        leftMotorRef.current = s;
+        rightMotorRef.current = s;
+        setLeftMotor(s);
+        setRightMotor(s);
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ leftMotor: s, rightMotor: s }));
+        }
       }
     }
 
@@ -794,6 +835,7 @@ export default function SimulasiPage() {
               <div className="pl-4 text-[9px] font-mono text-zinc-400">
                 {m3PhaseRef.current === "SWEEP" && `sweep ${sweepTickRef.current}...`}
                 {m3PhaseRef.current === "TURN" && `→ ${SECTORS[bestSectorRef.current]?.id} putar...`}
+                {m3PhaseRef.current === "DRIVE" && `→ maju ${sensorDist}`}
                 {m3PhaseRef.current === "DONE" && `✓ ${SECTORS[bestSectorRef.current]?.id} (${sectorData[bestSectorRef.current]?.toFixed(0)}cm)`}
               </div>
             )}
