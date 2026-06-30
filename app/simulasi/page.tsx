@@ -1384,6 +1384,11 @@ export default function SimulasiPage() {
               </button>
             </div>
           </div>
+          <button onClick={() => { if (window.confirm('Restart ESP?')) wsRef.current?.send(JSON.stringify({ reboot: true })); }}
+            className="w-full px-2 py-1 rounded-md text-[8px] font-mono font-bold border bg-red-900/50 border-red-800 text-red-400 active:scale-90 hover:bg-red-800/50 hover:text-red-300"
+          >
+            ⟳ RESTART
+          </button>
         )}
       </div>
 
