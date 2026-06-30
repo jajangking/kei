@@ -1237,6 +1237,65 @@ export default function SimulasiPage() {
                 ▶
               </button>
             </div>
+            <div className="flex gap-1 mt-1">
+              <input type="text" id="melodyPrompt" placeholder="AI: nada tahun baru..."
+                className="flex-1 min-w-0 px-1 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-300 text-[7px] font-mono outline-none placeholder-zinc-600"
+              />
+              <button id="melodyAiBtn" onClick={async () => {
+                const btn = document.getElementById('melodyAiBtn') as HTMLButtonElement;
+                const inp = document.getElementById('melodyPrompt') as HTMLInputElement;
+                if (!btn || !inp) return;
+                const prompt = inp.value.trim();
+                if (!prompt || !groqApiKeyRef.current) return;
+                btn.textContent = '...';
+                btn.disabled = true;
+                try {
+                  const res = await fetch('/api/groq/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      messages: [{ role: 'user', content: prompt }],
+                      apiKey: groqApiKeyRef.current,
+                      systemPrompt: 'Kamu adalah komposer nada buzzer. Balas ONLY dengan daftar freq/dur pisah koma. Contoh: 262/200,294/200,330/400. Freq dalam Hz (262=C4, 294=D4, 330=E4, 349=F4, 392=G4, 440=A4, 494=B4, 523=C5). Dur dalam ms. MAX 50 not. Jangan tulis apa-apa selain daftar.',
+                    }),
+                  });
+                  if (!res.ok) throw Error('Gagal');
+                  const reader = res.body?.getReader();
+                  if (!reader) throw Error('No reader');
+                  const dec = new TextDecoder();
+                  let full = '';
+                  while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    full += dec.decode(value, { stream: true });
+                  }
+                  const lines = full.split('\n');
+                  let melodyText = '';
+                  for (const l of lines) {
+                    if (!l.startsWith('data: ')) continue;
+                    const d = l.slice(6).trim();
+                    if (d === '[DONE]') continue;
+                    try { melodyText += JSON.parse(d).choices?.[0]?.delta?.content || ''; } catch {}
+                  }
+                  const parts = melodyText.split(',').map(s => s.trim());
+                  const arr: number[][] = [];
+                  for (const p of parts) {
+                    const m = p.match(/^(\d+)\/(\d+)$/);
+                    if (m) arr.push([parseInt(m[1]), parseInt(m[2])]);
+                  }
+                  if (arr.length && wsRef.current?.readyState === WebSocket.OPEN) {
+                    (document.getElementById('melodyInput') as HTMLInputElement).value = parts.filter(p => /^\d+\/\d+$/.test(p.trim())).join(',');
+                    wsRef.current.send(JSON.stringify({ melody: arr }));
+                  }
+                } catch {}
+                btn.textContent = '✨';
+                btn.disabled = false;
+              }}
+                className="px-1.5 py-0.5 rounded-md text-[7px] font-mono font-bold border bg-zinc-800 border-zinc-700 text-zinc-400 active:scale-90 hover:text-white"
+              >
+                ✨
+              </button>
+            </div>
           </div>
         )}
       </div>
