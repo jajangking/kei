@@ -39,7 +39,8 @@ export default function SimulasiPage() {
 
   // Virtual Hardware State
   const [buzzerActive, setBuzzerActive] = useState(false);
-  const [leds, setLeds] = useState([0, 0, 0, 0]);
+  const [ledMode, setLedMode] = useState(0);
+  const ledModeRef = useRef(0);
   const lastBuzzerRef = useRef(0);
   const keyActiveRef = useRef(false);
   const [modulesOpen, setModulesOpen] = useState(false);
@@ -151,6 +152,14 @@ export default function SimulasiPage() {
     }
   }, [logEvent]);
 
+  const sendLED = useCallback((mode: number) => {
+    const cmd = mode === 1 ? { led_hazard: ledModeRef.current !== 1 }
+      : { led_signal: ledModeRef.current === mode ? 'off' : (mode === 2 ? 'left' : 'right') };
+    if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify(cmd));
+    ledModeRef.current = ledModeRef.current === mode ? 0 : mode;
+    setLedMode(ledModeRef.current);
+  }, []);
+
   const handleJoyMove = useCallback((clientX: number, clientY: number) => {
     const el = joystickRef.current;
     if (!el) return;
@@ -247,6 +256,10 @@ export default function SimulasiPage() {
     telemetryYawRef.current = tele?.yaw ?? 0;
     const y = tele?.yaw;
     if (y != null) headingRef.current = -y * Math.PI / 180;
+    if (tele?.led_mode != null && tele.led_mode !== ledModeRef.current) {
+      ledModeRef.current = tele.led_mode;
+      setLedMode(tele.led_mode);
+    }
 
     const dots = scanDotsRef.current;
     const gyroMag = Math.abs(tele?.gyroZ ?? 0);
@@ -1149,6 +1162,23 @@ export default function SimulasiPage() {
                   onChange={e => setTrimVal(Math.max(-100, Math.min(100, Number(e.target.value) || 0))) }
                   className="w-10 px-1 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-300 text-[8px] font-mono text-center outline-none" />
               </div>
+            </div>
+            <div className="flex gap-1 mt-1">
+              {[
+                { lbl: 'HAZARD', mode: 1 },
+                { lbl: '◀ KIRI', mode: 2 },
+                { lbl: 'KANAN ▶', mode: 3 },
+              ].map(b => (
+                <button key={b.mode} onClick={() => sendLED(b.mode)}
+                  className={`px-1.5 py-0.5 rounded-md text-[7px] font-mono font-bold border active:scale-90 ${
+                    ledMode === b.mode
+                      ? 'bg-amber-600 border-amber-500 text-white'
+                      : 'bg-zinc-800 border-zinc-700 text-zinc-400'
+                  }`}
+                >
+                  {b.lbl}
+                </button>
+              ))}
             </div>
           </div>
         )}
