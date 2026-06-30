@@ -1343,7 +1343,7 @@ export default function SimulasiPage() {
                     body: JSON.stringify({
                       messages: [{ role: 'user', content: prompt }],
                       apiKey: groqApiKeyRef.current,
-                      systemPrompt: 'Kamu komposer melodi buzzer. HANYA pake not dari C mayor pentatonic: 262(C),294(D),330(E),392(G),440(A). Mulai & akhir di 262(C). Pake pola naik-turun, jangan lompat jauh. 8-16 not. Balas ONLY freq/dur pisah koma. Contoh: 262/300,330/300,392/300,440/300,392/300,330/300,262/500. Jangan tulis apapun selain itu.',
+                      systemPrompt: 'Kamu komposer melodi buzzer. Pake not dari range luas: 131(C3),147(D3),165(E3),175(F3),196(G3),220(A3),247(B3),262(C4),294(D4),330(E4),349(F4),392(G4),440(A4),494(B4),523(C5),587(D5),659(E5),698(F5),784(G5),880(A5),988(B5),1047(C6). Boleh pake not 0 (diam) 50-100ms. Mulai & akhir di 262(C4). Variasikan: naik-turun, lompat oktaf, tempo beda (dur 100-600). 12-20 not. Balas ONLY freq/dur pisah koma. Contoh: 262/300,440/300,523/200,659/200,784/400,659/200,523/200,440/300,262/500. Jangan tulis apapun selain itu.',
                     }),
                   });
                   if (!res.ok) throw Error('Gagal');
