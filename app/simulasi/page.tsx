@@ -39,6 +39,7 @@ export default function SimulasiPage() {
 
   // Virtual Hardware State
   const [buzzerActive, setBuzzerActive] = useState(false);
+  const [buzzerVol, setBuzzerVol] = useState(128);
   const [ledMode, setLedMode] = useState(0);
   const ledModeRef = useRef(0);
   const [ledMask, setLedMask] = useState(0);
@@ -262,6 +263,7 @@ export default function SimulasiPage() {
       setLedMode(tele.led_mode);
     }
     if (tele?.led != null && tele.led !== ledMask) setLedMask(tele.led);
+    if (tele?.buzzer_vol != null && tele.buzzer_vol !== buzzerVol) setBuzzerVol(tele.buzzer_vol);
 
     const dots = scanDotsRef.current;
     const gyroMag = Math.abs(tele?.gyroZ ?? 0);
@@ -1151,6 +1153,13 @@ export default function SimulasiPage() {
                     className="w-16 h-1.5 accent-cyan-500 cursor-pointer"
                   />
                   <span className="text-cyan-400 w-5 text-center">{Math.round(90 + (servoAngle - 90) / SERVO_SCALE)}°</span>
+                </div>
+                <div className="flex items-center gap-1 mt-1">
+                  <span className="text-zinc-600">V:</span>
+                  <input type="range" min="0" max="255" value={buzzerVol}
+                    onChange={e => { const v = Number(e.target.value); setBuzzerVol(v); if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ buzzer_vol: v })); }}
+                    className="w-16 h-1.5 accent-cyan-500 cursor-pointer" />
+                  <span className="text-cyan-400 w-5 text-center">{buzzerVol}</span>
                 </div>
               </div>
             )}

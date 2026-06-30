@@ -114,11 +114,13 @@ static const Note melBirthday[] = {
   {0, 1}
 };
 
-static void buzzerOn() { ledcWrite(PWM_BUZZ, 128); }
+static int buzzerVol = 128;
+
+static void buzzerOn() { ledcWrite(PWM_BUZZ, buzzerVol); }
 static void buzzerOff() { ledcWrite(PWM_BUZZ, 0); }
 
 static void buzzerFreq(int freq) {
-  if (freq > 0) { ledcWriteTone(PWM_BUZZ, freq); ledcWrite(PWM_BUZZ, 128); }
+  if (freq > 0) { ledcWriteTone(PWM_BUZZ, freq); ledcWrite(PWM_BUZZ, buzzerVol); }
   else buzzerOff();
 }
 
@@ -206,6 +208,7 @@ String buildTelemetryJson() {
   j += ",\"heap\":" + String(ESP.getFreeHeap());
   j += ",\"uptime\":" + String((millis() - startTime) / 1000);
   j += ",\"ssid\":\"" + wifiCfg.ssid + "\"";
+  j += ",\"buzzer_vol\":" + String(buzzerVol);
   j += ",\"mqtt\":" + String((mqttCfg.enabled && mqttClient.connected()) ? "true" : "false");
   j += "}";
   return j;
@@ -317,6 +320,10 @@ void handleMessage(const String &msg) {
       }
     }
     if (customMelodyLen > 0) playMelody(MELODY_CUSTOM);
+    return;
+  }
+  if (doc["buzzer_vol"].is<int>()) {
+    buzzerVol = constrain(doc["buzzer_vol"].as<int>(), 0, 255);
     return;
   }
 
