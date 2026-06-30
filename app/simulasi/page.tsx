@@ -41,6 +41,7 @@ export default function SimulasiPage() {
   const [buzzerActive, setBuzzerActive] = useState(false);
   const [ledMode, setLedMode] = useState(0);
   const ledModeRef = useRef(0);
+  const [ledMask, setLedMask] = useState(0);
   const lastBuzzerRef = useRef(0);
   const keyActiveRef = useRef(false);
   const [modulesOpen, setModulesOpen] = useState(false);
@@ -260,6 +261,7 @@ export default function SimulasiPage() {
       ledModeRef.current = tele.led_mode;
       setLedMode(tele.led_mode);
     }
+    if (tele?.led != null && tele.led !== ledMask) setLedMask(tele.led);
 
     const dots = scanDotsRef.current;
     const gyroMag = Math.abs(tele?.gyroZ ?? 0);
@@ -1179,6 +1181,25 @@ export default function SimulasiPage() {
                   {b.lbl}
                 </button>
               ))}
+            </div>
+            <div className="flex gap-1 mt-1">
+              {[
+                { lbl: '◀', idx: 0, color: 'bg-white' },
+                { lbl: '▶', idx: 1, color: 'bg-white' },
+                { lbl: '◀', idx: 2, color: 'bg-red-500' },
+                { lbl: '▶', idx: 3, color: 'bg-red-500' },
+              ].map(b => {
+                const on = (ledMask >> b.idx) & 1;
+                return (
+                  <button key={b.idx} onClick={() => {
+                    const arr = [0, 0, 0, 0];
+                    for (let i = 0; i < 4; i++) arr[i] = i === b.idx ? (on ? 0 : 1) : ((ledMask >> i) & 1);
+                    if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ led: arr }));
+                  }}
+                    className={`size-4 rounded-sm border active:scale-90 ${on ? b.color + ' border-transparent' : 'bg-zinc-800 border-zinc-700'}`}
+                  />
+                );
+              })}
             </div>
           </div>
         )}
