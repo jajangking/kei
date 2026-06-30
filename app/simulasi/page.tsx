@@ -55,6 +55,9 @@ export default function SimulasiPage() {
   const turnTargetRadRef = useRef(0);
   const turnSpeedRef = useRef(0);
   const turnStuckCountRef = useRef(0);
+  const turnYawLogRef = useRef<number[]>([]);
+  const turnRampTickRef = useRef(0);
+  const turnTimeoutRef = useRef(0);
 
   // M4: Groq AI Hybrid
   const [modul4Active, setModul4Active] = useState(false);
@@ -336,32 +339,40 @@ export default function SimulasiPage() {
         turnTargetRadRef.current = headingRef.current + (SECTORS[best].cx - 90) * Math.PI / 180;
         turnSpeedRef.current = 0;
         turnStuckCountRef.current = 0;
+        turnYawLogRef.current = [];
+        turnTimeoutRef.current = 0;
         m3PhaseRef.current = "TURN";
       }
     }
 
-    // M3: TURN — putar gradual, deteksi stall dari gyroZ
+    // M3: TURN — putar gradual, timeout fallback kalo stall
     if (modul3ActiveRef.current && m3PhaseRef.current === "TURN" && !joyActiveRef.current && !keyActiveRef.current) {
       let diff = turnTargetRadRef.current - headingRef.current;
       while (diff > Math.PI) diff -= 2 * Math.PI;
       while (diff < -Math.PI) diff += 2 * Math.PI;
       const degLeft = diff * 180 / Math.PI;
       if (Math.abs(degLeft) > 1) {
-        const gyroZ = Math.abs(tele?.gyroZ ?? 0);
-        if (turnSpeedRef.current > 20 && gyroZ < 0.3) {
-          turnStuckCountRef.current++;
-          if (turnStuckCountRef.current > 20) {
-            turnSpeedRef.current = Math.min(turnSpeedRef.current + 5, 255);
-            turnStuckCountRef.current = 0;
+        turnTimeoutRef.current++;
+        const log = turnYawLogRef.current;
+        log.push(tele?.yaw ?? 0);
+        if (log.length > 20) log.shift();
+        const moving = log.length >= 20 && (log[log.length-1] - log[0]) > 0.5;
+        if (turnSpeedRef.current > 0 && !moving && turnTimeoutRef.current > 50) {
+          turnRampTickRef.current++;
+          if (turnRampTickRef.current % 3 === 0) {
+            turnSpeedRef.current = Math.min(turnSpeedRef.current + 1, 200);
           }
         } else {
-          turnStuckCountRef.current = 0;
-        }
-        const targetSpeed = Math.min(Math.abs(degLeft) * 3, 200);
-        if (turnSpeedRef.current < targetSpeed) {
-          turnSpeedRef.current = Math.min(turnSpeedRef.current + 1, targetSpeed);
-        } else if (turnSpeedRef.current > targetSpeed) {
-          turnSpeedRef.current = Math.max(turnSpeedRef.current - 1, targetSpeed);
+          const targetSpeed = Math.min(Math.abs(degLeft) * 2, 150);
+          if (turnSpeedRef.current < targetSpeed) {
+            turnRampTickRef.current++;
+            if (turnRampTickRef.current % 3 === 0) {
+              turnSpeedRef.current = Math.min(turnSpeedRef.current + 1, targetSpeed);
+            }
+          } else if (turnSpeedRef.current > targetSpeed) {
+            turnRampTickRef.current = 0;
+            turnSpeedRef.current = Math.max(turnSpeedRef.current - 1, targetSpeed);
+          }
         }
         const s = Math.round(turnSpeedRef.current);
         const l = degLeft > 0 ? s : -s;
@@ -376,6 +387,7 @@ export default function SimulasiPage() {
       } else {
         setMotors(0, 0);
         turnSpeedRef.current = 0;
+        sendServo(90);
         logEvent(`M3 heading OK ${(headingRef.current * 180 / Math.PI).toFixed(0)}°`, "nav");
         m3PhaseRef.current = "DONE";
       }
