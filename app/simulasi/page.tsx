@@ -11,6 +11,36 @@ import { gridCellKey } from "./utils";
 import { drawScene, type DrawState } from "./renderer";
 import MonitorPanel from "./monitor-panel";
 
+const _ = (...notes: [number, number][]) => notes;
+
+const KNOWN_MELODIES: Record<string, (ws: WebSocket | null) => [number, number][] | null> = {
+  pelangi: () => _(
+    [262,300],[330,300],[392,300],[523,400],[392,300],[330,300],[262,600],
+    [330,300],[392,300],[523,400],[587,400],[523,400],[392,300],[330,600],
+  ),
+  bebek: () => _(
+    [392,200],[440,200],[523,300],[440,200],[392,200],[349,300],[330,500],
+    [349,200],[392,200],[440,300],[349,200],[330,200],[294,300],[262,500],
+  ),
+  balonku: () => _(
+    [262,200],[294,200],[330,200],[349,200],[392,400],[349,200],[330,200],
+    [294,400],[262,200],[294,200],[330,200],[349,200],[392,400],[440,400],
+    [392,200],[349,200],[330,200],[294,200],[262,400],[0,100],
+  ),
+  kupu: () => _(
+    [523,300],[587,300],[659,300],[523,400],[659,300],[587,300],[523,600],
+    [494,300],[523,300],[587,300],[659,300],[523,400],[494,300],[440,600],
+  ),
+  burung: () => _(
+    [392,200],[523,200],[392,200],[523,200],[587,400],[659,400],[523,400],
+    [440,200],[494,200],[523,400],[440,200],[392,200],[349,400],[330,400],
+  ),
+  tahunbaru: () => _(
+    [523,200],[523,200],[523,200],[659,400],[523,400],[784,400],[659,500],
+    [587,200],[523,200],[659,400],[784,400],[659,400],[523,500],
+  ),
+};
+
 export default function SimulasiPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const posRef = useRef({ x: 0, y: 350 });
@@ -1247,6 +1277,18 @@ export default function SimulasiPage() {
               </button>
             </div>
             <div className="flex gap-1 mt-1">
+              {['pelangi', 'bebek', 'balonku', 'kupu', 'burung', 'tahunbaru'].map(label => (
+                <button key={label} onClick={() => {
+                  const arr = KNOWN_MELODIES[label]?.(wsRef.current);
+                  if (arr && wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ melody: arr }));
+                }}
+                  className="px-1.5 py-0.5 rounded-md text-[6px] font-mono font-bold border bg-zinc-800 border-zinc-700 text-zinc-400 active:scale-90 hover:text-white"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-1 mt-1">
               <input type="text" id="melodyPrompt" placeholder="AI: nada tahun baru..."
                 className="flex-1 min-w-0 px-1 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-300 text-[7px] font-mono outline-none placeholder-zinc-600"
               />
@@ -1265,7 +1307,7 @@ export default function SimulasiPage() {
                     body: JSON.stringify({
                       messages: [{ role: 'user', content: prompt }],
                       apiKey: groqApiKeyRef.current,
-                      systemPrompt: 'Kamu adalah komposer nada buzzer. Balas ONLY dengan daftar freq/dur pisah koma. Contoh: 262/200,294/200,330/400. Freq dalam Hz (262=C4, 294=D4, 330=E4, 349=F4, 392=G4, 440=A4, 494=B4, 523=C5). Dur dalam ms. MAX 50 not. Jangan tulis apa-apa selain daftar.',
+                      systemPrompt: 'Kamu komposer melodi buzzer. HANYA pake not dari C mayor pentatonic: 262(C),294(D),330(E),392(G),440(A). Mulai & akhir di 262(C). Pake pola naik-turun, jangan lompat jauh. 8-16 not. Balas ONLY freq/dur pisah koma. Contoh: 262/300,330/300,392/300,440/300,392/300,330/300,262/500. Jangan tulis apapun selain itu.',
                     }),
                   });
                   if (!res.ok) throw Error('Gagal');
