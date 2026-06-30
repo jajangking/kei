@@ -417,11 +417,11 @@ export default function SimulasiPage() {
       }
     }
 
-    // M3: DRIVE — maju perlahan, stop di 20cm (biar aman)
+    // M3: DRIVE — maju perlahan, stop di 35cm (biar ada waktu ngerem)
     if (modul3ActiveRef.current && m3PhaseRef.current === "DRIVE" && !joyActiveRef.current && !keyActiveRef.current) {
       const d = distanceRef.current;
       turnTimeoutRef.current++;
-      if (d > 0 && d <= 20) {
+      if (d > 0 && d <= 35) {
         setMotors(0, 0);
         turnSpeedRef.current = 0;
         sweepLockedRef.current = false;
@@ -434,28 +434,37 @@ export default function SimulasiPage() {
         logEvent(`M3 stop ${d.toFixed(0)}cm, loop`, "nav");
         m3PhaseRef.current = "SWEEP";
       } else {
-        const targetSpeed = d > 0 && d < 40 ? 40 : 70;
-        if (turnTimeoutRef.current > 100) {
-          turnRampTickRef.current++;
-          if (turnRampTickRef.current % 3 === 0) {
-            turnSpeedRef.current = Math.min(turnSpeedRef.current + 1, 150);
+        const stalled = turnTimeoutRef.current > 600 && turnSpeedRef.current > 60;
+        if (stalled) {
+          logEvent(`M3 maju mentok, mundur`, "nav");
+          setMotors(0, 0);
+          turnSpeedRef.current = 0;
+          backTickRef.current = 0;
+          m3PhaseRef.current = "BACK";
+        } else {
+          const targetSpeed = d > 0 && d < 60 ? 35 : 60;
+          if (turnTimeoutRef.current > 100) {
+            turnRampTickRef.current++;
+            if (turnRampTickRef.current % 3 === 0) {
+              turnSpeedRef.current = Math.min(turnSpeedRef.current + 1, 120);
+            }
+          } else if (turnSpeedRef.current < targetSpeed) {
+            turnRampTickRef.current++;
+            if (turnRampTickRef.current % 3 === 0) {
+              turnSpeedRef.current = Math.min(turnSpeedRef.current + 1, targetSpeed);
+            }
+          } else if (turnSpeedRef.current > targetSpeed) {
+            turnRampTickRef.current = 0;
+            turnSpeedRef.current = Math.max(turnSpeedRef.current - 1, targetSpeed);
           }
-        } else if (turnSpeedRef.current < targetSpeed) {
-          turnRampTickRef.current++;
-          if (turnRampTickRef.current % 3 === 0) {
-            turnSpeedRef.current = Math.min(turnSpeedRef.current + 1, targetSpeed);
+          const s = Math.round(turnSpeedRef.current);
+          leftMotorRef.current = s;
+          rightMotorRef.current = s;
+          setLeftMotor(s);
+          setRightMotor(s);
+          if (wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ leftMotor: s, rightMotor: s }));
           }
-        } else if (turnSpeedRef.current > targetSpeed) {
-          turnRampTickRef.current = 0;
-          turnSpeedRef.current = Math.max(turnSpeedRef.current - 1, targetSpeed);
-        }
-        const s = Math.round(turnSpeedRef.current);
-        leftMotorRef.current = s;
-        rightMotorRef.current = s;
-        setLeftMotor(s);
-        setRightMotor(s);
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify({ leftMotor: s, rightMotor: s }));
         }
       }
     }
