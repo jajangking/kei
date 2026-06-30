@@ -63,6 +63,7 @@ export default function SimulasiPage() {
   const turnTimeoutRef = useRef(0);
   const backTickRef = useRef(0);
   const turnIsUturnRef = useRef(false);
+  const driveTargetHeadingRef = useRef(0);
 
   // M4: Groq AI Hybrid
   const [modul4Active, setModul4Active] = useState(false);
@@ -366,7 +367,7 @@ export default function SimulasiPage() {
       while (diff > Math.PI) diff -= 2 * Math.PI;
       while (diff < -Math.PI) diff += 2 * Math.PI;
       const degLeft = diff * 180 / Math.PI;
-      if (Math.abs(degLeft) > 1) {
+      if (Math.abs(degLeft) > 2.5) {
         turnTimeoutRef.current++;
         const log = turnYawLogRef.current;
         log.push(tele?.yaw ?? 0);
@@ -378,7 +379,7 @@ export default function SimulasiPage() {
             turnSpeedRef.current = Math.min(turnSpeedRef.current + 1, 200);
           }
         } else {
-          const targetSpeed = Math.min(Math.abs(degLeft) * 2, 150);
+          const targetSpeed = Math.min(Math.abs(degLeft) * 1.2 + 10, 130);
           if (turnSpeedRef.current < targetSpeed) {
             turnRampTickRef.current++;
             if (turnRampTickRef.current % 3 === 0) {
@@ -386,7 +387,7 @@ export default function SimulasiPage() {
             }
           } else if (turnSpeedRef.current > targetSpeed) {
             turnRampTickRef.current = 0;
-            turnSpeedRef.current = Math.max(turnSpeedRef.current - 1, targetSpeed);
+            turnSpeedRef.current = Math.max(turnSpeedRef.current - 2, targetSpeed);
           }
         }
         const s = Math.round(turnSpeedRef.current);
@@ -419,6 +420,7 @@ export default function SimulasiPage() {
           logEvent(`M3 uturn ok, sweep ulang`, "nav");
           m3PhaseRef.current = "SWEEP";
         } else {
+          driveTargetHeadingRef.current = headingRef.current;
           m3PhaseRef.current = "DRIVE";
         }
       }
@@ -465,14 +467,19 @@ export default function SimulasiPage() {
             turnSpeedRef.current = Math.max(turnSpeedRef.current - 1, targetSpeed);
           }
           const s = Math.round(turnSpeedRef.current);
-          leftMotorRef.current = s;
-          rightMotorRef.current = s;
-          setLeftMotor(s);
-          setRightMotor(s);
+          let headingErr = headingRef.current - driveTargetHeadingRef.current;
+          while (headingErr > Math.PI) headingErr -= 2 * Math.PI;
+          while (headingErr < -Math.PI) headingErr += 2 * Math.PI;
+          const correction = Math.round(headingErr * 180 / Math.PI * 1.2);
+          const clamped = Math.max(-40, Math.min(40, correction));
+          const lm = Math.max(-255, Math.min(255, s - trimRef.current - clamped));
+          const rm = Math.max(-255, Math.min(255, s + trimRef.current + clamped));
+          leftMotorRef.current = lm;
+          rightMotorRef.current = rm;
+          setLeftMotor(lm);
+          setRightMotor(rm);
           if (wsRef.current?.readyState === WebSocket.OPEN) {
-            const tl = Math.max(-255, Math.min(255, s - trimRef.current));
-            const tr = Math.max(-255, Math.min(255, s + trimRef.current));
-            wsRef.current.send(JSON.stringify({ leftMotor: tl, rightMotor: tr }));
+            wsRef.current.send(JSON.stringify({ leftMotor: lm, rightMotor: rm }));
           }
         }
       }
