@@ -121,7 +121,7 @@ export default function SimulasiPage() {
   const bestSectorRef = useRef(-1);
   const prevBestSectorRef = useRef(-1);
   const sweepLockedRef = useRef(false);
-  const m3PhaseRef = useRef<"SWEEP" | "TURN" | "DRIVE" | "BACK">("SWEEP");
+  const m3PhaseRef = useRef<"SWEEP" | "TURN" | "DRIVE" | "BACK" | "DONE">("SWEEP");
   const sweepTickRef = useRef(0);
   const turnTargetRadRef = useRef(0);
   const turnSpeedRef = useRef(0);
