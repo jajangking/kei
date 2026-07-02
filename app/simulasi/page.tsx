@@ -144,15 +144,14 @@ export default function SimulasiPage() {
   const [groqApiKey, setGroqApiKey] = useState("");
   const groqApiKeyRef = useRef("");
 
-  // M7: ML Behavioral Cloning
   const [mlActive, setMlActive] = useState(false);
   const mlActiveRef = useRef(false);
   const [mlRecording, setMlRecording] = useState(false);
   const mlRecordingRef = useRef(false);
   const [mlStatus, setMlStatus] = useState("—");
-  const mlStatusRef = useRef("—");
   const mlCountRef = useRef(0);
   const mlTrainBtnRef = useRef<HTMLButtonElement>(null);
+  const mlSmoothRef = useRef({ l: 0, r: 0 });
 
   // Camera state (needed by draw, declared early)
   const [camActive, setCamActive] = useState(false);
@@ -204,12 +203,17 @@ export default function SimulasiPage() {
   const servoHistoryRef = useRef<ServoRead[]>([]);
 
   const motorLogThrottleRef = useRef(0);
-  const setMotors = useCallback((l: number, r: number) => {
+  const setMotors = useCallback((l: number, r: number, skipClamp = false) => {
     const prevL = leftMotorRef.current;
     const prevR = rightMotorRef.current;
-    const clampMin = (v: number) => v === 0 ? 0 : Math.round(v > 0 ? Math.max(80, v) : Math.min(-80, v));
-    l = clampMin(l);
-    r = clampMin(r);
+    if (!skipClamp) {
+      const clampMin = (v: number) => v === 0 ? 0 : Math.round(v > 0 ? Math.max(80, v) : Math.min(-80, v));
+      l = clampMin(l);
+      r = clampMin(r);
+    } else {
+      l = Math.round(Math.max(-255, Math.min(255, l)));
+      r = Math.round(Math.max(-255, Math.min(255, r)));
+    }
     leftMotorRef.current = l;
     rightMotorRef.current = r;
     setLeftMotor(l);
@@ -606,14 +610,16 @@ export default function SimulasiPage() {
       }
     }
 
-    // M7: ML inference
+    // M7: ML inference (smooth EMA + skipClamp)
     if (mlActiveRef.current && !joyActiveRef.current && !keyActiveRef.current) {
       const out = predict(sectorDataRef.current, leftMotorRef.current, headingRef.current);
       if (out) {
         const [ml, mr] = out;
-        if (ml !== leftMotorRef.current || mr !== rightMotorRef.current) {
-          setMotors(Math.round(ml), Math.round(mr));
-        }
+        const s = mlSmoothRef.current;
+        // Exponential moving average 70% baru 30% lama → anti-jerk
+        s.l = s.l * 0.3 + ml * 0.7;
+        s.r = s.r * 0.3 + mr * 0.7;
+        setMotors(s.l, s.r, true);
       }
     }
 
