@@ -6,6 +6,7 @@ import { loadDB, saveDB, registerFace, renameFace, deleteFace, recognize, type F
 import VoiceGroq from "../voicegroq";
 
 import type { LogEntry, ServoRead, FacingMode, MotorRef } from "./types";
+import { recordSample, trainModel, predict, dataCount, loadWeights, clearData, saveData, loadData } from "./ml-brain";
 import { ROBOT_R, TRAIL_LEN, MAX_SENSE, JOY_DEADZONE, MAX_LOG, SECTORS, SERVO_SCALE, WHEEL_BASE } from "./constants";
 import { gridCellKey } from "./utils";
 import { drawScene, type DrawState } from "./renderer";
@@ -142,6 +143,16 @@ export default function SimulasiPage() {
   const [aiStatus, setAiStatus] = useState("—");
   const [groqApiKey, setGroqApiKey] = useState("");
   const groqApiKeyRef = useRef("");
+
+  // M7: ML Behavioral Cloning
+  const [mlActive, setMlActive] = useState(false);
+  const mlActiveRef = useRef(false);
+  const [mlRecording, setMlRecording] = useState(false);
+  const mlRecordingRef = useRef(false);
+  const [mlStatus, setMlStatus] = useState("—");
+  const mlStatusRef = useRef("—");
+  const mlCountRef = useRef(0);
+  const mlTrainBtnRef = useRef<HTMLButtonElement>(null);
 
   // Camera state (needed by draw, declared early)
   const [camActive, setCamActive] = useState(false);
@@ -595,6 +606,23 @@ export default function SimulasiPage() {
       }
     }
 
+    // M7: ML inference
+    if (mlActiveRef.current && !joyActiveRef.current && !keyActiveRef.current) {
+      const out = predict(sectorDataRef.current, leftMotorRef.current, headingRef.current);
+      if (out) {
+        const [ml, mr] = out;
+        if (ml !== leftMotorRef.current || mr !== rightMotorRef.current) {
+          setMotors(Math.round(ml), Math.round(mr));
+        }
+      }
+    }
+
+    // Record ML data
+    if (mlRecordingRef.current && (joyActiveRef.current || keyActiveRef.current)) {
+      recordSample(sectorDataRef.current, leftMotorRef.current, headingRef.current, leftMotorRef.current, rightMotorRef.current);
+      mlCountRef.current = dataCount();
+    }
+
     const d_now = distanceRef.current;
     let l = leftMotorRef.current;
     let r = rightMotorRef.current;
@@ -725,6 +753,11 @@ export default function SimulasiPage() {
     const nx = (leftMotor - rightMotor) / 510;
     setJoyPos({ x: nx * maxR, y: -ny * maxR });
   }, [leftMotor, rightMotor]);
+
+  // ML state sync
+  useEffect(() => { mlActiveRef.current = mlActive; }, [mlActive]);
+  useEffect(() => { mlRecordingRef.current = mlRecording; }, [mlRecording]);
+  useEffect(() => { loadData(); loadWeights(); }, []);
 
   // Sync module refs
   useEffect(() => {
@@ -1084,6 +1117,54 @@ export default function SimulasiPage() {
                   </span>
                   {recognizedFace && <span className="text-fuchsia-400">{recognizedFace}</span>}
                 </div>
+              </div>
+            )}
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-[8px] font-mono text-zinc-500">M7</span>
+                <span className="text-[10px] font-mono text-zinc-300">ML BRAIN</span>
+              </div>
+              <div className="flex gap-1">
+                <button onClick={async () => {
+                  setMlRecording(p => { mlRecordingRef.current = !p; return !p; });
+                }}
+                  className={`px-1.5 py-0.5 rounded-full text-[7px] font-mono font-bold border transition-colors active:scale-90 ${
+                    mlRecording ? "bg-red-600 border-red-500 text-white animate-pulse" : "bg-zinc-800 border-zinc-700 text-zinc-500"
+                  }`}
+                >
+                  {mlRecording ? "REC" : "REC"}
+                </button>
+                <button ref={mlTrainBtnRef} onClick={async () => {
+                  const btn = mlTrainBtnRef.current;
+                  if (!btn) return;
+                  btn.textContent = "...";
+                  btn.disabled = true;
+                  try {
+                    saveData();
+                    const loss = await trainModel((e, l) => {
+                      setMlStatus(`epoch ${e} loss ${l.toFixed(4)}`);
+                    });
+                    setMlStatus(`✅ ${loss.toFixed(4)}`);
+                  } catch (e: any) { setMlStatus(e.message || "err"); }
+                  btn.textContent = "TRAIN";
+                  btn.disabled = false;
+                }}
+                  className="px-1.5 py-0.5 rounded-full text-[7px] font-mono font-bold border bg-zinc-800 border-zinc-700 text-amber-400 active:scale-90"
+                >
+                  TRAIN
+                </button>
+                <button onClick={() => setMlActive(p => { mlActiveRef.current = !p; return !p; })}
+                  className={`px-1.5 py-0.5 rounded-full text-[7px] font-mono font-bold border transition-colors active:scale-90 ${
+                    mlActive ? "bg-emerald-600 border-emerald-500 text-white" : "bg-zinc-800 border-zinc-700 text-zinc-500"
+                  }`}
+                >
+                  {mlActive ? "ON" : "OF"}
+                </button>
+              </div>
+            </div>
+            {(mlRecording || mlActive || mlStatus !== "—") && (
+              <div className="pl-4 text-[8px] font-mono text-zinc-500">
+                {dataCount()} data · {mlStatus}
               </div>
             )}
             <div className="flex items-center justify-between gap-3">
