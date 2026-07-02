@@ -17,13 +17,22 @@ export function recordSample(
   lMotor: number,
   rMotor: number,
 ) {
-  if (data.xs.length >= 5000) return; // cap
-  const input = [
-    ...sectors.map(d => Math.min(d / 400, 1)),
+  if (data.xs.length >= 5000) return;
+  // throttle: skip if too similar to last sample
+  if (data.xs.length > 0) {
+    const last = data.xs[data.xs.length - 1];
+    const same = sectors.every((d, i) => {
+      const a = d > 0 ? Math.min(d / 400, 1) : 0.5;
+      const b = last[i];
+      return Math.abs(a - b) < 0.05;
+    });
+    if (same) return;
+  }
+  data.xs.push([
+    ...sectors.map(d => d > 0 ? Math.min(d / 400, 1) : 0.5),
     Math.abs(speed) / 255,
     Math.atan(Math.tan(headingErr)) / Math.PI,
-  ];
-  data.xs.push(input);
+  ]);
   data.ys.push([lMotor / 255, rMotor / 255]);
 }
 
@@ -105,8 +114,11 @@ export function predict(
   headingErr: number,
 ): [number, number] | null {
   if (!model) return null;
+  // safety: closest obstacle < 20cm → stop
+  const minDist = Math.min(...sectors.filter(d => d > 0));
+  if (minDist < 20) return [0, 0];
   const input = [
-    ...sectors.map(d => Math.min(d / 400, 1)),
+    ...sectors.map(d => d > 0 ? Math.min(d / 400, 1) : 0.5),
     Math.abs(speed) / 255,
     Math.atan(Math.tan(headingErr)) / Math.PI,
   ];

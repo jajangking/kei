@@ -398,8 +398,8 @@ export default function SimulasiPage() {
       }
     }
 
-    // M3: Servo auto-sweep
-    if (modul3ActiveRef.current && !sweepLockedRef.current) {
+    // M3: Servo auto-sweep (also active for ML)
+    if ((modul3ActiveRef.current || mlActiveRef.current) && !sweepLockedRef.current) {
       sweepTickRef.current++;
       let sa = servoRef.current + sweepDirRef.current;
       if (sa >= 160) { sa = 160; sweepDirRef.current = -1; }
@@ -618,7 +618,7 @@ export default function SimulasiPage() {
     }
 
     // Record ML data
-    if (mlRecordingRef.current && (joyActiveRef.current || keyActiveRef.current)) {
+    if (mlRecordingRef.current) {
       recordSample(sectorDataRef.current, leftMotorRef.current, headingRef.current, leftMotorRef.current, rightMotorRef.current);
       mlCountRef.current = dataCount();
     }
