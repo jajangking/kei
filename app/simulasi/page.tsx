@@ -161,6 +161,9 @@ export default function SimulasiPage() {
   // M8: Reactive Vector
   const [modul8Active, setModul8Active] = useState(false);
   const modul8ActiveRef = useRef(false);
+  const m8SmLeft = useRef(0);
+  const m8SmRight = useRef(0);
+  const m8SmFront = useRef(0);
 
   // Camera state (needed by draw, declared early)
   const [camActive, setCamActive] = useState(false);
@@ -836,27 +839,35 @@ export default function SimulasiPage() {
 
     // M8: Reactive Vector
     if (modul8ActiveRef.current && !joyActiveRef.current && !keyActiveRef.current && !modul3ActiveRef.current) {
-      let repelX = 0, repelY = 0, anyData = false;
+      let rawLeft = 0, rawRight = 0, rawFront = 0, anyData = false;
       for (let i = 0; i < SECTORS.length; i++) {
         const d = sectorDataRef.current[i];
         if (d < 0) continue;
         anyData = true;
-        const cm = Math.min(d, 60);
-        const angle = (SECTORS[i].cx - 90) * Math.PI / 180;
-        const force = Math.max(0, (60 - cm) / 60);
-        repelX -= Math.sin(angle) * force;
-        repelY -= Math.cos(angle) * force;
+        const cm = Math.min(d, 80);
+        const w = Math.max(0, (80 - cm) / 80);
+        if (w <= 0) continue;
+        const cx = SECTORS[i].cx;
+        if (cx < 85) rawLeft = Math.max(rawLeft, w * (85 - cx) / 85);
+        else if (cx > 95) rawRight = Math.max(rawRight, w * (cx - 95) / 85);
+        if (cx >= 65 && cx <= 115) rawFront = Math.max(rawFront, w);
       }
       if (anyData) {
-        const mag = Math.hypot(repelX, repelY);
-        const speed = Math.max(15, Math.round(70 - mag * 50));
-        let ml = speed, mr = speed;
-        if (mag > 0.01) {
-          const steer = Math.atan2(repelX, repelY) * 100;
-          ml = Math.max(-255, Math.min(255, Math.round(speed - steer)));
-          mr = Math.max(-255, Math.min(255, Math.round(speed + steer)));
-        }
-        if (ml !== leftMotorRef.current || mr !== rightMotorRef.current) {
+        const a = 0.12;
+        m8SmLeft.current += (rawLeft - m8SmLeft.current) * a;
+        m8SmRight.current += (rawRight - m8SmRight.current) * a;
+        m8SmFront.current += (rawFront - m8SmFront.current) * a;
+        const baseSpeed = 65;
+        const spd = Math.max(15, Math.round(baseSpeed * (1 - m8SmFront.current * 0.6)));
+        const steer = Math.round((m8SmRight.current - m8SmLeft.current) * 30);
+        let ml = spd - steer;
+        let mr = spd + steer;
+        ml = Math.max(-255, Math.min(255, ml));
+        mr = Math.max(-255, Math.min(255, mr));
+        const smooth = 0.35;
+        ml = Math.round(leftMotorRef.current + (ml - leftMotorRef.current) * smooth);
+        mr = Math.round(rightMotorRef.current + (mr - rightMotorRef.current) * smooth);
+        if (ml !== 0 || mr !== 0 || leftMotorRef.current !== 0 || rightMotorRef.current !== 0) {
           leftMotorRef.current = ml;
           rightMotorRef.current = mr;
           setLeftMotor(ml);
@@ -866,7 +877,6 @@ export default function SimulasiPage() {
           }
         }
       } else {
-        // no sensor data yet — idle
         if (leftMotorRef.current !== 0 || rightMotorRef.current !== 0) {
           leftMotorRef.current = 0; rightMotorRef.current = 0;
           setLeftMotor(0); setRightMotor(0);
