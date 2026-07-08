@@ -1608,7 +1608,7 @@ export default function VisionPage() {
           {isAPMode && !wsConnected && (
             <div className="text-[7px] font-mono text-amber-500/80 leading-tight">
               ESP mode AP &mdash; Hubungkan HP ke WiFi <strong>KEI-XXXX</strong> (pw: 12345678),
-              buka http://192.168.4.1
+              buka <strong>http://192.168.4.1</strong> di browser
             </div>
           )}
           {/* baris 2: MQTT toggle + status */}

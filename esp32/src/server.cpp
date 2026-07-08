@@ -62,7 +62,7 @@ button:active{opacity:.7}button:disabled{opacity:.4;cursor:default}
 <button onclick=connect() id=conn-btn>Connect</button>
 <div id=status></div>
 </div>
-<p class=info>Setelah connect, ESP akan restart. Cari IP baru via <strong>kei.local</strong> di browser.</p>
+<p class=info>Setelah connect, ESP akan restart. Akses via <strong>http://kei.local</strong> atau <strong>http://192.168.4.1</strong></p>
 </div>
 <script>
 function $(id){return document.getElementById(id)}
