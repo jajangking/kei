@@ -90,6 +90,7 @@ export default function VisionPage() {
   const [espIpFromMqtt, setEspIpFromMqtt] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [scanStatus, setScanStatus] = useState("");
+  const [isAPMode, setIsAPMode] = useState(false);
   const [leftMotor, setLeftMotor] = useState(0);
   const [rightMotor, setRightMotor] = useState(0);
   const [telemetry, setTelemetry] = useState<Telemetry>({});
@@ -636,66 +637,56 @@ export default function VisionPage() {
     if (scanning) return;
     setScanning(true);
     setScanStatus("mencari...");
-    const subnets = ["192.168.42", "192.168.43", "192.168.44", "192.168.137", "192.168.1", "192.168.0", "10.0.2", "10.223", "172.20.10"];
-    const ips: string[] = [];
-    for (const s of subnets) {
-      ips.push(`${s}.129`, `${s}.1`, `${s}.100`, `${s}.101`, `${s}.254`);
-    }
-    for (const s of subnets) {
-      for (let i = 1; i <= 254; i++) {
-        const ip = `${s}.${i}`;
-        if (!ips.includes(ip)) ips.push(ip);
-      }
-    }
-    let found = "";
-    // coba kei.local dulu via HTTP
-    try {
-      const c = new AbortController();
-      const t = setTimeout(() => c.abort(), 1000);
-      const r = await fetch("http://kei.local/", { signal: c.signal });
-      clearTimeout(t);
-      if (r.ok) { const d = await r.json(); if (d.ip) found = d.ip; }
-    } catch {}
-    if (!found) for (const ip of ips) {
-      if (found) break;
-      setScanStatus(ip);
+
+    const probe = async (ip: string): Promise<string | null> => {
       try {
-        const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 300);
-        const res = await fetch(`http://${ip}/`, { signal: ctrl.signal });
+        const c = new AbortController();
+        const t = setTimeout(() => c.abort(), 2000);
+        const r = await fetch(`http://${ip}/api/wifi/status`, { signal: c.signal });
         clearTimeout(t);
-        if (res.ok) {
-          const data = await res.json();
-          if (data.name && data.ip) { found = ip; break; }
-        }
+        if (r.ok) { const d = await r.json(); if (d.ip) return d.ip; }
       } catch {}
-    }
+      try {
+        const c = new AbortController();
+        const t = setTimeout(() => c.abort(), 1500);
+        const r = await fetch(`http://${ip}/`, { signal: c.signal });
+        clearTimeout(t);
+        if (r.ok) { const d = await r.json(); if (d.name && d.ip) return d.ip; }
+      } catch {}
+      return null;
+    };
+
+    let found = "";
+
+    // 1. kei.local
+    setScanStatus("coba kei.local...");
+    found = (await probe("kei.local")) || "";
+
+    // 2. Saved IP
     if (!found) {
-      for (const ip of ips) {
+      const saved = localStorage.getItem("espIp");
+      if (saved) { setScanStatus(saved); found = (await probe(saved)) || ""; }
+    }
+
+    // 3. Common IPs aja (no full scan)
+    if (!found) {
+      const common = ["192.168.42.129", "192.168.1.100", "192.168.0.100", "192.168.137.1", "10.0.2.1", "172.20.10.1"];
+      for (const ip of common) {
         if (found) break;
         setScanStatus(ip);
-        try {
-          await new Promise<void>((resolve, reject) => {
-            const ws = new WebSocket(`ws://${ip}:81`);
-            const t = setTimeout(() => { try { ws.close(); } catch {} reject(); }, 200);
-            ws.onopen = () => {
-              clearTimeout(t);
-              ws.send(JSON.stringify({ ping: true }));
-              const t2 = setTimeout(() => { try { ws.close(); } catch {} reject(); }, 300);
-              ws.onmessage = (e) => {
-                try {
-                  if (JSON.parse(e.data).pong) { clearTimeout(t2); ws.close(); found = ip; resolve(); }
-                } catch {}
-              };
-            };
-            ws.onerror = () => { clearTimeout(t); reject(); };
-          });
-        } catch {}
+        found = (await probe(ip)) || "";
       }
     }
+
     setScanning(false);
-    setScanStatus(found ? `ditemukan: ${found}` : "tidak ditemukan. cek IP di serial monitor ArduinoDroid");
-    if (found) { setEspIp(found); setTimeout(() => connectESP(), 50); }
+    const apMode = found && found.startsWith("192.168.4");
+    setScanStatus(found
+      ? `ditemukan: ${found}`
+      : "tidak ditemukan. Cek: ESP nyala? Hotspot aktif? Ketik IP manual."
+    );
+    setIsAPMode(apMode);
+    if (found && !apMode) { setEspIp(found); setTimeout(() => connectESP(found), 50); }
+    if (found && apMode) { setEspIp(found); }
   }, [scanning, connectESP]);
 
   // Camera
@@ -1613,6 +1604,12 @@ export default function VisionPage() {
           </div>
           {scanStatus && !wsConnected && (
             <span className="text-[7px] font-mono text-zinc-600">{scanStatus}</span>
+          )}
+          {isAPMode && !wsConnected && (
+            <div className="text-[7px] font-mono text-amber-500/80 leading-tight">
+              ESP mode AP &mdash; Hubungkan HP ke WiFi <strong>KEI-XXXX</strong> (pw: 12345678),
+              buka http://192.168.4.1
+            </div>
           )}
           {/* baris 2: MQTT toggle + status */}
           <div className="flex gap-1.5 items-center">

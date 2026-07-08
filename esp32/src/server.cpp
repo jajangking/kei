@@ -1,13 +1,13 @@
 #include "server.h"
 #include "pins.h"
 #include "wifi.h"
+#include "config.h"
 #include "page_index.h"
+#include <WiFi.h>
+#include <ArduinoJson.h>
 
 WebServer http(80);
 WebSocketsServer ws(81);
-
-static void handleRoot() { http.send(200, "text/html", PAGE_INDEX); }
-static void handleVersion() { http.send(200, "application/json", "{\"fw\":\"" + String(FW_VERSION) + "\"}"); }
 
 void wsBroadcast(String msg) { ws.broadcastTXT(msg); }
 void wsSend(uint8_t client, String msg) { ws.sendTXT(client, msg); }
@@ -16,6 +16,110 @@ void wsLog(String msg) {
   ws.broadcastTXT("{\"type\":\"log\",\"msg\":\"" + msg + "\"}");
   Serial.println(msg);
 }
+
+// ─── Captive portal HTML ──────────────────────────────────────
+static String portalHTML() {
+  String apIP = wifiState == WIFI_AP ? cachedAPIP : cachedIP;
+  String html = R"rawliteral(
+<!DOCTYPE html><html><head>
+<meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>KEI Setup</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0a0f;color:#e4e4e7;font-family:monospace;display:flex;justify-content:center;padding:2rem 1rem;min-height:100vh}
+.card{max-width:480px;width:100%}
+h1{color:#f59e0b;font-size:1.5rem;margin-bottom:.25rem}
+.sub{color:#71717a;font-size:.75rem;margin-bottom:1.5rem}
+.section{background:#18181b;border:1px solid #27272a;border-radius:12px;padding:1rem;margin-bottom:1rem}
+.section h2{color:#a1a1aa;font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.75rem}
+select,input[type=password],input[type=text]{width:100%;background:#09090b;border:1px solid #27272a;border-radius:8px;padding:.6rem .75rem;color:#e4e4e7;font:inherit;font-size:.8rem;outline:none;margin-bottom:.5rem}
+select:focus,input:focus{border-color:#f59e0b}
+button{width:100%;background:#f59e0b;color:#09090b;border:none;border-radius:8px;padding:.7rem;font:inherit;font-weight:bold;font-size:.85rem;cursor:pointer;transition:opacity .15s}
+button:active{opacity:.7}button:disabled{opacity:.4;cursor:default}
+.net-list{max-height:200px;overflow-y:auto;margin-bottom:.5rem}
+.net-item{padding:.4rem .5rem;border-radius:6px;cursor:pointer;font-size:.75rem;display:flex;justify-content:space-between;transition:background .15s}
+.net-item:hover,.net-item.selected{background:#27272a}
+.net-item .name{color:#e4e4e7}
+.net-item .rssi{color:#71717a}
+.lock{color:#f59e0b;margin-left:.3rem}
+#status{text-align:center;font-size:.75rem;color:#71717a;margin-top:.75rem}
+.spinner{display:inline-block;width:12px;height:12px;border:2px solid #71717a;border-top-color:#f59e0b;border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle;margin-right:.4rem}
+@keyframes spin{to{transform:rotate(360deg)}}
+.info{font-size:.7rem;color:#52525b;margin-top:.4rem;text-align:center}
+</style></head><body>
+<div class=card>
+<h1>⚡ KEI Setup</h1>
+<p class=sub>IP: )rawliteral" + apIP + R"rawliteral( &middot; MAC: )rawliteral" + WiFi.macAddress() + R"rawliteral(</p>
+<div class=section>
+<h2>WiFi Network</h2>
+<select id=net-list size=5 class=net-list><option value>Scanning...</option></select>
+<button onclick=scan() disabled id=scan-btn>⟳ Scan</button>
+</div>
+<div class=section>
+<h2>Connect</h2>
+<input type=text id=ssid placeholder="SSID" readonly onclick="pickNet()">
+<input type=password id=pass placeholder="Password" onkeydown="if(event.key=='Enter')connect()">
+<button onclick=connect() id=conn-btn>Connect</button>
+<div id=status></div>
+</div>
+<p class=info>Setelah connect, ESP akan restart. Cari IP baru via <strong>kei.local</strong> di browser.</p>
+</div>
+<script>
+function $(id){return document.getElementById(id)}
+function scan(){
+  var s=$('net-list'),b=$('scan-btn'); s.innerHTML='<option>Scanning...</option>'; b.disabled=true;
+  fetch('/api/wifi/scan').then(function(r){return r.json()}).then(function(nets){
+    s.innerHTML='';
+    if(!nets.length){s.innerHTML='<option value>No networks found</option>';return}
+    nets.forEach(function(n){
+      var o=document.createElement('option');
+      o.value=n.ssid; o.textContent=n.ssid+' '+(n.rssi>-50?'▂▄▆█':n.rssi>-70?'▂▄▆':n.rssi>-85?'▂▄':'▂');
+      if(n.encryption!=0)o.textContent+=' 🔒';
+      s.appendChild(o);
+    });
+  }).catch(function(){s.innerHTML='<option value>Scan failed</option>'});
+  b.disabled=false;
+}
+function pickNet(){var s=$('net-list');if(s.value)$('ssid').value=s.value;$('pass').focus()}
+function connect(){
+  var ssid=$('ssid').value.trim(),pass=$('pass').value.trim();
+  if(!ssid){$('status').textContent='Isi SSID dulu';return}
+  $('conn-btn').disabled=true;$('status').innerHTML='<span class=spinner></span>Connecting...';
+  fetch('/api/wifi/configure',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ssid:ssid,password:pass})})
+  .then(function(r){return r.text()}).then(function(t){$('status').textContent=t})
+  .catch(function(e){$('status').textContent='Error: '+e.message;$('conn-btn').disabled=false});
+}
+scan();
+</script></body></html>)rawliteral";
+  return html;
+}
+
+// ─── WiFi scan JSON ───────────────────────────────────────────
+static String wifiScanJSON() {
+  int n = WiFi.scanComplete();
+  String j = "[";
+  bool first = true;
+  for (int i = 0; i < n; i++) {
+    if (!first) j += ",";
+    first = false;
+    j += "{\"ssid\":\"" + WiFi.SSID(i) + "\",\"rssi\":" + String(WiFi.RSSI(i));
+    j += ",\"encryption\":" + String(WiFi.encryptionType(i));
+    j += ",\"channel\":" + String(WiFi.channel(i)) + "}";
+  }
+  j += "]";
+  WiFi.scanDelete();
+  return j;
+}
+
+// ─── Default routes ───────────────────────────────────────────
+static void handleRoot() {
+  if (wifiState == WIFI_AP) {
+    http.send(200, "text/html", portalHTML());
+  } else {
+    http.send(200, "text/html", PAGE_INDEX);
+  }
+}
+static void handlePortal() { http.send(200, "text/html", portalHTML()); }
 
 static void onWsEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t len) {
   if (type == WStype_CONNECTED) {
@@ -30,29 +134,52 @@ static void onWsEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t len) 
 
 void initServer() {
   http.on("/", handleRoot);
-  http.on("/version", handleVersion);
+  http.on("/portal", handlePortal);
 
-  http.on("/cmd", []() {
-    if (http.hasArg("plain")) {
-      extern void handleMessage(const String &msg);
-      handleMessage(http.arg("plain"));
-      http.send(200, "text/plain", "ok");
-    } else {
-      http.send(400, "text/plain", "no body");
-    }
+  // WiFi captive portal / management
+  http.on("/api/wifi/scan", []() {
+    WiFi.scanNetworks(true);
+    unsigned long t = millis();
+    while (WiFi.scanComplete() < 0 && millis() - t < 10000) delay(10);
+    http.send(200, "application/json", wifiScanJSON());
   });
 
-  http.on("/telemetry", []() {
-    extern String buildTelemetryJson();
-    http.send(200, "application/json", buildTelemetryJson());
+  http.on("/api/wifi/configure", HTTP_POST, []() {
+    if (!http.hasArg("plain")) { http.send(400, "text/plain", "no body"); return; }
+    String body = http.arg("plain");
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, body);
+    if (err) { http.send(400, "text/plain", "bad json"); return; }
+    String ssid = doc["ssid"] | "";
+    String pass = doc["password"] | "";
+    if (ssid.length() == 0) { http.send(400, "text/plain", "ssid required"); return; }
+    saveWifi(ssid, pass);
+    http.send(200, "text/plain", "Credentials saved, rebooting...");
+    delay(200);
+    ESP.restart();
   });
 
-  http.on("/ping", []() {
-    String j = "{\"pong\":true,\"ip\":\"" + cachedIP + "\",\"rssi\":" + String(cachedRssi) + ",\"fw\":\"" + String(FW_VERSION) + "\"}";
+  http.on("/api/wifi/status", []() {
+    String mode = wifiState == WIFI_AP ? "ap" : (wifiState == WIFI_CONNECTED ? "sta" : "connecting");
+    String j = "{\"mode\":\"" + mode + "\",\"ip\":\"" + cachedIP + "\",\"rssi\":" + String(cachedRssi);
+    j += ",\"ssid\":\"" + (wifiState == WIFI_CONNECTED ? wifiCfg.ssid : "") + "\",\"mac\":\"" + WiFi.macAddress() + "\"}";
     http.send(200, "application/json", j);
   });
 
-  http.on("/api/diag", []() {
+  // Captive portal: catch-all untuk redirect ke portal
+  http.onNotFound([]() {
+    if (wifiState == WIFI_AP) {
+      http.send(200, "text/html", portalHTML());
+    } else {
+      http.send(404, "text/plain", "not found");
+    }
+  });
+
+  http.on("/version", []() {
+    http.send(200, "application/json", "{\"fw\":\"" + String(FW_VERSION) + "\"}");
+  });
+
+  http.on("/cmd", []() {
     extern String getSensorDiagnostic();
     extern String getMPUDiagnostic();
     extern String scanI2C();

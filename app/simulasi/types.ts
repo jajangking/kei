@@ -44,3 +44,11 @@ export interface MotorRef {
   setTrackTarget: (t: { label: string; lastSeen: number } | null) => void;
   aiMotor: { l: number; r: number } | null;
 }
+
+export interface EvoUIRef {
+  gen: number;
+  bestFitness: number;
+  avgFitness: number;
+  popSize: number;
+  bestGenome: number[];
+}

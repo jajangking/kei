@@ -3,11 +3,20 @@
 
 #include <Arduino.h>
 
+enum WiFiState {
+  WIFI_INIT,
+  WIFI_CONNECTING,
+  WIFI_CONNECTED,
+  WIFI_AP,
+};
+
+extern WiFiState wifiState;
 extern String cachedIP;
+extern String cachedAPIP;
 extern int cachedRssi;
-extern bool wifiConnecting;
 
 void connectWiFi();
 void handleWiFi();
+void startAPMode();
 
 #endif

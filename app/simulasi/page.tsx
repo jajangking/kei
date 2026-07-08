@@ -6,10 +6,11 @@ import { loadDB, saveDB, registerFace, renameFace, deleteFace, recognize, type F
 import VoiceGroq from "../voicegroq";
 
 import type { LogEntry, ServoRead, FacingMode, MotorRef } from "./types";
-import { ROBOT_R, TRAIL_LEN, MAX_SENSE, JOY_DEADZONE, MAX_LOG, SECTORS, SERVO_SCALE, WHEEL_BASE } from "./constants";
+import { ROBOT_R, TRAIL_LEN, MAX_SENSE, JOY_DEADZONE, MAX_LOG, SECTORS, SERVO_SCALE, WHEEL_BASE, PRESETS } from "./constants";
 import { gridCellKey } from "./utils";
 import { drawScene, type DrawState } from "./renderer";
 import MonitorPanel from "./monitor-panel";
+import { EvolutionEngine, Brain, LAYERS } from "./neuroevolve";
 
 const _ = (...notes: [number, number][]) => notes;
 
@@ -142,6 +143,20 @@ export default function SimulasiPage() {
   const [aiStatus, setAiStatus] = useState("—");
   const [groqApiKey, setGroqApiKey] = useState("");
   const groqApiKeyRef = useRef("");
+
+  // M7: Neuro-Evolution
+  const [modul7Active, setModul7Active] = useState(false);
+  const modul7ActiveRef = useRef(false);
+  const evoEngineRef = useRef<EvolutionEngine | null>(null);
+  const [evoStats, setEvoStats] = useState({ gen: 0, best: 0, avg: 0, running: false, bestFitness: 0 });
+  const [evoPreset, setEvoPreset] = useState<keyof typeof PRESETS>("LABIRIN");
+  const deployGenomeRef = useRef<number[] | null>(null);
+  const [evoBrainActive, setEvoBrainActive] = useState(false);
+  const evoBrainActiveRef = useRef(false);
+  const deployBrainRef = useRef<Brain | null>(null);
+  const evoProgressRef = useRef(0);
+  const [evoProgress, setEvoProgress] = useState(0);
+  const evoPresets: (keyof typeof PRESETS)[] = ["DINDING", "LABIRIN", "RINTANGAN", "BUNTU", "SLALOM", "HUTAN"];
 
   // Camera state (needed by draw, declared early)
   const [camActive, setCamActive] = useState(false);
@@ -305,6 +320,154 @@ export default function SimulasiPage() {
     wsRef.current?.close();
     wsRef.current = null;
     setEspConnected(false);
+  }, []);
+
+  const [discoveryStatus, setDiscoveryStatus] = useState("");
+  const [isAPMode, setIsAPMode] = useState(false);
+
+  const autoFindESP = useCallback(async () => {
+    const probe = async (ip: string): Promise<string | null> => {
+      try {
+        const c = new AbortController();
+        const t = setTimeout(() => c.abort(), 2000);
+        const r = await fetch(`http://${ip}/api/wifi/status`, { signal: c.signal });
+        clearTimeout(t);
+        if (r.ok) {
+          const d = await r.json();
+          if (d.ip) {
+            if (d.mode === "ap") setIsAPMode(true);
+            return d.ip;
+          }
+        }
+      } catch {}
+      // fallback: probe old /ping endpoint
+      try {
+        const c = new AbortController();
+        const t = setTimeout(() => c.abort(), 1000);
+        const r = await fetch(`http://${ip}/ping`, { signal: c.signal });
+        clearTimeout(t);
+        if (r.ok) return ip;
+      } catch {}
+      return null;
+    };
+
+    setDiscoveryStatus("mencari...");
+
+    // 1. Coba kei.local
+    let found = await probe("kei.local");
+    if (found) {
+      setDiscoveryStatus(`ditemukan: ${found}`);
+      saveEspIp(found);
+      setTimeout(() => connectESP(found), 50);
+      return true;
+    }
+
+    // 2. Coba saved IP
+    const saved = localStorage.getItem("kei_esp_ip");
+    if (saved) {
+      found = await probe(saved);
+      if (found) {
+        setDiscoveryStatus(`ditemukan: ${found}`);
+        setTimeout(() => connectESP(found), 50);
+        return true;
+      }
+    }
+
+    // 3. Subnet cepat (common IPs)
+    const commonIPs = ["192.168.42.129", "192.168.1.100", "192.168.0.100", "192.168.137.1", "10.0.2.1", "172.20.10.1"];
+    for (const ip of commonIPs) {
+      found = await probe(ip);
+      if (found) {
+        setDiscoveryStatus(`ditemukan: ${found}`);
+        saveEspIp(found);
+        setTimeout(() => connectESP(found), 50);
+        return true;
+      }
+    }
+
+    setDiscoveryStatus("tidak ditemukan. ESP di AP mode?");
+    setIsAPMode(true);
+    return false;
+  }, [connectESP, saveEspIp, logEvent]);
+
+  // Auto-retry saat disconnect
+  const retryRef = useRef(0);
+  useEffect(() => {
+    if (espConnected || !espIp) return;
+    const saved = localStorage.getItem("kei_esp_ip");
+    if (!saved) return;
+    const interval = setInterval(() => {
+      retryRef.current++;
+      if (retryRef.current > 10) { clearInterval(interval); return; }
+      const ws = new WebSocket(`ws://${saved}:81/`);
+      const t = setTimeout(() => { try { ws.close(); } catch {} }, 1500);
+      ws.onopen = () => {
+        clearTimeout(t);
+        clearInterval(interval);
+        connectESP(saved);
+      };
+      ws.onerror = () => { clearTimeout(t); try { ws.close(); } catch {} };
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [espConnected, espIp, connectESP]);
+
+  // Evolution
+  const runEvolution = useCallback(() => {
+    if (evoEngineRef.current?.running) return;
+    const obstacles = PRESETS[evoPreset] ?? PRESETS.LABIRIN;
+    const engine = evoEngineRef.current ?? new EvolutionEngine();
+    if (!evoEngineRef.current) {
+      engine.createPopulation();
+      evoEngineRef.current = engine;
+    }
+    engine.running = true;
+    engine.goalX = 0;
+    engine.goalY = 350;
+
+    const totalGens = 200;
+    let gen = engine.generation;
+    const stepGen = () => {
+      if (!engine.running || gen >= totalGens) {
+        engine.running = false;
+        if (engine.bestGenome) {
+          deployGenomeRef.current = engine.bestGenome;
+          const deployBrain = new Brain(LAYERS);
+          deployBrain.fromGenome(engine.bestGenome);
+          deployBrainRef.current = deployBrain;
+        }
+        setEvoStats(s => ({ ...s, running: false }));
+        logEvent(`Evolusi selesai gen ${engine.generation} best=${engine.bestFitness.toFixed(0)}`, "nav");
+        return;
+      }
+      const t0 = performance.now();
+      const result = engine.runGeneration(obstacles);
+      const elapsed = performance.now() - t0;
+      gen = engine.generation;
+      const progress = Math.min(gen / totalGens, 1);
+      evoProgressRef.current = progress;
+      setEvoProgress(progress);
+      setEvoStats({
+        gen: engine.generation,
+        best: result.bestFitness,
+        avg: result.avgFitness,
+        bestFitness: engine.bestFitness,
+        running: true,
+      });
+      if (engine.bestGenome) {
+        deployGenomeRef.current = engine.bestGenome;
+        const deployBrain = new Brain(LAYERS);
+        deployBrain.fromGenome(engine.bestGenome);
+        deployBrainRef.current = deployBrain;
+      }
+      const delay = Math.max(1, 20 - elapsed);
+      setTimeout(stepGen, delay);
+    };
+    stepGen();
+  }, [evoPreset, logEvent]);
+
+  const stopEvolution = useCallback(() => {
+    if (evoEngineRef.current) evoEngineRef.current.running = false;
+    setEvoStats(s => ({ ...s, running: false }));
   }, []);
 
   // Physics tick
@@ -595,6 +758,35 @@ export default function SimulasiPage() {
       }
     }
 
+    // M7: Neural deploy — jalan kalo aktif, M3 mati, nggak manual
+    if (modul7ActiveRef.current && evoBrainActiveRef.current && deployGenomeRef.current && deployBrainRef.current
+        && !modul3ActiveRef.current && !joyActiveRef.current && !keyActiveRef.current) {
+      const b = deployBrainRef.current;
+      const sectors = sectorDataRef.current;
+      const hdg = headingRef.current;
+      const spd = (Math.abs(leftMotorRef.current) + Math.abs(rightMotorRef.current)) / 510 / 2;
+      const dist = distanceRef.current;
+      const inputs = [
+        ...sectors.map(v => v >= 0 ? v / MAX_SENSE : 1),
+        Math.sin(hdg),
+        Math.cos(hdg),
+        spd,
+        dist > 0 && dist < 20 ? 1 : 0,
+      ];
+      const outputs = b.forward(inputs);
+      const ml = Math.max(-255, Math.min(255, Math.round(outputs[0] * 255)));
+      const mr = Math.max(-255, Math.min(255, Math.round(outputs[1] * 255)));
+      if (ml !== leftMotorRef.current || mr !== rightMotorRef.current) {
+        leftMotorRef.current = ml;
+        rightMotorRef.current = mr;
+        setLeftMotor(ml);
+        setRightMotor(mr);
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ leftMotor: ml - trimRef.current, rightMotor: mr + trimRef.current }));
+        }
+      }
+    }
+
     const d_now = distanceRef.current;
     let l = leftMotorRef.current;
     let r = rightMotorRef.current;
@@ -741,6 +933,8 @@ export default function SimulasiPage() {
     modul3ActiveRef.current = modul3Active;
   }, [modul3Active]);
   useEffect(() => { modul4ActiveRef.current = modul4Active; }, [modul4Active]);
+  useEffect(() => { modul7ActiveRef.current = modul7Active; }, [modul7Active]);
+  useEffect(() => { evoBrainActiveRef.current = evoBrainActive; }, [evoBrainActive]);
   useEffect(() => {
     const saved = localStorage.getItem("kei_groq_key");
     if (saved) { setGroqApiKey(saved); groqApiKeyRef.current = saved; }
@@ -1102,6 +1296,74 @@ export default function SimulasiPage() {
                 {ttsActive ? "ON" : "OFF"}
               </button>
             </div>
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-[8px] font-mono text-zinc-500">M7</span>
+                <span className="text-[10px] font-mono text-zinc-300">NEURAL</span>
+              </div>
+              <button
+                onClick={() => { setModul7Active(p => !p); modul7ActiveRef.current = !modul7Active; }}
+                className={`px-2 py-0.5 rounded-full text-[8px] font-mono font-bold border transition-colors active:scale-90 ${
+                  modul7Active
+                    ? "bg-orange-600 border-orange-500 text-white"
+                    : "bg-zinc-800 border-zinc-700 text-zinc-500"
+                }`}
+              >
+                {modul7Active ? "ON" : "OFF"}
+              </button>
+            </div>
+            {modul7Active && (
+              <div className="pl-4 text-[9px] font-mono space-y-1">
+                <select value={evoPreset} onChange={e => setEvoPreset(e.target.value as keyof typeof PRESETS)}
+                  className="w-full px-1 py-0.5 rounded bg-zinc-800 text-zinc-300 text-[8px] font-mono border border-zinc-700 outline-none"
+                >
+                  {evoPresets.map(p => <option key={p} value={p}>{p}</option>)}
+                </select>
+                <div className="flex items-center gap-1 mt-1">
+                  <button onClick={runEvolution} disabled={evoStats.running}
+                    className={`px-2 py-0.5 rounded text-[8px] font-mono font-bold border active:scale-90 ${
+                      evoStats.running
+                        ? "bg-zinc-700 border-zinc-600 text-zinc-500 cursor-not-allowed"
+                        : "bg-orange-600 border-orange-500 text-white"
+                    }`}
+                  >
+                    {evoStats.running ? "•••" : "EVOLVE"}
+                  </button>
+                  {evoStats.running && (
+                    <button onClick={stopEvolution}
+                      className="px-2 py-0.5 rounded text-[8px] font-mono font-bold border bg-red-900/50 border-red-800 text-red-400 active:scale-90"
+                    >
+                      STOP
+                    </button>
+                  )}
+                  <button onClick={() => { setEvoBrainActive(p => !p); evoBrainActiveRef.current = !evoBrainActive; }}
+                    className={`px-2 py-0.5 rounded text-[8px] font-mono font-bold border active:scale-90 ${
+                      evoBrainActive
+                        ? "bg-emerald-600 border-emerald-500 text-white"
+                        : "bg-zinc-800 border-zinc-700 text-zinc-400"
+                    }`}
+                  >
+                    {evoBrainActive ? "PAKAI" : "MATI"}
+                  </button>
+                </div>
+                <div className="text-[7px] space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-zinc-600">gen</span>
+                    <span className="text-orange-300 w-10">{evoStats.gen}</span>
+                    <span className="text-zinc-600">best</span>
+                    <span className="text-emerald-400 w-10">{evoStats.best.toFixed(0)}</span>
+                    <span className="text-zinc-600">avg</span>
+                    <span className="text-zinc-400 w-10">{evoStats.avg.toFixed(0)}</span>
+                  </div>
+                  <div className="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                    <div className="h-full bg-orange-500 transition-all duration-200" style={{ width: `${evoProgress * 100}%` }} />
+                  </div>
+                  <div className="text-zinc-600 text-[6px]">
+                    {deployGenomeRef.current ? `otak siap (best=${evoStats.bestFitness.toFixed(0)})` : "otak kosong"}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
         <button
@@ -1177,11 +1439,11 @@ export default function SimulasiPage() {
               <input
                 value={espIp}
                 onChange={e => saveEspIp(e.target.value)}
-                placeholder="192.168.1.x"
-                className="w-24 px-1.5 py-0.5 rounded-md bg-zinc-800 border border-zinc-700 text-[9px] font-mono text-zinc-300 outline-none"
+                placeholder="kei.local / 192.168.x.x"
+                className="w-28 px-1.5 py-0.5 rounded-md bg-zinc-800 border border-zinc-700 text-[8px] font-mono text-zinc-300 outline-none"
               />
               <button
-                onClick={() => espConnected ? disconnectESP() : connectESP(espIp)}
+                onClick={() => espConnected ? disconnectESP() : connectESP(espIp || "kei.local")}
                 className={`px-2 py-0.5 rounded-full text-[8px] font-mono font-bold border active:scale-90 ${
                   espConnected
                     ? "bg-emerald-600 border-emerald-500 text-white"
@@ -1190,7 +1452,23 @@ export default function SimulasiPage() {
               >
                 {espConnected ? "ON" : "HUBUNG"}
               </button>
+              {!espConnected && (
+                <button onClick={autoFindESP}
+                  className="px-2 py-0.5 rounded-full text-[8px] font-mono font-bold border bg-zinc-800 border-zinc-700 text-zinc-400 active:scale-90 hover:text-white"
+                >
+                  CARI
+                </button>
+              )}
             </div>
+            {discoveryStatus && !espConnected && (
+              <div className="text-[8px] font-mono text-zinc-600">{discoveryStatus}</div>
+            )}
+            {isAPMode && !espConnected && (
+              <div className="text-[7px] font-mono text-amber-500/80 mt-1 leading-tight">
+                ESP mode AP &mdash; Hubungkan HP ke WiFi <strong>KEI-XXXX</strong> (pw: 12345678),<br/>
+                lalu buka <strong>http://192.168.4.1</strong> di browser
+              </div>
+            )}
             {espConnected && (
               <div className="flex flex-col gap-0.5 text-[7px] font-mono text-zinc-500">
                 <span className="text-emerald-500">WS tersambung</span>
