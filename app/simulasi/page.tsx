@@ -158,6 +158,10 @@ export default function SimulasiPage() {
   const [evoProgress, setEvoProgress] = useState(0);
   const evoPresets: (keyof typeof PRESETS)[] = ["DINDING", "LABIRIN", "RINTANGAN", "BUNTU", "SLALOM", "HUTAN"];
 
+  // M8: Reactive Vector
+  const [modul8Active, setModul8Active] = useState(false);
+  const modul8ActiveRef = useRef(false);
+
   // Camera state (needed by draw, declared early)
   const [camActive, setCamActive] = useState(false);
   const [facingMode, setFacingMode] = useState<FacingMode>("environment");
@@ -593,8 +597,8 @@ export default function SimulasiPage() {
       }
     }
 
-    // M3: Servo auto-sweep
-    if (modul3ActiveRef.current && !sweepLockedRef.current) {
+    // Servo auto-sweep (M3 / M8)
+    if ((modul3ActiveRef.current || modul8ActiveRef.current) && !sweepLockedRef.current && !joyActiveRef.current && !keyActiveRef.current) {
       sweepTickRef.current++;
       let sa = servoRef.current + sweepDirRef.current;
       if (sa >= 160) { sa = 160; sweepDirRef.current = -1; }
@@ -830,6 +834,47 @@ export default function SimulasiPage() {
       }
     }
 
+    // M8: Reactive Vector
+    if (modul8ActiveRef.current && !joyActiveRef.current && !keyActiveRef.current && !modul3ActiveRef.current) {
+      let repelX = 0, repelY = 0, anyData = false;
+      for (let i = 0; i < SECTORS.length; i++) {
+        const d = sectorDataRef.current[i];
+        if (d < 0) continue;
+        anyData = true;
+        const cm = Math.min(d, 60);
+        const angle = (SECTORS[i].cx - 90) * Math.PI / 180;
+        const force = Math.max(0, (60 - cm) / 60);
+        repelX -= Math.sin(angle) * force;
+        repelY -= Math.cos(angle) * force;
+      }
+      if (anyData) {
+        const mag = Math.hypot(repelX, repelY);
+        const speed = Math.max(15, Math.round(70 - mag * 50));
+        let ml = speed, mr = speed;
+        if (mag > 0.01) {
+          const steer = Math.atan2(repelX, repelY) * 100;
+          ml = Math.max(-255, Math.min(255, Math.round(speed - steer)));
+          mr = Math.max(-255, Math.min(255, Math.round(speed + steer)));
+        }
+        if (ml !== leftMotorRef.current || mr !== rightMotorRef.current) {
+          leftMotorRef.current = ml;
+          rightMotorRef.current = mr;
+          setLeftMotor(ml);
+          setRightMotor(mr);
+          if (wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ leftMotor: ml - trimRef.current, rightMotor: mr + trimRef.current }));
+          }
+        }
+      } else {
+        // no sensor data yet — idle
+        if (leftMotorRef.current !== 0 || rightMotorRef.current !== 0) {
+          leftMotorRef.current = 0; rightMotorRef.current = 0;
+          setLeftMotor(0); setRightMotor(0);
+          wsRef.current?.send(JSON.stringify({ leftMotor: 0, rightMotor: 0 }));
+        }
+      }
+    }
+
     const d_now = distanceRef.current;
     let l = leftMotorRef.current;
     let r = rightMotorRef.current;
@@ -977,6 +1022,7 @@ export default function SimulasiPage() {
   }, [modul3Active]);
   useEffect(() => { modul4ActiveRef.current = modul4Active; }, [modul4Active]);
   useEffect(() => { modul7ActiveRef.current = modul7Active; }, [modul7Active]);
+  useEffect(() => { modul8ActiveRef.current = modul8Active; }, [modul8Active]);
   useEffect(() => { evoBrainActiveRef.current = evoBrainActive; }, [evoBrainActive]);
   useEffect(() => {
     const saved = localStorage.getItem("kei_groq_key");
@@ -1405,6 +1451,30 @@ export default function SimulasiPage() {
                     {deployGenomeRef.current ? `otak siap (best=${evoStats.bestFitness.toFixed(0)})` : "otak kosong"}
                   </div>
                 </div>
+              </div>
+            )}
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-[8px] font-mono text-zinc-500">M8</span>
+                <span className="text-[10px] font-mono text-zinc-300">REACTIF</span>
+              </div>
+              <button
+                onClick={() => { setModul8Active(p => !p); modul8ActiveRef.current = !modul8Active; }}
+                className={`px-2 py-0.5 rounded-full text-[8px] font-mono font-bold border transition-colors active:scale-90 ${
+                  modul8Active
+                    ? "bg-cyan-600 border-cyan-500 text-white"
+                    : "bg-zinc-800 border-zinc-700 text-zinc-500"
+                }`}
+              >
+                {modul8Active ? "ON" : "OFF"}
+              </button>
+            </div>
+            {modul8Active && !espConnected && (
+              <div className="pl-4 text-[7px] font-mono text-zinc-500">hubungkan ESP dulu</div>
+            )}
+            {modul8Active && espConnected && (
+              <div className="pl-4 text-[9px] font-mono text-zinc-400">
+                {sectorData.some(v => v >= 0) ? "✓ reaktif" : "⏳ scan servo..."}
               </div>
             )}
           </div>
