@@ -324,71 +324,114 @@ export default function SimulasiPage() {
 
   const [discoveryStatus, setDiscoveryStatus] = useState("");
   const [isAPMode, setIsAPMode] = useState(false);
+  const [manualIP, setManualIP] = useState("");
+
+  const scanSubnetFull = useCallback(async (subnet: string): Promise<string | null> => {
+    const ips: string[] = [];
+    for (let i = 1; i <= 254; i++) ips.push(`${subnet}.${i}`);
+
+    const BATCH = 30;
+    const TIMEOUT = 400;
+
+    for (let i = 0; i < ips.length; i += BATCH) {
+      if (i > 0) setDiscoveryStatus(`scan ${subnet}.x... ${Math.round(i/254*100)}%`);
+      const batch = ips.slice(i, i + BATCH);
+      const results = await Promise.all(batch.map(ip =>
+        Promise.race([
+          fetch(`http://${ip}/api/wifi/status`, { signal: AbortSignal.timeout(TIMEOUT) })
+            .then(async r => r.ok ? { ip, d: await r.json() } : null)
+            .catch(() => null),
+          fetch(`http://${ip}/ping`, { signal: AbortSignal.timeout(TIMEOUT) })
+            .then(r => r.ok ? { ip, d: { ip } } : null)
+            .catch(() => null),
+        ])
+      ));
+      const found = results.find(r => r);
+      if (found) {
+        if (found.d.mode === "ap") setIsAPMode(true);
+        return found.ip;
+      }
+    }
+    return null;
+  }, []);
 
   const autoFindESP = useCallback(async () => {
-    const probe = async (ip: string): Promise<string | null> => {
+    const probe = async (ip: string, ms = 1500): Promise<{ ip: string; mode?: string } | null> => {
       try {
-        const c = new AbortController();
-        const t = setTimeout(() => c.abort(), 2000);
-        const r = await fetch(`http://${ip}/api/wifi/status`, { signal: c.signal });
-        clearTimeout(t);
+        const r = await fetch(`http://${ip}/api/wifi/status`, { signal: AbortSignal.timeout(ms) });
         if (r.ok) {
           const d = await r.json();
-          if (d.ip) {
-            if (d.mode === "ap") setIsAPMode(true);
-            return d.ip;
-          }
+          if (d.ip) return { ip: d.ip, mode: d.mode };
         }
       } catch {}
-      // fallback: probe old /ping endpoint
       try {
-        const c = new AbortController();
-        const t = setTimeout(() => c.abort(), 1000);
-        const r = await fetch(`http://${ip}/ping`, { signal: c.signal });
-        clearTimeout(t);
-        if (r.ok) return ip;
+        const r = await fetch(`http://${ip}/ping`, { signal: AbortSignal.timeout(ms) });
+        if (r.ok) return { ip };
       } catch {}
       return null;
     };
 
     setDiscoveryStatus("mencari...");
 
-    // 1. Coba kei.local
-    let found = await probe("kei.local");
+    // 1. kei.local
+    let found = await probe("kei.local", 1000);
     if (found) {
-      setDiscoveryStatus(`ditemukan: ${found}`);
-      saveEspIp(found);
-      setTimeout(() => connectESP(found), 50);
+      setDiscoveryStatus(`ditemukan: ${found.ip}`);
+      saveEspIp(found.ip);
+      setTimeout(() => connectESP(found.ip), 50);
       return true;
     }
 
-    // 2. Coba saved IP
+    // 2. saved IP
     const saved = localStorage.getItem("kei_esp_ip");
     if (saved) {
-      found = await probe(saved);
+      found = await probe(saved, 1000);
       if (found) {
-        setDiscoveryStatus(`ditemukan: ${found}`);
-        setTimeout(() => connectESP(found), 50);
+        setDiscoveryStatus(`ditemukan: ${found.ip}`);
+        setTimeout(() => connectESP(found.ip), 50);
         return true;
       }
     }
 
-    // 3. Subnet cepat (common IPs)
-    const commonIPs = ["192.168.42.129", "192.168.1.100", "192.168.0.100", "192.168.137.1", "10.0.2.1", "172.20.10.1"];
-    for (const ip of commonIPs) {
-      found = await probe(ip);
+    // 3. Full subnet scan (concurrent, 3 subnet hotspot)
+    const hotSubnets = ["192.168.43", "192.168.42", "192.168.0"];
+    for (const sn of hotSubnets) {
+      found = { ip: sn + ".1" };
+      const gate = await probe(found.ip, 300);
+      if (gate) {
+        const r = await scanSubnetFull(sn);
+        if (r) {
+          setDiscoveryStatus(`ditemukan: ${r}`);
+          saveEspIp(r);
+          setTimeout(() => connectESP(r), 50);
+          return true;
+        }
+      }
+    }
+
+    // 4. common single IPs
+    const singles = ["192.168.1.100", "192.168.137.1", "10.0.2.1", "172.20.10.1", "192.168.43.100"];
+    for (const ip of singles) {
+      found = await probe(ip, 500);
       if (found) {
-        setDiscoveryStatus(`ditemukan: ${found}`);
-        saveEspIp(found);
-        setTimeout(() => connectESP(found), 50);
+        setDiscoveryStatus(`ditemukan: ${found.ip}`);
+        saveEspIp(found.ip);
+        setTimeout(() => connectESP(found.ip), 50);
         return true;
       }
     }
 
-    setDiscoveryStatus("tidak ditemukan. ESP di AP mode?");
+    setDiscoveryStatus("tidak ditemukan. Coba ketik manual IP ESP:");
     setIsAPMode(true);
     return false;
-  }, [connectESP, saveEspIp, logEvent]);
+  }, [connectESP, saveEspIp, logEvent, scanSubnetFull]);
+
+  const handleManualConnect = useCallback(() => {
+    const ip = manualIP.trim();
+    if (!ip) return;
+    saveEspIp(ip);
+    connectESP(ip);
+  }, [manualIP, saveEspIp, connectESP]);
 
   // Auto-retry saat disconnect
   const retryRef = useRef(0);
@@ -1466,7 +1509,25 @@ export default function SimulasiPage() {
             {isAPMode && !espConnected && (
               <div className="text-[7px] font-mono text-amber-500/80 mt-1 leading-tight">
               ESP mode AP &mdash; Hubungkan HP ke WiFi <strong>KEI-XXXX</strong> (pw: 12345678),<br/>
-              lalu buka <strong>http://192.168.4.1</strong> di browser (<em>kei.local</em> kadang gak support)
+              lalu buka <strong>http://192.168.4.1</strong> di browser untuk cek IP STA
+              </div>
+            )}
+            {!espConnected && (
+              <div className="flex gap-1 mt-1">
+                <input
+                  className="w-24 bg-zinc-800 border border-zinc-700 rounded text-[9px] px-1.5 py-0.5 text-zinc-300 font-mono outline-none focus:border-amber-500"
+                  placeholder="IP manual"
+                  value={manualIP}
+                  onChange={e => setManualIP(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleManualConnect()}
+                />
+                <button
+                  onClick={handleManualConnect}
+                  className="px-1.5 py-0.5 rounded text-[8px] font-mono font-bold bg-zinc-800 border border-zinc-700 text-zinc-400 active:scale-90 hover:text-white disabled:opacity-40"
+                  disabled={!manualIP.trim()}
+                >
+                  SET
+                </button>
               </div>
             )}
             {espConnected && (

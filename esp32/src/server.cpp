@@ -20,7 +20,24 @@ void wsLog(String msg) {
 // ─── Captive portal HTML ──────────────────────────────────────
 static String portalHTML() {
   String apIP = wifiState == WIFI_STATE_AP ? cachedAPIP : cachedIP;
-  String html = R"rawliteral(
+  String html;
+  if (wifiState != WIFI_STATE_AP) {
+    // STA-only — dashboard biasa
+    return PAGE_INDEX;
+  }
+
+  String staInfo;
+  if (WiFi.isConnected()) {
+    staInfo = R"rawliteral(
+<div class=section style="border-color:#22c55e">
+<h2>✓ Terhubung</h2>
+<p style="font-size:.85rem;color:#a1a1aa">Jaringan: <strong style="color:#e4e4e7">)rawliteral" + wifiCfg.ssid + R"rawliteral(</strong></p>
+<p style="font-size:.85rem;color:#a1a1aa">IP STA: <strong style="color:#22c55e">)rawliteral" + cachedIP + R"rawliteral(</strong></p>
+<p class=info style="color:#52525b">Akses dashboard via IP tersebut dari jaringan WiFi yang sama.</p>
+</div>)rawliteral";
+  }
+
+  html = R"rawliteral(
 <!DOCTYPE html><html><head>
 <meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
 <title>KEI Setup</title>
@@ -49,7 +66,8 @@ button:active{opacity:.7}button:disabled{opacity:.4;cursor:default}
 </style></head><body>
 <div class=card>
 <h1>⚡ KEI Setup</h1>
-<p class=sub>IP: )rawliteral" + apIP + R"rawliteral( &middot; MAC: )rawliteral" + WiFi.macAddress() + R"rawliteral(</p>
+<p class=sub>AP: )rawliteral" + apIP + R"rawliteral( &middot; MAC: )rawliteral" + WiFi.macAddress() + R"rawliteral(</p>
+)rawliteral" + staInfo + R"rawliteral(
 <div class=section>
 <h2>WiFi Network</h2>
 <select id=net-list size=5 class=net-list><option value>Scanning...</option></select>
@@ -62,7 +80,7 @@ button:active{opacity:.7}button:disabled{opacity:.4;cursor:default}
 <button onclick=connect() id=conn-btn>Connect</button>
 <div id=status></div>
 </div>
-<p class=info>Setelah connect, ESP akan restart. Akses via <strong>http://kei.local</strong> atau <strong>http://192.168.4.1</strong></p>
+<p class=info>Setelah connect, ESP akan restart. Akses dashboard via IP STA di atas dari jaringan WiFi yang sama.</p>
 </div>
 <script>
 function $(id){return document.getElementById(id)}

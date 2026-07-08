@@ -638,21 +638,37 @@ export default function VisionPage() {
     setScanning(true);
     setScanStatus("mencari...");
 
-    const probe = async (ip: string): Promise<string | null> => {
+    const probe = async (ip: string, ms = 1500): Promise<string | null> => {
       try {
-        const c = new AbortController();
-        const t = setTimeout(() => c.abort(), 2000);
-        const r = await fetch(`http://${ip}/api/wifi/status`, { signal: c.signal });
-        clearTimeout(t);
+        const r = await fetch(`http://${ip}/api/wifi/status`, { signal: AbortSignal.timeout(ms) });
         if (r.ok) { const d = await r.json(); if (d.ip) return d.ip; }
       } catch {}
       try {
-        const c = new AbortController();
-        const t = setTimeout(() => c.abort(), 1500);
-        const r = await fetch(`http://${ip}/`, { signal: c.signal });
-        clearTimeout(t);
+        const r = await fetch(`http://${ip}/`, { signal: AbortSignal.timeout(ms) });
         if (r.ok) { const d = await r.json(); if (d.name && d.ip) return d.ip; }
       } catch {}
+      return null;
+    };
+
+    const scanSubnet = async (subnet: string): Promise<string | null> => {
+      const ips = Array.from({ length: 254 }, (_, i) => `${subnet}.${i + 1}`);
+      const BATCH = 30;
+      for (let i = 0; i < ips.length; i += BATCH) {
+        setScanStatus(`scan ${subnet}.x ${Math.round(i / 254 * 100)}%`);
+        const batch = ips.slice(i, i + BATCH);
+        const results = await Promise.all(batch.map(ip =>
+          Promise.race([
+            fetch(`http://${ip}/api/wifi/status`, { signal: AbortSignal.timeout(400) })
+              .then(async r => r.ok ? (await r.json()).ip || null : null)
+              .catch(() => null),
+            fetch(`http://${ip}/`, { signal: AbortSignal.timeout(400) })
+              .then(async r => r.ok ? (await r.json()).ip || null : null)
+              .catch(() => null),
+          ])
+        ));
+        const f = results.find(r => r);
+        if (f) return f;
+      }
       return null;
     };
 
@@ -660,21 +676,22 @@ export default function VisionPage() {
 
     // 1. kei.local
     setScanStatus("coba kei.local...");
-    found = (await probe("kei.local")) || "";
+    found = (await probe("kei.local", 1000)) || "";
 
     // 2. Saved IP
     if (!found) {
       const saved = localStorage.getItem("espIp");
-      if (saved) { setScanStatus(saved); found = (await probe(saved)) || ""; }
+      if (saved) { found = (await probe(saved, 1000)) || ""; }
     }
 
-    // 3. Common IPs aja (no full scan)
+    // 3. Full subnet scan (hotspot subnets)
     if (!found) {
-      const common = ["192.168.42.129", "192.168.1.100", "192.168.0.100", "192.168.137.1", "10.0.2.1", "172.20.10.1"];
-      for (const ip of common) {
-        if (found) break;
-        setScanStatus(ip);
-        found = (await probe(ip)) || "";
+      for (const sn of ["192.168.43", "192.168.42", "192.168.0"]) {
+        const gate = await probe(sn + ".1", 300);
+        if (gate) {
+          found = (await scanSubnet(sn)) || "";
+          if (found) break;
+        }
       }
     }
 
