@@ -161,9 +161,14 @@ export default function SimulasiPage() {
   // M8: Reactive Vector
   const [modul8Active, setModul8Active] = useState(false);
   const modul8ActiveRef = useRef(false);
-  const m8SmLeft = useRef(0);
-  const m8SmRight = useRef(0);
-  const m8SmFront = useRef(0);
+  const m8StallTicks = useRef(0);
+  const m8Boost = useRef(0);
+  const m8PhaseRef = useRef<"NORMAL"|"BACK"|"TURN">("NORMAL");
+  const m8PhaseTick = useRef(0);
+  const m8TurnDir = useRef(1);
+  const m8TargetHeading = useRef(0);
+  const m8YawTarget = useRef(0);
+  const m8YawInit = useRef(false);
 
   // Camera state (needed by draw, declared early)
   const [camActive, setCamActive] = useState(false);
@@ -839,48 +844,143 @@ export default function SimulasiPage() {
 
     // M8: Reactive Vector
     if (modul8ActiveRef.current && !joyActiveRef.current && !keyActiveRef.current && !modul3ActiveRef.current) {
-      let rawLeft = 0, rawRight = 0, rawFront = 0, anyData = false;
-      for (let i = 0; i < SECTORS.length; i++) {
-        const d = sectorDataRef.current[i];
-        if (d < 0) continue;
-        anyData = true;
-        const cm = Math.min(d, 80);
-        const w = Math.max(0, (80 - cm) / 80);
-        if (w <= 0) continue;
-        const cx = SECTORS[i].cx;
-        if (cx < 85) rawLeft = Math.max(rawLeft, w * (85 - cx) / 85);
-        else if (cx > 95) rawRight = Math.max(rawRight, w * (cx - 95) / 85);
-        if (cx >= 65 && cx <= 115) rawFront = Math.max(rawFront, w);
-      }
-      if (anyData) {
-        const a = 0.12;
-        m8SmLeft.current += (rawLeft - m8SmLeft.current) * a;
-        m8SmRight.current += (rawRight - m8SmRight.current) * a;
-        m8SmFront.current += (rawFront - m8SmFront.current) * a;
-        const baseSpeed = 65;
-        const spd = Math.max(15, Math.round(baseSpeed * (1 - m8SmFront.current * 0.6)));
-        const steer = Math.round((m8SmRight.current - m8SmLeft.current) * 30);
-        let ml = spd - steer;
-        let mr = spd + steer;
-        ml = Math.max(-255, Math.min(255, ml));
-        mr = Math.max(-255, Math.min(255, mr));
-        const smooth = 0.35;
-        ml = Math.round(leftMotorRef.current + (ml - leftMotorRef.current) * smooth);
-        mr = Math.round(rightMotorRef.current + (mr - rightMotorRef.current) * smooth);
-        if (ml !== 0 || mr !== 0 || leftMotorRef.current !== 0 || rightMotorRef.current !== 0) {
-          leftMotorRef.current = ml;
-          rightMotorRef.current = mr;
-          setLeftMotor(ml);
-          setRightMotor(mr);
-          if (wsRef.current?.readyState === WebSocket.OPEN) {
-            wsRef.current.send(JSON.stringify({ leftMotor: ml - trimRef.current, rightMotor: mr + trimRef.current }));
+      const gyroNow = Math.abs(gyroRef.current);
+      const phase = m8PhaseRef.current;
+      let ml = 0, mr = 0;
+      let send = false;
+
+      if (phase === "NORMAL") {
+        let bestAngle = 0, bestScore = -1;
+        let anyData = false, blockedSectors = 0;
+        let frontMin = 999;
+        const frontIdx = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+
+        for (let i = 0; i < SECTORS.length; i++) {
+          const d = sectorDataRef.current[i];
+          if (d < 0) continue;
+          anyData = true;
+          const cx = SECTORS[i].cx;
+          if (d < 30) blockedSectors++;
+          if (frontIdx.includes(i) && d < frontMin) frontMin = d;
+          const clearScore = Math.min(d / 150, 1);
+          const centerBias = 1 - Math.abs(cx - 90) / 90;
+          const score = clearScore + (clearScore > 0.5 ? centerBias * 0.3 : 0);
+          if (score > bestScore) { bestScore = score; bestAngle = (90 - cx) * Math.PI / 180; }
+        }
+
+        if (!anyData || bestScore <= 0) {
+          if (leftMotorRef.current !== 0 || rightMotorRef.current !== 0) {
+            leftMotorRef.current = 0; rightMotorRef.current = 0;
+            setLeftMotor(0); setRightMotor(0);
+            wsRef.current?.send(JSON.stringify({ leftMotor: 0, rightMotor: 0 }));
+          }
+        } else if (blockedSectors >= 8) {
+          logEvent(`M8 buntu (${blockedSectors}blk), mundur`, "nav");
+          m8PhaseRef.current = "BACK";
+          m8PhaseTick.current = 0;
+          m8Boost.current = 0;
+          m8StallTicks.current = 0;
+        } else {
+          // Cooldown setelah TURN: paksa maju biar gak langsung BACK lagi
+          const justTurned = m8PhaseTick.current < 15;
+          m8PhaseTick.current++;
+
+          // Kalau depan mentok & bukan cooldown → BACK
+          if (!justTurned && frontMin < 20) {
+            logEvent(`M8 depan ${frontMin.toFixed(0)}cm, mundur`, "nav");
+            m8PhaseRef.current = "BACK";
+            m8PhaseTick.current = 0;
+            m8Boost.current = 0;
+            m8StallTicks.current = 0;
+          } else {
+            // Smooth steering target
+            m8TargetHeading.current += (bestAngle - m8TargetHeading.current) * 0.1;
+            if (bestScore < 0.5) m8TargetHeading.current *= 0.95;
+
+            // Speed: tegas
+            const f = justTurned ? Math.max(frontMin, 40) : frontMin;
+            let spd: number;
+            if (f < 15) spd = -30;
+            else if (f < 25) spd = 15;
+            else if (f < 50) spd = 30;
+            else spd = 40;
+
+            const steer = Math.round(m8TargetHeading.current * 70);
+            ml = spd - steer;
+            mr = spd + steer;
+
+            // Stall detection (gyro gak gerak walau motor jalan)
+            const motorActive = Math.abs(ml) > 5 || Math.abs(mr) > 5;
+            if (!motorActive || gyroNow > 0.3) {
+              m8StallTicks.current = 0;
+              m8Boost.current = 0;
+            } else {
+              m8StallTicks.current++;
+              m8Boost.current = Math.min(70, Math.floor(m8StallTicks.current / 15) * 3);
+            }
+            const boost = m8Boost.current;
+            if (boost > 0) {
+              ml += (ml > 0 ? 1 : -1) * boost;
+              mr += (mr > 0 ? 1 : -1) * boost;
+            }
+
+            ml = Math.max(-255, Math.min(255, ml));
+            mr = Math.max(-255, Math.min(255, mr));
+            const smooth = 0.35;
+            ml = Math.round(leftMotorRef.current + (ml - leftMotorRef.current) * smooth);
+            mr = Math.round(rightMotorRef.current + (mr - rightMotorRef.current) * smooth);
+            send = true;
+
+            // Stall terlalu lama → BACK
+            if (boost >= 60 && m8StallTicks.current > 200 && gyroNow < 0.1) {
+              logEvent("M8 mentok, mundur", "nav");
+              m8PhaseRef.current = "BACK";
+              m8PhaseTick.current = 0;
+              m8Boost.current = 0;
+              m8StallTicks.current = 0;
+              send = false;
+            }
           }
         }
-      } else {
-        if (leftMotorRef.current !== 0 || rightMotorRef.current !== 0) {
-          leftMotorRef.current = 0; rightMotorRef.current = 0;
-          setLeftMotor(0); setRightMotor(0);
-          wsRef.current?.send(JSON.stringify({ leftMotor: 0, rightMotor: 0 }));
+      }
+
+      if (phase === "BACK") {
+        m8PhaseTick.current++;
+        const speed = Math.min(80 + Math.floor(m8PhaseTick.current / 3) * 3, 130);
+        ml = -speed; mr = -speed;
+        send = true;
+        if (m8PhaseTick.current > 35) {
+          logEvent("M8 mundur selesai, putar", "nav");
+          m8PhaseRef.current = "TURN";
+          m8PhaseTick.current = 0;
+          m8TurnDir.current = Math.random() > 0.5 ? 1 : -1;
+          m8TargetHeading.current = 0;
+        }
+      }
+
+      if (phase === "TURN") {
+        m8PhaseTick.current++;
+        const speed = 100;
+        ml = -speed * m8TurnDir.current;
+        mr = speed * m8TurnDir.current;
+        send = true;
+        if (m8PhaseTick.current > 25) {
+          logEvent("M8 putar selesai, jalan", "nav");
+          m8PhaseRef.current = "NORMAL";
+          m8PhaseTick.current = 0;
+          m8Boost.current = 0;
+          m8StallTicks.current = 0;
+          m8TargetHeading.current = 0;
+        }
+      }
+
+      if (send && (ml !== leftMotorRef.current || mr !== rightMotorRef.current)) {
+        leftMotorRef.current = ml;
+        rightMotorRef.current = mr;
+        setLeftMotor(ml);
+        setRightMotor(mr);
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ leftMotor: ml - trimRef.current, rightMotor: mr + trimRef.current }));
         }
       }
     }
@@ -1484,7 +1584,16 @@ export default function SimulasiPage() {
             )}
             {modul8Active && espConnected && (
               <div className="pl-4 text-[9px] font-mono text-zinc-400">
-                {sectorData.some(v => v >= 0) ? "✓ reaktif" : "⏳ scan servo..."}
+                {!sectorData.some(v => v >= 0) ? "⏳ scan servo..." : (
+                  <>
+                    <span className={m8PhaseRef.current === "NORMAL" ? "text-cyan-400" : m8PhaseRef.current === "BACK" ? "text-yellow-400" : "text-orange-400"}>
+                      {m8PhaseRef.current}
+                    </span>
+                    {m8PhaseRef.current === "NORMAL" && m8Boost.current > 0 && (
+                      <span className="text-zinc-500 ml-1">boost+{m8Boost.current}</span>
+                    )}
+                  </>
+                )}
               </div>
             )}
           </div>
