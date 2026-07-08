@@ -364,8 +364,8 @@ void loop() {
   handleWiFi();
   updateLED();
   updateBuzzer();
-  if (wifiState != WIFI_CONNECTED && wifiState != WIFI_AP) { stopMotors(); return; }
-  if (wifiState == WIFI_AP) { handleServer(); handleWiFi(); updateLED(); return; }
+  if (wifiState != WIFI_STATE_CONNECTED && wifiState != WIFI_STATE_AP) { stopMotors(); return; }
+  if (wifiState == WIFI_STATE_AP) { handleServer(); handleWiFi(); updateLED(); return; }
 
   // MQTT reconnect
   if (mqttCfg.enabled && !mqttClient.connected() && millis() - lastMqttAttempt > 30000) {

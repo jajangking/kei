@@ -4,10 +4,10 @@
 #include <Arduino.h>
 
 enum WiFiState {
-  WIFI_INIT,
-  WIFI_CONNECTING,
-  WIFI_CONNECTED,
-  WIFI_AP,
+  WIFI_STATE_INIT,
+  WIFI_STATE_CONNECTING,
+  WIFI_STATE_CONNECTED,
+  WIFI_STATE_AP,
 };
 
 extern WiFiState wifiState;

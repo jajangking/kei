@@ -4,7 +4,7 @@
 #include <ESPmDNS.h>
 #include <DNSServer.h>
 
-WiFiState wifiState = WIFI_INIT;
+WiFiState wifiState = WIFI_STATE_INIT;
 String cachedIP = "";
 String cachedAPIP = "";
 int cachedRssi = 0;
@@ -19,7 +19,7 @@ static const unsigned long STA_TIMEOUT = 15000;
 static const unsigned long AP_TIMEOUT = 300000; // 5 menit AP, lalu restart & coba lagi
 
 void connectWiFi() {
-  wifiState = WIFI_CONNECTING;
+  wifiState = WIFI_STATE_CONNECTING;
   connectStart = millis();
   cachedIP = "";
   hasSavedCreds = false;
@@ -41,7 +41,7 @@ void connectWiFi() {
 }
 
 void startAPMode() {
-  wifiState = WIFI_AP;
+    wifiState = WIFI_STATE_AP;
   apTimeout = millis();
 
   String apName = "KEI-" + WiFi.macAddress();
@@ -63,13 +63,13 @@ void startAPMode() {
 
 void handleWiFi() {
   switch (wifiState) {
-    case WIFI_INIT:
+    case WIFI_STATE_INIT:
       connectWiFi();
       break;
 
-    case WIFI_CONNECTING: {
+    case WIFI_STATE_CONNECTING: {
       if (WiFi.status() == WL_CONNECTED) {
-        wifiState = WIFI_CONNECTED;
+        wifiState = WIFI_STATE_CONNECTED;
         cachedIP = WiFi.localIP().toString();
         cachedRssi = WiFi.RSSI();
         Serial.printf("[WIFI] connected %s (%d dBm)\n", cachedIP.c_str(), cachedRssi);
@@ -93,9 +93,9 @@ void handleWiFi() {
       break;
     }
 
-    case WIFI_CONNECTED:
+    case WIFI_STATE_CONNECTED:
       if (WiFi.status() != WL_CONNECTED) {
-        wifiState = WIFI_CONNECTING;
+  wifiState = WIFI_STATE_CONNECTING;
         connectStart = millis();
         Serial.println("[WIFI] disconnected, reconnecting...");
         WiFi.reconnect();
@@ -104,7 +104,7 @@ void handleWiFi() {
       }
       break;
 
-    case WIFI_AP:
+    case WIFI_STATE_AP:
       dnsServer.processNextRequest();
       if (millis() - apTimeout > AP_TIMEOUT) {
         Serial.println("[WIFI] AP timeout, retrying STA...");

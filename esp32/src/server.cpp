@@ -19,7 +19,7 @@ void wsLog(String msg) {
 
 // ─── Captive portal HTML ──────────────────────────────────────
 static String portalHTML() {
-  String apIP = wifiState == WIFI_AP ? cachedAPIP : cachedIP;
+  String apIP = wifiState == WIFI_STATE_AP ? cachedAPIP : cachedIP;
   String html = R"rawliteral(
 <!DOCTYPE html><html><head>
 <meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
@@ -113,7 +113,7 @@ static String wifiScanJSON() {
 
 // ─── Default routes ───────────────────────────────────────────
 static void handleRoot() {
-  if (wifiState == WIFI_AP) {
+  if (wifiState == WIFI_STATE_AP) {
     http.send(200, "text/html", portalHTML());
   } else {
     http.send(200, "text/html", PAGE_INDEX);
@@ -160,15 +160,15 @@ void initServer() {
   });
 
   http.on("/api/wifi/status", []() {
-    String mode = wifiState == WIFI_AP ? "ap" : (wifiState == WIFI_CONNECTED ? "sta" : "connecting");
+    String mode = wifiState == WIFI_STATE_AP ? "ap" : (wifiState == WIFI_STATE_CONNECTED ? "sta" : "connecting");
     String j = "{\"mode\":\"" + mode + "\",\"ip\":\"" + cachedIP + "\",\"rssi\":" + String(cachedRssi);
-    j += ",\"ssid\":\"" + (wifiState == WIFI_CONNECTED ? wifiCfg.ssid : "") + "\",\"mac\":\"" + WiFi.macAddress() + "\"}";
+    j += ",\"ssid\":\"" + (wifiState == WIFI_STATE_CONNECTED ? wifiCfg.ssid : "") + "\",\"mac\":\"" + WiFi.macAddress() + "\"}";
     http.send(200, "application/json", j);
   });
 
   // Captive portal: catch-all untuk redirect ke portal
   http.onNotFound([]() {
-    if (wifiState == WIFI_AP) {
+    if (wifiState == WIFI_STATE_AP) {
       http.send(200, "text/html", portalHTML());
     } else {
       http.send(404, "text/plain", "not found");
