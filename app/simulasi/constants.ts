@@ -12,15 +12,6 @@ export const ROBOT_R = 15;
 export const SERVO_SCALE = 3; // fisik servo cuma noleh 1/SERVO_SCALE dari slider
 export const WHEEL_BASE = 14;
 
-// Physical simulation constants
-export const ACCEL = 0.08;
-export const FRICTION = 0.80;
-export const ANG_ACCEL = 0.04;
-export const ANG_FRICTION = 0.7;
-
-// Joystick
-export const JOY_DEADZONE = 0.12;
-
 // Monitor
 export const MAX_LOG = 100;
 
@@ -76,20 +67,7 @@ export const PRESETS: Record<string, Obstacle[]> = {
     { x: -50, y: 400, w: 60, h: 60 },      // Central obstacle 1
     { x: 100, y: 480, w: 50, h: 50 },      // Central obstacle 2
   ],
-  RINTANGAN: [
-    { x: 100, y: 80, w: 60, h: 60 },
-    { x: -120, y: 120, w: 50, h: 50 },
-    { x: 50, y: 200, w: 50, h: 80 },
-    { x: -80, y: 280, w: 80, h: 60 },
-    { x: 160, y: 180, w: 40, h: 40 },
-    { x: -180, y: 50, w: 50, h: 50 },
-    { x: -40, y: -50, w: 60, h: 60 },
-    { x: 30, y: 360, w: 100, h: 50 },
-    { x: -200, y: 200, w: 50, h: 50 },
-    { x: 150, y: 350, w: 50, h: 50 },
-    { x: -50, y: 150, w: 40, h: 40 },
-    { x: 200, y: 250, w: 50, h: 50 },
-  ],
+
   BUNTU: [
     { x: -250, y: -50, w: 50, h: 450 },
     { x: 250, y: -50, w: 50, h: 450 },

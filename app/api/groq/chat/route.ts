@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
-  const { messages, model = "llama-3.3-70b-versatile", apiKey, systemPrompt } = await req.json();
+  const { messages, model = "llama-3.3-70b-versatile", apiKey, systemPrompt, stream = true } = await req.json();
   const GROQ_API_KEY = apiKey || process.env.GROQ_API_KEY;
   if (!GROQ_API_KEY) {
     return new Response("GROQ_API_KEY not configured", { status: 500 });
@@ -20,13 +20,19 @@ export async function POST(req: Request) {
     body: JSON.stringify({
       model,
       messages: [systemMsg, ...messages],
-      stream: true,
+      stream,
     }),
   });
 
   if (!res.ok) {
     const err = await res.text();
     return new Response(`Groq API error: ${err}`, { status: 502 });
+  }
+
+  if (!stream) {
+    const data = await res.json();
+    const content = data.choices?.[0]?.message?.content || "";
+    return Response.json({ content });
   }
 
   return new Response(res.body, {

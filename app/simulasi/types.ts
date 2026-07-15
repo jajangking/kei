@@ -1,3 +1,5 @@
+import type { MutableRefObject } from "react";
+
 export interface Obstacle {
   x: number;
   y: number;
@@ -26,29 +28,27 @@ export interface Sector {
   cx: number;
 }
 
-export type FacingMode = "user" | "environment";
-
 export interface NavDebugData {
-  posRef: React.MutableRefObject<{ x: number; y: number }>;
-  headingRef: React.MutableRefObject<number>;
-  sectorDataRef: React.MutableRefObject<number[]>;
-  occupancyRef: React.MutableRefObject<Map<string, number>>;
-  modul4Active: boolean;
-  camActive: boolean;
-  ttsActive: boolean;
+  posRef: MutableRefObject<{ x: number; y: number }>;
+  headingRef: MutableRefObject<number>;
+  sectorDataRef: MutableRefObject<number[]>;
+  occupancyRef: MutableRefObject<Map<string, number>>;
 }
 
-export interface MotorRef {
-  sendMotor: (l: number, r: number) => void;
-  trackTarget: { label: string; lastSeen: number } | null;
-  setTrackTarget: (t: { label: string; lastSeen: number } | null) => void;
-  aiMotor: { l: number; r: number } | null;
-}
-
-export interface EvoUIRef {
-  gen: number;
-  bestFitness: number;
-  avgFitness: number;
-  popSize: number;
-  bestGenome: number[];
+export interface ModuleCtx {
+  sectorDataRef: MutableRefObject<number[]>;
+  distanceRef: MutableRefObject<number>;
+  headingRef: MutableRefObject<number>;
+  gyroRef: MutableRefObject<number>;
+  posRef: MutableRefObject<{ x: number; y: number }>;
+  servoRef: MutableRefObject<number>;
+  leftMotorRef: MutableRefObject<number>;
+  rightMotorRef: MutableRefObject<number>;
+  trimRef: MutableRefObject<number>;
+  sendServo: (deg: number) => void;
+  setMotors: (l: number, r: number) => void;
+  wsRef: MutableRefObject<WebSocket | null>;
+  joyActiveRef: MutableRefObject<boolean>;
+  keyActiveRef: MutableRefObject<boolean>;
+  logEvent: (msg: string, type?: LogEntryType) => void;
 }

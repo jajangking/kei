@@ -1,16 +1,14 @@
 "use client";
 
 import { useRef, useEffect, useCallback, useState } from "react";
-import { ObjectDetector, FaceDetector, FilesetResolver, type Detection } from "@mediapipe/tasks-vision";
-import { loadDB, saveDB, registerFace, renameFace, deleteFace, recognize, type FaceRecord } from "../facerecog";
-import VoiceGroq from "../voicegroq";
 
-import type { LogEntry, ServoRead, FacingMode, MotorRef } from "./types";
-import { ROBOT_R, TRAIL_LEN, MAX_SENSE, JOY_DEADZONE, MAX_LOG, SECTORS, SERVO_SCALE, WHEEL_BASE, PRESETS } from "./constants";
+import type { LogEntry, ServoRead, ModuleCtx } from "./types";
+import { ROBOT_R, TRAIL_LEN, MAX_SENSE, MAX_LOG, SECTORS, SERVO_SCALE, WHEEL_BASE, PRESETS } from "./constants";
 import { gridCellKey } from "./utils";
 import { drawScene, type DrawState } from "./renderer";
 import MonitorPanel from "./monitor-panel";
-import { EvolutionEngine, Brain, LAYERS } from "./neuroevolve";
+import { m8Tick, m8Safety, createM8State, type M8State } from "./m8-reactive";
+import { m9Tick, createM9State, type M9State } from "./m9-groq";
 
 const _ = (...notes: [number, number][]) => notes;
 
@@ -134,45 +132,18 @@ export default function SimulasiPage() {
   const turnIsUturnRef = useRef(false);
   const driveTargetHeadingRef = useRef(0);
 
-  // M4: Groq AI Hybrid
-  const [modul4Active, setModul4Active] = useState(false);
-  const modul4ActiveRef = useRef(false);  const aiSuggestionRef = useRef(-1);
-  const aiSuggestionWeightRef = useRef(0);
-  const aiLastCallRef = useRef(0);
-  const aiCallCountRef = useRef(0);
-  const [aiStatus, setAiStatus] = useState("—");
-  const [groqApiKey, setGroqApiKey] = useState("");
-  const groqApiKeyRef = useRef("");
-
-  // M7: Neuro-Evolution
-  const [modul7Active, setModul7Active] = useState(false);
-  const modul7ActiveRef = useRef(false);
-  const evoEngineRef = useRef<EvolutionEngine | null>(null);
-  const [evoStats, setEvoStats] = useState({ gen: 0, best: 0, avg: 0, running: false, bestFitness: 0 });
-  const [evoPreset, setEvoPreset] = useState<keyof typeof PRESETS>("LABIRIN");
-  const deployGenomeRef = useRef<number[] | null>(null);
-  const [evoBrainActive, setEvoBrainActive] = useState(false);
-  const evoBrainActiveRef = useRef(false);
-  const deployBrainRef = useRef<Brain | null>(null);
-  const evoProgressRef = useRef(0);
-  const [evoProgress, setEvoProgress] = useState(0);
-  const evoPresets: (keyof typeof PRESETS)[] = ["DINDING", "LABIRIN", "RINTANGAN", "BUNTU", "SLALOM", "HUTAN"];
 
   // M8: Reactive Vector
   const [modul8Active, setModul8Active] = useState(false);
   const modul8ActiveRef = useRef(false);
-  const m8StallTicks = useRef(0);
-  const m8Boost = useRef(0);
-  const m8PhaseRef = useRef<"NORMAL"|"BACK"|"TURN">("NORMAL");
-  const m8PhaseTick = useRef(0);
-  const m8TurnDir = useRef(1);
-  const m8TargetHeading = useRef(0);
-  const m8YawTarget = useRef(0);
-  const m8YawInit = useRef(false);
+  const m8Ref = useRef<M8State>(createM8State());
 
-  // Camera state (needed by draw, declared early)
-  const [camActive, setCamActive] = useState(false);
-  const [facingMode, setFacingMode] = useState<FacingMode>("environment");
+  // M9: Groq AI Navigator
+  const [modul9Active, setModul9Active] = useState(false);
+  const modul9ActiveRef = useRef(false);
+  const m9Ref = useRef<M9State>(createM9State());
+  const [m9TickN, setM9TickN] = useState(0);
+
 
   // Occupancy Grid
   const occupancyRef = useRef<Map<string, number>>(new Map());
@@ -223,9 +194,6 @@ export default function SimulasiPage() {
   const setMotors = useCallback((l: number, r: number) => {
     const prevL = leftMotorRef.current;
     const prevR = rightMotorRef.current;
-    const clampMin = (v: number) => v === 0 ? 0 : Math.round(v > 0 ? Math.max(80, v) : Math.min(-80, v));
-    l = clampMin(l);
-    r = clampMin(r);
     leftMotorRef.current = l;
     rightMotorRef.current = r;
     setLeftMotor(l);
@@ -254,6 +222,8 @@ export default function SimulasiPage() {
     setLedMode(ledModeRef.current);
   }, []);
 
+  const maxRRef = useRef(60);
+
   const handleJoyMove = useCallback((clientX: number, clientY: number) => {
     const el = joystickRef.current;
     if (!el) return;
@@ -261,31 +231,19 @@ export default function SimulasiPage() {
     const cx = rect.left + rect.width / 2;
     const cy = rect.top + rect.height / 2;
     const maxR = rect.width / 2 - 10;
+    maxRRef.current = maxR;
     let dx = clientX - cx;
     let dy = clientY - cy;
     const dist = Math.hypot(dx, dy);
     if (dist > maxR) { dx = (dx / dist) * maxR; dy = (dy / dist) * maxR; }
-
-    const nxRaw = dx / maxR;
-    const nyRaw = -dy / maxR;
-
-    const applyDeadzone = (v: number) => {
-      const abs = Math.abs(v);
-      if (abs < JOY_DEADZONE) return 0;
-      return (abs - JOY_DEADZONE) / (1 - JOY_DEADZONE) * (v > 0 ? 1 : -1);
-    };
-    const nx = applyDeadzone(nxRaw);
-    const ny = applyDeadzone(nyRaw);
-
-    const anyInput = Math.abs(nx) > 0.01 || Math.abs(ny) > 0.01;
-    if (anyInput) setJoyPos({ x: dx, y: dy });
-    else setJoyPos({ x: 0, y: 0 });
-
-    let rawL = (ny + nx) * 255;
-    let rawR = (ny - nx) * 255;
-    const maxAbs = Math.max(Math.abs(rawL), Math.abs(rawR), 255);
-    const sc = maxAbs > 255 ? 255 / maxAbs : 1;
-    setMotors(Math.round(rawL * sc), Math.round(rawR * sc));
+    setJoyPos({ x: dx, y: dy });
+    const nx = dx / maxR;
+    const ny = -dy / maxR;
+    let l = (ny + nx) * 255;
+    let r = (ny - nx) * 255;
+    l = Math.max(-255, Math.min(255, Math.round(l)));
+    r = Math.max(-255, Math.min(255, Math.round(r)));
+    setMotors(l, r);
   }, [setMotors]);
 
   const handleJoyEnd = useCallback(() => {
@@ -466,64 +424,6 @@ export default function SimulasiPage() {
     return () => clearInterval(interval);
   }, [espConnected, espIp, connectESP]);
 
-  // Evolution
-  const runEvolution = useCallback(() => {
-    if (evoEngineRef.current?.running) return;
-    const obstacles = PRESETS[evoPreset] ?? PRESETS.LABIRIN;
-    const engine = evoEngineRef.current ?? new EvolutionEngine();
-    if (!evoEngineRef.current) {
-      engine.createPopulation();
-      evoEngineRef.current = engine;
-    }
-    engine.running = true;
-    engine.goalX = 0;
-    engine.goalY = 350;
-
-    const totalGens = 200;
-    let gen = engine.generation;
-    const stepGen = () => {
-      if (!engine.running || gen >= totalGens) {
-        engine.running = false;
-        if (engine.bestGenome) {
-          deployGenomeRef.current = engine.bestGenome;
-          const deployBrain = new Brain(LAYERS);
-          deployBrain.fromGenome(engine.bestGenome);
-          deployBrainRef.current = deployBrain;
-        }
-        setEvoStats(s => ({ ...s, running: false }));
-        logEvent(`Evolusi selesai gen ${engine.generation} best=${engine.bestFitness.toFixed(0)}`, "nav");
-        return;
-      }
-      const t0 = performance.now();
-      const result = engine.runGeneration(obstacles);
-      const elapsed = performance.now() - t0;
-      gen = engine.generation;
-      const progress = Math.min(gen / totalGens, 1);
-      evoProgressRef.current = progress;
-      setEvoProgress(progress);
-      setEvoStats({
-        gen: engine.generation,
-        best: result.bestFitness,
-        avg: result.avgFitness,
-        bestFitness: engine.bestFitness,
-        running: true,
-      });
-      if (engine.bestGenome) {
-        deployGenomeRef.current = engine.bestGenome;
-        const deployBrain = new Brain(LAYERS);
-        deployBrain.fromGenome(engine.bestGenome);
-        deployBrainRef.current = deployBrain;
-      }
-      const delay = Math.max(1, 20 - elapsed);
-      setTimeout(stepGen, delay);
-    };
-    stepGen();
-  }, [evoPreset, logEvent]);
-
-  const stopEvolution = useCallback(() => {
-    if (evoEngineRef.current) evoEngineRef.current.running = false;
-    setEvoStats(s => ({ ...s, running: false }));
-  }, []);
 
   // Physics tick
   const tick = useCallback(() => {
@@ -603,15 +503,6 @@ export default function SimulasiPage() {
         const arr = [...occupancyRef.current];
         occupancyRef.current = new Map(arr.slice(arr.length - 3000));
       }
-    }
-
-    // Servo auto-sweep (M3 / M8)
-    if ((modul3ActiveRef.current || modul8ActiveRef.current) && !sweepLockedRef.current && !joyActiveRef.current && !keyActiveRef.current) {
-      sweepTickRef.current++;
-      let sa = servoRef.current + sweepDirRef.current;
-      if (sa >= 160) { sa = 160; sweepDirRef.current = -1; }
-      if (sa <= 20) { sa = 20; sweepDirRef.current = 1; }
-      sendServo(sa);
     }
 
     // Sector data
@@ -813,177 +704,40 @@ export default function SimulasiPage() {
       }
     }
 
-    // M7: Neural deploy — jalan kalo aktif, M3 mati, nggak manual
-    if (modul7ActiveRef.current && evoBrainActiveRef.current && deployGenomeRef.current && deployBrainRef.current
-        && !modul3ActiveRef.current && !joyActiveRef.current && !keyActiveRef.current) {
-      const b = deployBrainRef.current;
-      const sectors = sectorDataRef.current;
-      const hdg = headingRef.current;
-      const spd = (Math.abs(leftMotorRef.current) + Math.abs(rightMotorRef.current)) / 510 / 2;
-      const dist = distanceRef.current;
-      const inputs = [
-        ...sectors.map(v => v >= 0 ? v / MAX_SENSE : 1),
-        Math.sin(hdg),
-        Math.cos(hdg),
-        spd,
-        dist > 0 && dist < 20 ? 1 : 0,
-      ];
-      const outputs = b.forward(inputs);
-      const ml = Math.max(-255, Math.min(255, Math.round(outputs[0] * 255)));
-      const mr = Math.max(-255, Math.min(255, Math.round(outputs[1] * 255)));
-      if (ml !== leftMotorRef.current || mr !== rightMotorRef.current) {
-        leftMotorRef.current = ml;
-        rightMotorRef.current = mr;
-        setLeftMotor(ml);
-        setRightMotor(mr);
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify({ leftMotor: ml - trimRef.current, rightMotor: mr + trimRef.current }));
-        }
-      }
+
+    // === M8/M9 tick ===
+    const mCtx: ModuleCtx = {
+      sectorDataRef, distanceRef, headingRef, gyroRef, posRef, servoRef,
+      leftMotorRef, rightMotorRef, trimRef, sendServo, setMotors, wsRef,
+      joyActiveRef, keyActiveRef, logEvent,
+    };
+    if (modul8ActiveRef.current && !modul3ActiveRef.current) {
+      m8Tick(mCtx, m8Ref.current);
+    }
+    if (modul9ActiveRef.current && !modul3ActiveRef.current) {
+      m9Tick(mCtx, m9Ref.current);
+    }
+    // Safety clamp — selalu jalan kalau M8 aktif
+    if (modul8ActiveRef.current && !modul3ActiveRef.current) {
+      m8Safety(mCtx);
     }
 
-    // M8: Reactive Vector
-    if (modul8ActiveRef.current && !joyActiveRef.current && !keyActiveRef.current && !modul3ActiveRef.current) {
-      const gyroNow = Math.abs(gyroRef.current);
-      const phase = m8PhaseRef.current;
-      let ml = 0, mr = 0;
-      let send = false;
-
-      if (phase === "NORMAL") {
-        let bestAngle = 0, bestScore = -1;
-        let anyData = false, blockedSectors = 0;
-        let frontMin = 999;
-        const frontIdx = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
-
-        for (let i = 0; i < SECTORS.length; i++) {
-          const d = sectorDataRef.current[i];
-          if (d < 0) continue;
-          anyData = true;
-          const cx = SECTORS[i].cx;
-          if (d < 30) blockedSectors++;
-          if (frontIdx.includes(i) && d < frontMin) frontMin = d;
-          const clearScore = Math.min(d / 150, 1);
-          const centerBias = 1 - Math.abs(cx - 90) / 90;
-          const score = clearScore + (clearScore > 0.5 ? centerBias * 0.3 : 0);
-          if (score > bestScore) { bestScore = score; bestAngle = (90 - cx) * Math.PI / 180; }
-        }
-
-        if (!anyData || bestScore <= 0) {
-          if (leftMotorRef.current !== 0 || rightMotorRef.current !== 0) {
-            leftMotorRef.current = 0; rightMotorRef.current = 0;
-            setLeftMotor(0); setRightMotor(0);
-            wsRef.current?.send(JSON.stringify({ leftMotor: 0, rightMotor: 0 }));
-          }
-        } else if (blockedSectors >= 8) {
-          logEvent(`M8 buntu (${blockedSectors}blk), mundur`, "nav");
-          m8PhaseRef.current = "BACK";
-          m8PhaseTick.current = 0;
-          m8Boost.current = 0;
-          m8StallTicks.current = 0;
-        } else {
-          // Cooldown setelah TURN: paksa maju biar gak langsung BACK lagi
-          const justTurned = m8PhaseTick.current < 15;
-          m8PhaseTick.current++;
-
-          // Kalau depan mentok & bukan cooldown → BACK
-          if (!justTurned && frontMin < 20) {
-            logEvent(`M8 depan ${frontMin.toFixed(0)}cm, mundur`, "nav");
-            m8PhaseRef.current = "BACK";
-            m8PhaseTick.current = 0;
-            m8Boost.current = 0;
-            m8StallTicks.current = 0;
-          } else {
-            // Smooth steering target
-            m8TargetHeading.current += (bestAngle - m8TargetHeading.current) * 0.1;
-            if (bestScore < 0.5) m8TargetHeading.current *= 0.95;
-
-            // Speed: tegas
-            const f = justTurned ? Math.max(frontMin, 40) : frontMin;
-            let spd: number;
-            if (f < 15) spd = -30;
-            else if (f < 25) spd = 15;
-            else if (f < 50) spd = 30;
-            else spd = 40;
-
-            const steer = Math.round(m8TargetHeading.current * 70);
-            ml = spd - steer;
-            mr = spd + steer;
-
-            // Stall detection (gyro gak gerak walau motor jalan)
-            const motorActive = Math.abs(ml) > 5 || Math.abs(mr) > 5;
-            if (!motorActive || gyroNow > 0.3) {
-              m8StallTicks.current = 0;
-              m8Boost.current = 0;
-            } else {
-              m8StallTicks.current++;
-              m8Boost.current = Math.min(70, Math.floor(m8StallTicks.current / 15) * 3);
-            }
-            const boost = m8Boost.current;
-            if (boost > 0) {
-              ml += (ml > 0 ? 1 : -1) * boost;
-              mr += (mr > 0 ? 1 : -1) * boost;
-            }
-
-            ml = Math.max(-255, Math.min(255, ml));
-            mr = Math.max(-255, Math.min(255, mr));
-            const smooth = 0.35;
-            ml = Math.round(leftMotorRef.current + (ml - leftMotorRef.current) * smooth);
-            mr = Math.round(rightMotorRef.current + (mr - rightMotorRef.current) * smooth);
-            send = true;
-
-            // Stall terlalu lama → BACK
-            if (boost >= 60 && m8StallTicks.current > 200 && gyroNow < 0.1) {
-              logEvent("M8 mentok, mundur", "nav");
-              m8PhaseRef.current = "BACK";
-              m8PhaseTick.current = 0;
-              m8Boost.current = 0;
-              m8StallTicks.current = 0;
-              send = false;
-            }
-          }
-        }
-      }
-
-      if (phase === "BACK") {
-        m8PhaseTick.current++;
-        const speed = Math.min(80 + Math.floor(m8PhaseTick.current / 3) * 3, 130);
-        ml = -speed; mr = -speed;
-        send = true;
-        if (m8PhaseTick.current > 35) {
-          logEvent("M8 mundur selesai, putar", "nav");
-          m8PhaseRef.current = "TURN";
-          m8PhaseTick.current = 0;
-          m8TurnDir.current = Math.random() > 0.5 ? 1 : -1;
-          m8TargetHeading.current = 0;
-        }
-      }
-
-      if (phase === "TURN") {
-        m8PhaseTick.current++;
-        const speed = 100;
-        ml = -speed * m8TurnDir.current;
-        mr = speed * m8TurnDir.current;
-        send = true;
-        if (m8PhaseTick.current > 25) {
-          logEvent("M8 putar selesai, jalan", "nav");
-          m8PhaseRef.current = "NORMAL";
-          m8PhaseTick.current = 0;
-          m8Boost.current = 0;
-          m8StallTicks.current = 0;
-          m8TargetHeading.current = 0;
-        }
-      }
-
-      if (send && (ml !== leftMotorRef.current || mr !== rightMotorRef.current)) {
-        leftMotorRef.current = ml;
-        rightMotorRef.current = mr;
-        setLeftMotor(ml);
-        setRightMotor(mr);
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify({ leftMotor: ml - trimRef.current, rightMotor: mr + trimRef.current }));
-        }
-      }
+    // === Auto-sweep (M3) — skip kalau M8 aktif ===
+    if (modul3ActiveRef.current && !modul8ActiveRef.current && !sweepLockedRef.current && !joyActiveRef.current && !keyActiveRef.current) {
+      sweepTickRef.current++;
+      let sa = servoRef.current + sweepDirRef.current;
+      if (sa >= 160) { sa = 160; sweepDirRef.current = -1; }
+      if (sa <= 20) { sa = 20; sweepDirRef.current = 1; }
+      sendServo(sa);
     }
+    // Auto-sweep untuk M8: jalan kalau M8 IDLE, skip kalau M8 TURN/BACK
+    if (modul8ActiveRef.current && !modul3ActiveRef.current && m8Ref.current.phaseRef.current === "IDLE" && !joyActiveRef.current && !keyActiveRef.current) {
+      let sa = servoRef.current + sweepDirRef.current;
+      if (sa >= 160) { sa = 160; sweepDirRef.current = -1; }
+      if (sa <= 20) { sa = 20; sweepDirRef.current = 1; }
+      sendServo(sa);
+    }
+
 
     const d_now = distanceRef.current;
     let l = leftMotorRef.current;
@@ -1106,10 +860,7 @@ export default function SimulasiPage() {
   // Sync joystick visual
   useEffect(() => {
     if (joyActiveRef.current) return;
-    const el = joystickRef.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    const maxR = rect.width / 2 - 10;
+    const maxR = maxRRef.current;
     if (maxR <= 0) return;
     const ny = (leftMotor + rightMotor) / 510;
     const nx = (leftMotor - rightMotor) / 510;
@@ -1130,217 +881,25 @@ export default function SimulasiPage() {
     }
     modul3ActiveRef.current = modul3Active;
   }, [modul3Active]);
-  useEffect(() => { modul4ActiveRef.current = modul4Active; }, [modul4Active]);
-  useEffect(() => { modul7ActiveRef.current = modul7Active; }, [modul7Active]);
-  useEffect(() => { modul8ActiveRef.current = modul8Active; }, [modul8Active]);
-  useEffect(() => { evoBrainActiveRef.current = evoBrainActive; }, [evoBrainActive]);
   useEffect(() => {
-    const saved = localStorage.getItem("kei_groq_key");
-    if (saved) { setGroqApiKey(saved); groqApiKeyRef.current = saved; }
-  }, []);
-  useEffect(() => { groqApiKeyRef.current = groqApiKey; }, [groqApiKey]);
-
-  // M5: Camera + Vision AI
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const overlayRef = useRef<HTMLCanvasElement>(null);
-  const [modelReady, setModelReady] = useState(false);
-  const detectorRef = useRef<ObjectDetector | null>(null);
-  const faceDetectorRef = useRef<FaceDetector | null>(null);
-  const [modelLoading, setModelLoading] = useState(false);
-  const [detectionCount, setDetectionCount] = useState(0);
-  const detectionsRef = useRef<Detection[]>([]);
-  const faceDetectionsRef = useRef<Detection[]>([]);
-  const [recognizedFace, setRecognizedFace] = useState("");
-  const recognizedFaceRef = useRef<{ name: string } | null>(null);
-  const [showCamera, setShowCamera] = useState(false);
-  const detectTimerRef = useRef(0);
-  const trackInfoRef = useRef("");
-  const aiBusyRef = useRef(false);
-  const trackingRef = useRef(false);
-  const [tracking, setTracking] = useState(false);
-  const motorRef = useRef<MotorRef>({
-    sendMotor: (l: number, r: number) => { setMotors(l, r); },
-    trackTarget: null,
-    setTrackTarget: (t) => { motorRef.current.trackTarget = t; },
-    aiMotor: null,
-  });
-  const [faceLock, setFaceLock] = useState(false);
-  const faceLockRef = useRef(false);
-
-  // Face recognition DB
-  const faceDBRef = useRef<FaceRecord[]>([]);
-  const [faceDBCount, setFaceDBCount] = useState(0);
-
-  // M6: TTS
-  const [ttsActive, setTtsActive] = useState(false);
-  const ttsActiveRef = useRef(false);
-  const ttsCtxRef = useRef<AudioContext | null>(null);
-  const speakTTS = useCallback(async (text: string) => {
-    if (!ttsActiveRef.current || !text) return;
-    if (ttsCtxRef.current) return;
-    try {
-      const res = await fetch(`/api/tts?text=${encodeURIComponent(text)}`);
-      if (!res.ok) return;
-      const buf = await res.arrayBuffer();
-      const ctx = new AudioContext();
-      ttsCtxRef.current = ctx;
-      const audioBuf = await ctx.decodeAudioData(buf);
-      const src = ctx.createBufferSource();
-      src.buffer = audioBuf;
-      src.connect(ctx.destination);
-      src.start();
-      src.onended = () => { if (ttsCtxRef.current === ctx) { ctx.close(); ttsCtxRef.current = null; } };
-    } catch {}
-  }, []);
-  const pick = (arr: string[]) => arr[Math.floor(Math.random() * arr.length)];
-  const ttsAiSaran = (s: string) => pick([`Menurut AI ${s} aja`, `AI bilang ${s}`, `AI saran ${s}`, `${s} kata AI`]);
-
-  // Camera webcam
-  useEffect(() => {
-    if (!camActive) {
-      streamRef.current?.getTracks().forEach(t => t.stop());
-      streamRef.current = null;
-      return;
+    modul8ActiveRef.current = modul8Active;
+    if (!modul8Active) {
+      m8Ref.current.phaseRef.current = "IDLE";
+      m8Ref.current.tickRef.current = 0;
+      m8Ref.current.bestSectorRef.current = -1;
+      m8Ref.current.targetHeadingRef.current = 0;
+      setMotors(0, 0);
+      sendServo(90);
     }
-    let cancelled = false;
-    (async () => {
-      try {
-        streamRef.current?.getTracks().forEach(t => t.stop());
-        const s = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode, width: { ideal: 640 }, height: { ideal: 480 } },
-          audio: false,
-        });
-        if (cancelled) { s.getTracks().forEach(t => t.stop()); return; }
-        streamRef.current = s;
-        if (videoRef.current) videoRef.current.srcObject = s;
-      } catch { setCamActive(false); }
-    })();
-    return () => { cancelled = true; streamRef.current?.getTracks().forEach(t => t.stop()); streamRef.current = null; };
-  }, [camActive, facingMode]);
-
-  // MediaPipe model loading
+  }, [modul8Active, sendServo, setMotors]);
   useEffect(() => {
-    if (!camActive) return;
-    let cancelled = false;
-    setModelLoading(true);
-    (async () => {
-      try {
-        const vision = await FilesetResolver.forVisionTasks("/wasm");
-        const [det, faceDet] = await Promise.all([
-          ObjectDetector.createFromOptions(vision, {
-            baseOptions: { modelAssetPath: "/efficientdet_lite0.tflite" },
-            scoreThreshold: 0.3,
-            maxResults: 5,
-            runningMode: "IMAGE",
-          }),
-          FaceDetector.createFromOptions(vision, {
-            baseOptions: { modelAssetPath: "/blaze_face_short_range.tflite" },
-            runningMode: "IMAGE",
-          }),
-        ]);
-        if (cancelled) return;
-        detectorRef.current = det;
-        faceDetectorRef.current = faceDet;
-        setModelReady(true);
-      } catch (e) {
-        logEvent(`Model vision error: ${e}`, "error");
-      } finally { setModelLoading(false); }
-    })();
-    return () => { cancelled = true; detectorRef.current?.close(); faceDetectorRef.current?.close(); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [camActive]);
-
-  // Detection overlay
-  const drawOverlay = useCallback(() => {
-    const canvas = overlayRef.current;
-    const video = videoRef.current;
-    if (!canvas || !video || video.videoWidth < 1) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const w = canvas.width = video.videoWidth;
-    const h = canvas.height = video.videoHeight;
-    ctx.drawImage(video, 0, 0, w, h);
-    for (const d of detectionsRef.current) {
-      const bb = d.boundingBox;
-      if (!bb) continue;
-      const isFace = d.categories[0]?.categoryName === "face";
-      ctx.strokeStyle = isFace ? "#d946ef" : "#3b82f6";
-      ctx.lineWidth = 2;
-      ctx.strokeRect(bb.originX, bb.originY, bb.width, bb.height);
-      ctx.fillStyle = isFace ? "#d946ef" : "#3b82f6";
-      ctx.font = "bold 10px monospace";
-      const label = isFace
-        ? (recognizedFaceRef.current?.name || "wajah")
-        : `${d.categories[0]?.categoryName || "?"} ${Math.round((d.categories[0]?.score || 0) * 100)}%`;
-      ctx.fillText(label, bb.originX, bb.originY - 4);
+    modul9ActiveRef.current = modul9Active;
+    if (!modul9Active) {
+      m9Ref.current.lastReplyRef.current = "";
+      m9Ref.current.contextRef.current = "";
+      setM9TickN(t => t + 1);
     }
-  }, []);
-
-  // Detection loop
-  useEffect(() => {
-    if (!camActive || !modelReady) return;
-    let running = true;
-    const detect = async () => {
-      if (!running) return;
-      const video = videoRef.current;
-      const det = detectorRef.current;
-      const faceDet = faceDetectorRef.current;
-      if (video && video.videoWidth > 0 && det && faceDet) {
-        try {
-          const [objects, faces] = await Promise.all([
-            det.detect(video),
-            faceDet.detect(video),
-          ]);
-          const all: Detection[] = [...(objects.detections || [])];
-          for (const f of faces.detections || []) {
-            all.push({ ...f, categories: [{ ...f.categories[0], categoryName: "face", score: 1 }] });
-          }
-          detectionsRef.current = all;
-          setDetectionCount(all.length);
-          let faceName = "";
-          for (const f of faces.detections || []) {
-            const kp = f.keypoints?.map(k => [k.x, k.y]).flat() || [];
-            if (kp.length >= 12) {
-              const rec = recognize(kp, faceDBRef.current);
-              if (rec) faceName = rec.name;
-            }
-          }
-          recognizedFaceRef.current = faceName ? { name: faceName } : null;
-          if (faceName !== recognizedFace) setRecognizedFace(faceName);
-          if (faceLockRef.current && faces.detections && faces.detections.length > 0) {
-            const f = faces.detections[0];
-            const fcx = (f.boundingBox?.originX || 0) + (f.boundingBox?.width || 320) / 2;
-            const fbx = 320;
-            const err = (fcx - fbx) / fbx;
-            const base = 100;
-            const steer = Math.round(err * 80);
-            setMotors(base - steer, base + steer);
-            trackInfoRef.current = faceName ? `🔒 ${faceName}` : "🔒 wajah";
-          } else if (!faceLockRef.current && !trackInfoRef.current.startsWith("🤖")) {
-            trackInfoRef.current = "";
-          }
-          drawOverlay();
-        } catch {}
-      }
-      detectTimerRef.current = window.setTimeout(detect, 200);
-    };
-    detect();
-    return () => { running = false; clearTimeout(detectTimerRef.current); };
-  }, [camActive, modelReady, drawOverlay, recognizedFace]);
-
-  // Load face DB
-  useEffect(() => {
-    (async () => {
-      const db = await loadDB();
-      faceDBRef.current = db;
-      setFaceDBCount(db.length);
-    })();
-  }, []);
-
-  useEffect(() => { ttsActiveRef.current = ttsActive; }, [ttsActive]);
-  useEffect(() => { faceLockRef.current = faceLock; }, [faceLock]);
-  useEffect(() => { trackingRef.current = tracking; }, [tracking]);
+  }, [modul9Active]);
 
   // ═══════════════════════════════════════════════════════════════
   // JSX (unchanged from original — same markup)
@@ -1398,173 +957,6 @@ export default function SimulasiPage() {
             )}
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
-                <span className="text-[8px] font-mono text-zinc-500">M4</span>
-                <span className="text-[10px] font-mono text-zinc-300">AI GROQ</span>
-              </div>
-              <button
-                onClick={() => { setModul4Active(p => !p); modul4ActiveRef.current = !modul4Active; }}
-                className={`px-2 py-0.5 rounded-full text-[8px] font-mono font-bold border transition-colors active:scale-90 ${
-                  modul4Active
-                    ? "bg-violet-600 border-violet-500 text-white"
-                    : "bg-zinc-800 border-zinc-700 text-zinc-500"
-                }`}
-              >
-                {modul4Active ? "ON" : "OFF"}
-              </button>
-            </div>
-            {modul4Active && (
-              <div className="pl-4 text-[9px] font-mono space-y-1">
-                <div className="flex items-center gap-1.5">
-                  <input value={groqApiKey} onChange={e => { setGroqApiKey(e.target.value); groqApiKeyRef.current = e.target.value; localStorage.setItem("kei_groq_key", e.target.value); }}
-                    placeholder="Groq API key"
-                    type="password"
-                    className="flex-1 min-w-0 px-2 py-1 rounded bg-zinc-800 text-white text-[8px] font-mono placeholder-zinc-600 focus:outline-none border border-zinc-700" />
-                  {groqApiKey && <div className="size-1.5 rounded-full bg-green-400 shrink-0" />}
-                </div>
-                <div>
-                  <span className="text-violet-400">{aiStatus}</span>
-                  {aiSuggestionRef.current >= 0 && (
-                    <span className="text-zinc-600 ml-1">→{SECTORS[aiSuggestionRef.current].id} +{aiSuggestionWeightRef.current}</span>
-                  )}
-                </div>
-              </div>
-            )}
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <span className="text-[8px] font-mono text-zinc-500">M5</span>
-                <span className="text-[10px] font-mono text-zinc-300">CAMERA</span>
-              </div>
-              <button
-                onClick={() => setCamActive(p => !p)}
-                className={`px-2 py-0.5 rounded-full text-[8px] font-mono font-bold border transition-colors active:scale-90 ${
-                  camActive
-                    ? "bg-emerald-600 border-emerald-500 text-white"
-                    : "bg-zinc-800 border-zinc-700 text-zinc-500"
-                }`}
-              >
-                {camActive ? "ON" : "OFF"}
-              </button>
-            </div>
-            {camActive && (
-              <div className="pl-4 text-[9px] font-mono space-y-1">
-                <div className="flex gap-1">
-                  <button
-                    onClick={() => setFacingMode(p => p === "user" ? "environment" : "user")}
-                    className="px-1.5 py-0.5 rounded text-[7px] bg-zinc-800 text-zinc-400 border border-zinc-700"
-                  >
-                    {facingMode === "user" ? "SELFIE" : "DEPAN"}
-                  </button>
-                  <button
-                    onClick={() => { setFaceLock(p => !p); faceLockRef.current = !faceLock; }}
-                    className={`px-1.5 py-0.5 rounded text-[7px] border ${
-                      faceLock ? "bg-rose-600 border-rose-500 text-white" : "bg-zinc-800 border-zinc-700 text-zinc-400"
-                    }`}
-                  >
-                    {faceLock ? "☠ IKUT" : "☠ LOCK"}
-                  </button>
-                  <button
-                    onClick={() => setShowCamera(p => !p)}
-                    className={`px-1.5 py-0.5 rounded text-[7px] border ${
-                      showCamera ? "bg-cyan-600 border-cyan-500 text-white" : "bg-zinc-800 border-zinc-700 text-zinc-400"
-                    }`}
-                  >
-                    TAMPIL
-                  </button>
-                </div>
-                <div className="flex items-center gap-2 text-[7px]">
-                  <span className={modelReady ? "text-emerald-400" : "text-zinc-600"}>
-                    {modelLoading ? "memuat model..." : modelReady ? `${detectionCount} objek` : "mati"}
-                  </span>
-                  {recognizedFace && <span className="text-fuchsia-400">{recognizedFace}</span>}
-                </div>
-              </div>
-            )}
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <span className="text-[8px] font-mono text-zinc-500">M6</span>
-                <span className="text-[10px] font-mono text-zinc-300">SUARA</span>
-              </div>
-              <button
-                onClick={() => { setTtsActive(p => !p); ttsActiveRef.current = !ttsActive; }}
-                className={`px-2 py-0.5 rounded-full text-[8px] font-mono font-bold border transition-colors active:scale-90 ${
-                  ttsActive
-                    ? "bg-amber-600 border-amber-500 text-white"
-                    : "bg-zinc-800 border-zinc-700 text-zinc-500"
-                }`}
-              >
-                {ttsActive ? "ON" : "OFF"}
-              </button>
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <span className="text-[8px] font-mono text-zinc-500">M7</span>
-                <span className="text-[10px] font-mono text-zinc-300">NEURAL</span>
-              </div>
-              <button
-                onClick={() => { setModul7Active(p => !p); modul7ActiveRef.current = !modul7Active; }}
-                className={`px-2 py-0.5 rounded-full text-[8px] font-mono font-bold border transition-colors active:scale-90 ${
-                  modul7Active
-                    ? "bg-orange-600 border-orange-500 text-white"
-                    : "bg-zinc-800 border-zinc-700 text-zinc-500"
-                }`}
-              >
-                {modul7Active ? "ON" : "OFF"}
-              </button>
-            </div>
-            {modul7Active && (
-              <div className="pl-4 text-[9px] font-mono space-y-1">
-                <select value={evoPreset} onChange={e => setEvoPreset(e.target.value as keyof typeof PRESETS)}
-                  className="w-full px-1 py-0.5 rounded bg-zinc-800 text-zinc-300 text-[8px] font-mono border border-zinc-700 outline-none"
-                >
-                  {evoPresets.map(p => <option key={p} value={p}>{p}</option>)}
-                </select>
-                <div className="flex items-center gap-1 mt-1">
-                  <button onClick={runEvolution} disabled={evoStats.running}
-                    className={`px-2 py-0.5 rounded text-[8px] font-mono font-bold border active:scale-90 ${
-                      evoStats.running
-                        ? "bg-zinc-700 border-zinc-600 text-zinc-500 cursor-not-allowed"
-                        : "bg-orange-600 border-orange-500 text-white"
-                    }`}
-                  >
-                    {evoStats.running ? "•••" : "EVOLVE"}
-                  </button>
-                  {evoStats.running && (
-                    <button onClick={stopEvolution}
-                      className="px-2 py-0.5 rounded text-[8px] font-mono font-bold border bg-red-900/50 border-red-800 text-red-400 active:scale-90"
-                    >
-                      STOP
-                    </button>
-                  )}
-                  <button onClick={() => { setEvoBrainActive(p => !p); evoBrainActiveRef.current = !evoBrainActive; }}
-                    className={`px-2 py-0.5 rounded text-[8px] font-mono font-bold border active:scale-90 ${
-                      evoBrainActive
-                        ? "bg-emerald-600 border-emerald-500 text-white"
-                        : "bg-zinc-800 border-zinc-700 text-zinc-400"
-                    }`}
-                  >
-                    {evoBrainActive ? "PAKAI" : "MATI"}
-                  </button>
-                </div>
-                <div className="text-[7px] space-y-0.5">
-                  <div className="flex items-center gap-2">
-                    <span className="text-zinc-600">gen</span>
-                    <span className="text-orange-300 w-10">{evoStats.gen}</span>
-                    <span className="text-zinc-600">best</span>
-                    <span className="text-emerald-400 w-10">{evoStats.best.toFixed(0)}</span>
-                    <span className="text-zinc-600">avg</span>
-                    <span className="text-zinc-400 w-10">{evoStats.avg.toFixed(0)}</span>
-                  </div>
-                  <div className="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-                    <div className="h-full bg-orange-500 transition-all duration-200" style={{ width: `${evoProgress * 100}%` }} />
-                  </div>
-                  <div className="text-zinc-600 text-[6px]">
-                    {deployGenomeRef.current ? `otak siap (best=${evoStats.bestFitness.toFixed(0)})` : "otak kosong"}
-                  </div>
-                </div>
-              </div>
-            )}
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
                 <span className="text-[8px] font-mono text-zinc-500">M8</span>
                 <span className="text-[10px] font-mono text-zinc-300">REACTIF</span>
               </div>
@@ -1584,14 +976,51 @@ export default function SimulasiPage() {
             )}
             {modul8Active && espConnected && (
               <div className="pl-4 text-[9px] font-mono text-zinc-400">
-                {!sectorData.some(v => v >= 0) ? "⏳ scan servo..." : (
+                {m8Ref.current.phaseRef.current === "IDLE" && (
+                  <span className="text-green-400">jalan {sensorDist}</span>
+                )}
+                {m8Ref.current.phaseRef.current === "TURN" && (
+                  <span className="text-orange-400">putar → S{(m8Ref.current.bestSectorRef.current ?? -1) + 1}</span>
+                )}
+                {m8Ref.current.phaseRef.current === "BACK" && (
+                  <span className="text-yellow-400">mundur...</span>
+                )}
+              </div>
+            )}
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-[8px] font-mono text-zinc-500">M9</span>
+                <span className="text-[10px] font-mono text-zinc-300">GROQ AI</span>
+              </div>
+              <button
+                onClick={() => { setModul9Active(p => !p); modul9ActiveRef.current = !modul9Active; }}
+                className={`px-2 py-0.5 rounded-full text-[8px] font-mono font-bold border transition-colors active:scale-90 ${
+                  modul9Active
+                    ? "bg-violet-600 border-violet-500 text-white"
+                    : "bg-zinc-800 border-zinc-700 text-zinc-500"
+                }`}
+              >
+                {modul9Active ? "ON" : "OFF"}
+              </button>
+            </div>
+            {modul9Active && (
+              <div className="pl-4 text-[9px] font-mono text-zinc-400 space-y-1">
+                {!localStorage.getItem("kei_groq_key") ? (
+                  <span className="text-yellow-400">set Groq API key dulu</span>
+                ) : (
                   <>
-                    <span className={m8PhaseRef.current === "NORMAL" ? "text-cyan-400" : m8PhaseRef.current === "BACK" ? "text-yellow-400" : "text-orange-400"}>
-                      {m8PhaseRef.current}
-                    </span>
-                    {m8PhaseRef.current === "NORMAL" && m8Boost.current > 0 && (
-                      <span className="text-zinc-500 ml-1">boost+{m8Boost.current}</span>
+                    {m9Ref.current.contextRef.current && (
+                      <div className="text-zinc-500 whitespace-pre-wrap leading-tight">{m9Ref.current.contextRef.current}</div>
                     )}
+                    <div>
+                      {m9Ref.current.busyRef.current ? (
+                        <span className="text-violet-400">thinking...</span>
+                      ) : m9Ref.current.lastReplyRef.current ? (
+                        <span className="text-violet-300">{m9Ref.current.lastReplyRef.current}</span>
+                      ) : (
+                        <span className="text-zinc-500">menunggu scan...</span>
+                      )}
+                    </div>
                   </>
                 )}
               </div>
@@ -1618,9 +1047,6 @@ export default function SimulasiPage() {
               headingRef,
               sectorDataRef,
               occupancyRef,
-              modul4Active,
-              camActive,
-              ttsActive,
             }}
           />
         )}
@@ -1634,22 +1060,6 @@ export default function SimulasiPage() {
         >
           VOICE
         </button>
-        {showVoice && (
-          <div className="fixed top-14 right-4 z-50">
-            <VoiceGroq
-              recognizedFaceRef={recognizedFaceRef}
-              detectionsRef={detectionsRef as any}
-              trackInfoRef={trackInfoRef}
-              aiBusyRef={aiBusyRef}
-              headingRef={headingRef}
-              leftMotor={leftMotor}
-              rightMotor={rightMotor}
-              trackingRef={trackingRef}
-              setTracking={setTracking}
-              motorRef={motorRef}
-            />
-          </div>
-        )}
       </div>
 
       {/* ESP Panel */}
@@ -1861,7 +1271,7 @@ export default function SimulasiPage() {
                 const inp = document.getElementById('melodyPrompt') as HTMLInputElement;
                 if (!btn || !inp) return;
                 const prompt = inp.value.trim();
-                if (!prompt || !groqApiKeyRef.current) return;
+                if (!prompt) return;
                 btn.textContent = '...';
                 btn.disabled = true;
                 try {
@@ -1870,7 +1280,7 @@ export default function SimulasiPage() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                       messages: [{ role: 'user', content: prompt }],
-                      apiKey: groqApiKeyRef.current,
+                      apiKey: localStorage.getItem("kei_groq_key") || "",
                       systemPrompt: 'Kamu komposer melodi buzzer. Pake not dari range luas: 131(C3),147(D3),165(E3),175(F3),196(G3),220(A3),247(B3),262(C4),294(D4),330(E4),349(F4),392(G4),440(A4),494(B4),523(C5),587(D5),659(E5),698(F5),784(G5),880(A5),988(B5),1047(C6). Boleh pake not 0 (diam) 50-100ms. Mulai & akhir di 262(C4). Variasikan: naik-turun, lompat oktaf, tempo beda (dur 100-600). 12-20 not. Balas ONLY freq/dur pisah koma. Contoh: 262/300,440/300,523/200,659/200,784/400,659/200,523/200,440/300,262/500. Jangan tulis apapun selain itu.',
                     }),
                   });
@@ -1919,22 +1329,6 @@ export default function SimulasiPage() {
           </div>
         )}
       </div>
-
-      {/* Camera panel */}
-      {showCamera && camActive && (
-        <div className="fixed bottom-6 right-4 z-40 w-[240px] h-[180px] rounded-xl overflow-hidden border border-white/10 shadow-2xl bg-zinc-900">
-          <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-cover" />
-          <canvas ref={overlayRef} className="absolute inset-0 w-full h-full" />
-          <div className="absolute top-1 left-1 flex gap-1">
-            <span className={`px-1 py-0.5 rounded text-[6px] font-mono ${modelReady ? "bg-emerald-600/80 text-white" : "bg-zinc-800/80 text-zinc-500"}`}>
-              {modelReady ? "AI" : "..."}
-            </span>
-            {recognizedFace && (
-              <span className="px-1 py-0.5 rounded text-[6px] font-mono bg-fuchsia-600/80 text-white">{recognizedFace}</span>
-            )}
-          </div>
-        </div>
-      )}
 
       {/* Joystick */}
       <div

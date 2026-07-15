@@ -76,10 +76,6 @@ export default function MonitorPanel({
     log(`sectors: ${sd.filter((v) => v > 0).length}/14 filled`, "sensor");
     if (sdBuf) log(sdBuf, "sensor");
     log(`grid=${n.occupancyRef.current.size}`, "nav");
-    log(
-      `M4=${n.modul4Active} cam=${n.camActive} tts=${n.ttsActive}`,
-      "info"
-    );
     log(`=== DEBUG END ===`, "nav");
   };
 
