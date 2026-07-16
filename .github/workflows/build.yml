@@ -33,27 +33,34 @@ jobs:
           name: build-log
           path: /tmp/pio_output.txt
 
-      - name: Stage binary
+      - name: Stage binaries
         if: success()
         run: |
           mkdir -p /tmp/release
           cp esp32/.pio/build/esp32dev/firmware.bin /tmp/release/firmware.bin
+          cp esp32/.pio/build/esp32dev/bootloader.bin /tmp/release/bootloader.bin
+          cp esp32/.pio/build/esp32dev/partitions.bin /tmp/release/partitions.bin
           ls -la /tmp/release/
 
-      - name: Upload binary
+      - name: Upload binaries
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: firmware
-          path: /tmp/release/firmware.bin
+          path: |
+            /tmp/release/firmware.bin
+            /tmp/release/bootloader.bin
+            /tmp/release/partitions.bin
 
       - name: Create Release
         if: success() && github.ref == 'refs/heads/main'
         run: |
           gh release create "build-${{ github.run_number }}" \
             /tmp/release/firmware.bin \
+            /tmp/release/bootloader.bin \
+            /tmp/release/partitions.bin \
             --repo "${{ github.repository }}" \
             --title "Firmware Build #${{ github.run_number }}" \
-            --notes "Flash ke 0x10000:  esptool.py write_flash 0x10000 firmware.bin"
+            --notes "Full flash (setelah erase_flash):\n\`\`\`\nesptool.py erase_flash\nesptool.py write_flash 0x1000 bootloader.bin 0x8000 partitions.bin 0x10000 firmware.bin\n\`\`\`\n\nAtau app-only (bootloader+partition sudah ada):\n\`\`\`\nesptool.py write_flash 0x10000 firmware.bin\n\`\`\`"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
