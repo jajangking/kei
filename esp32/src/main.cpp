@@ -4,6 +4,8 @@
 #include <WiFiClientSecure.h>
 #include <Wire.h>
 #include <ArduinoJson.h>
+#include "soc/soc.h"
+#include "soc/rtc_cntl_reg.h"
 #include "pins.h"
 #include "config.h"
 #include "motor.h"
@@ -409,6 +411,9 @@ void loop() {
 // Setup
 // ============================================================
 void setup() {
+  // Disable brownout detector (regulator lemah di board — suplai via 3.3V eksternal)
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+
   Serial.begin(115200);
   startTime = millis();
   delay(100);
