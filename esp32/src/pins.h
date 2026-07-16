@@ -1,7 +1,7 @@
 #ifndef PINS_H
 #define PINS_H
 
-#define FW_VERSION "2.0.0-modular " __DATE__ " " __TIME__
+#define FW_VERSION "2.0.1-powersave " __DATE__ " " __TIME__
 
 #define PIN_LED    2
 #define PIN_BUZZ   4

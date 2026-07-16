@@ -20,7 +20,7 @@ void loadAllConfig() {
   }
   {
     Preferences p; p.begin("pwr", true);
-    powerSave = p.getBool("save", false);
+    powerSave = p.getBool("save", true);
     p.end();
   }
   {

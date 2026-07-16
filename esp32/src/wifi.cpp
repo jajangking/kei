@@ -29,9 +29,9 @@ void connectWiFi() {
   if (ssid.length() > 0) {
     hasSavedCreds = true;
     WiFi.mode(WIFI_STA);
-    WiFi.setSleep(WIFI_PS_NONE);
+    WiFi.setSleep(WIFI_PS_MIN_MODEM);
     WiFi.setAutoReconnect(true);
-    WiFi.setTxPower(WIFI_POWER_19_5dBm);
+    WiFi.setTxPower(WIFI_POWER_13dBm);
     WiFi.begin(ssid.c_str(), pass.c_str());
     Serial.printf("[WIFI] connecting to '%s'...\n", ssid.c_str());
   } else {
